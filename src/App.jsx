@@ -1,11 +1,11 @@
-import { useState, useEffect, Fragment } from 'react';
+import { useState, useEffect, Fragment, useMemo } from 'react';
 import {
   FaPlus, FaSearch, FaSignOutAlt, FaEdit, FaTrash,
   FaChevronLeft, FaChevronRight, FaUserSlash, FaUserCheck,
   FaExclamationCircle, FaChevronDown, FaChevronUp, FaCheckCircle,
   FaHistory, FaCreditCard, FaTimesCircle, FaCamera, FaImage, FaStar,
   FaUndo, FaMoneyBillWave, FaFileInvoiceDollar, FaCalculator,
-  FaStickyNote, FaSave, FaExternalLinkAlt, FaCalendarCheck, FaCheck, FaThumbtack, FaClock, FaSort, FaMagic
+  FaStickyNote, FaSave, FaExternalLinkAlt, FaCalendarCheck, FaCheck, FaThumbtack, FaClock, FaSort, FaMagic, FaLock, FaLockOpen, FaHourglassHalf
 } from 'react-icons/fa';
 import { auth, db, storage } from './firebase';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
@@ -13,6 +13,15 @@ import {
   collection, addDoc, query, orderBy, onSnapshot, deleteDoc, doc, updateDoc, getDocs, where, getDoc, setDoc, limit, writeBatch
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+
+// 로컬 시간 기준 날짜 포맷터 (YYYY-MM-DD)
+const formatDateLocal = (date) => {
+  const d = new Date(date);
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
 
 function App() {
   const [user, setUser] = useState(null);
@@ -77,20 +86,37 @@ function App() {
   const [fixedSchedules, setFixedSchedules] = useState([]);
   const [historySchedules, setHistorySchedules] = useState([]);
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
-  const [selectedSlot, setSelectedSlot] = useState({ date: '', time: '', minute: '00', dayOfWeek: 0 });
+  const [selectedSlot, setSelectedSlot] = useState({ date: '', time: '', minute: '00', dayOfWeek: 0, gridType: 'master' });
   const [selectedMinute, setSelectedMinute] = useState('00');
+
+  // 주차 잠금 상태
+  const [isWeekLocked, setIsWeekLocked] = useState(false);
 
   const [scheduleTab, setScheduleTab] = useState('lesson');
   const [scheduleForm, setScheduleForm] = useState({
     studentId: '', studentName: '', memo: '', category: '레슨',
-    isFixed: false, status: ''
+    isFixed: false, status: '', gridType: 'master'
   });
+  const [selectedMakeupId, setSelectedMakeupId] = useState(null);
+
   const [weeklyMemo, setWeeklyMemo] = useState('');
   const [availableStudents, setAvailableStudents] = useState([]);
 
-  // 출석 관리
-  const [attendanceDate, setAttendanceDate] = useState(new Date().toISOString().split('T')[0]);
-  const [attendanceData, setAttendanceData] = useState({});
+  // --- [출석 관리 상태] ---
+  const [attCategory, setAttCategory] = useState('basic');
+  const [isAttendanceLocked, setIsAttendanceLocked] = useState(true);
+
+  const getStartOfWeek = (date) => {
+    const d = new Date(date);
+    d.setHours(0, 0, 0, 0);
+    const day = d.getDay();
+    const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+    return new Date(d.setDate(diff));
+  };
+
+  const [attBaseDate, setAttBaseDate] = useState(getStartOfWeek(new Date()));
+  const [periodAttendance, setPeriodAttendance] = useState({});
+  const [attSchedules, setAttSchedules] = useState([]);
 
   const expenseDefaults = {
     '임대료': 5005000, '임금': 0, '전기료': 0, '통신료': 55000,
@@ -98,7 +124,7 @@ function App() {
   };
 
   const initialPaymentForm = {
-    id: null, targetDate: '', paymentDate: new Date().toISOString().split('T')[0],
+    id: null, targetDate: '', paymentDate: formatDateLocal(new Date()),
     method: 'card', amount: '', isCashReceipt: false, receiptMemo: ''
   };
   const [paymentForm, setPaymentForm] = useState(initialPaymentForm);
@@ -107,8 +133,8 @@ function App() {
   const initialFormState = {
     name: '', isActive: true, isMonthly: false, isArtist: false,
     phone: '', count: '1',
-    firstDate: new Date().toISOString().split('T')[0],
-    lastDate: new Date().toISOString().split('T')[0],
+    firstDate: formatDateLocal(new Date()),
+    lastDate: formatDateLocal(new Date()),
     memo: '',
     schedule: [{ week: 1, master: '', vocal: '', vocal30: '' }, { week: 2, master: '', vocal: '', vocal30: '' }, { week: 3, master: '', vocal: '', vocal30: '' }, { week: 4, master: '', vocal: '', vocal30: '' }],
     rates: { master: '', vocal: '' }, unpaidList: [], isPaid: true,
@@ -195,10 +221,17 @@ function App() {
     const startOfWeek = getStartOfWeek(scheduleDate);
     const endOfWeek = new Date(startOfWeek);
     endOfWeek.setDate(endOfWeek.getDate() + 6);
-    const startStr = startOfWeek.toISOString().split('T')[0];
-    const endStr = endOfWeek.toISOString().split('T')[0];
+
+    const startStr = formatDateLocal(startOfWeek);
+    const endStr = formatDateLocal(endOfWeek);
 
     getDoc(doc(db, "weekly_memos", startStr)).then(docSnap => setWeeklyMemo(docSnap.exists() ? docSnap.data().text : ''));
+
+    const fetchLockStatus = async () => {
+      const lockDoc = await getDoc(doc(db, "weekly_locks", startStr));
+      setIsWeekLocked(lockDoc.exists() ? lockDoc.data().locked : false);
+    };
+    fetchLockStatus();
 
     const q = query(collection(db, "schedules"), where("date", ">=", startStr), where("date", "<=", endStr));
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -214,7 +247,7 @@ function App() {
     const fetchHistory = async () => {
       const threeMonthsAgo = new Date(startOfWeek);
       threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
-      const threeMonthsAgoStr = threeMonthsAgo.toISOString().split('T')[0];
+      const threeMonthsAgoStr = formatDateLocal(threeMonthsAgo);
 
       const histQ = query(
         collection(db, "schedules"),
@@ -231,16 +264,46 @@ function App() {
     return () => { unsubscribe(); unsubscribeFixed(); };
   }, [user, activeTab, scheduleDate]);
 
+  // --- [12주 기간제 출석부 데이터 & 스케쥴 로딩] ---
   useEffect(() => {
     if (!user || activeTab !== 'attendance') return;
-    const q = query(collection(db, "attendance"), where("date", "==", attendanceDate));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const attMap = {};
-      snapshot.docs.forEach(doc => { attMap[doc.data().studentId] = { id: doc.id, ...doc.data() }; });
-      setAttendanceData(attMap);
+
+    // 1. 기간 계산
+    const start = new Date(attBaseDate);
+    const end = new Date(start);
+    end.setDate(end.getDate() + (7 * 12) - 1);
+
+    const startStr = formatDateLocal(start);
+    const endStr = formatDateLocal(end);
+
+    const qAtt = query(
+      collection(db, "attendance"),
+      where("date", ">=", startStr),
+      where("date", "<=", endStr)
+    );
+    const unsubAtt = onSnapshot(qAtt, (snapshot) => {
+      const map = {};
+      snapshot.docs.forEach(doc => {
+        const d = doc.data();
+        const key = `${d.studentId}_${d.date}_${d.type || 'M'}_${d.index || 0}`;
+        map[key] = { id: doc.id, ...d };
+      });
+      setPeriodAttendance(map);
     });
-    return () => unsubscribe();
-  }, [user, activeTab, attendanceDate]);
+
+    const qSched = query(
+      collection(db, "schedules"),
+      where("date", ">=", startStr),
+      where("date", "<=", endStr)
+    );
+    const unsubSched = onSnapshot(qSched, (snapshot) => {
+      const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setAttSchedules(list);
+    });
+
+    return () => { unsubAtt(); unsubSched(); };
+  }, [user, activeTab, attBaseDate]);
+
 
   // --- [Helpers] ---
   const getRotationWeek = (firstDate, targetDate) => {
@@ -253,18 +316,40 @@ function App() {
     return (Math.floor(diffDays / 7) % 4) + 1;
   };
 
-  const getStartOfWeek = (date) => {
-    const d = new Date(date);
-    const day = d.getDay();
-    const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-    return new Date(d.setDate(diff));
-  };
   const getWeekDays = (baseDate) => {
     const start = getStartOfWeek(baseDate);
     return Array.from({ length: 7 }, (_, i) => {
       const d = new Date(start);
       d.setDate(start.getDate() + i);
       return d;
+    });
+  };
+
+  // 12주 배열 생성 헬퍼
+  const get12Weeks = (baseDate) => {
+    const start = new Date(baseDate);
+    return Array.from({ length: 12 }, (_, i) => {
+      const s = new Date(start);
+      s.setDate(start.getDate() + (i * 7));
+      const e = new Date(s);
+      e.setDate(s.getDate() + 6);
+
+      const format = (d) => {
+        const yy = d.getFullYear().toString().slice(2);
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        const dd = String(d.getDate()).padStart(2, '0');
+        return `${yy}.${mm}.${dd}`;
+      };
+
+      return {
+        weekNum: i + 1,
+        start: s,
+        end: e,
+        startStr: formatDateLocal(s),
+        endStr: formatDateLocal(e),
+        label: format(s),
+        rangeLabel: `${format(s)} ~ ${format(e)}`
+      };
     });
   };
 
@@ -289,25 +374,41 @@ function App() {
   const formatCurrency = (val) => (val ? Number(val).toLocaleString() : '0');
 
   // --- [Logic: Ghost Schedules] ---
-  const getGhostSchedules = () => {
+  const getGhostSchedules = (gridType = 'master') => {
     const weekStart = getStartOfWeek(scheduleDate);
     weekStart.setHours(12, 0, 0, 0);
 
     const ghosts = [];
-    const scheduledStudentIds = new Set(schedules.map(s => s.studentId).filter(Boolean));
+    const scheduledStudentIds = new Set(
+      schedules
+        .filter(s => (s.gridType || 'master') === gridType)
+        .map(s => s.studentId)
+        .filter(Boolean)
+    );
 
     students.forEach(student => {
       if (scheduledStudentIds.has(student.id)) return;
       if (!student.isActive) return;
 
-      const weekStr = weekStart.toISOString().split('T')[0];
+      const weekStr = formatDateLocal(weekStart);
       const rotationWeek = getRotationWeek(student.firstDate, weekStr);
       const weekConfig = student.schedule && student.schedule[rotationWeek - 1];
 
-      const hasLessonThisWeek = weekConfig && Number(weekConfig.master || 0) >= 1;
+      let hasLessonThisWeek = false;
+      if (gridType === 'master') {
+        hasLessonThisWeek = weekConfig && Number(weekConfig.master || 0) >= 1;
+      } else { // vocal
+        const vCount = Number(weekConfig?.vocal || 0);
+        const v30Count = Number(weekConfig?.vocal30 || 0);
+        hasLessonThisWeek = (vCount + v30Count) >= 1;
+      }
 
       if (hasLessonThisWeek) {
-        const lastRecord = historySchedules.find(h => h.studentId === student.id && (h.category === '레슨' || h.category === '상담'));
+        const lastRecord = historySchedules.find(h =>
+          h.studentId === student.id &&
+          (h.category === '레슨' || h.category === '상담') &&
+          (h.gridType || 'master') === gridType
+        );
 
         if (lastRecord) {
           const [ly, lm, ld] = lastRecord.date.split('-').map(Number);
@@ -319,13 +420,10 @@ function App() {
           const targetDateObj = new Date(weekStart);
           targetDateObj.setDate(weekStart.getDate() + dayOffset);
 
-          const ty = targetDateObj.getFullYear();
-          const tm = String(targetDateObj.getMonth() + 1).padStart(2, '0');
-          const td = String(targetDateObj.getDate()).padStart(2, '0');
-          const targetDateStr = `${ty}-${tm}-${td}`;
+          const targetDateStr = formatDateLocal(targetDateObj);
 
           ghosts.push({
-            id: `ghost-${student.id}`,
+            id: `ghost-${student.id}-${gridType}`,
             isGhost: true,
             studentId: student.id,
             studentName: student.name,
@@ -333,7 +431,8 @@ function App() {
             date: targetDateStr,
             category: lastRecord.category,
             memo: lastRecord.memo,
-            dayOfWeek: lastDayOfWeek
+            dayOfWeek: lastDayOfWeek,
+            gridType: gridType
           });
         }
       }
@@ -341,21 +440,35 @@ function App() {
     return ghosts;
   };
 
-  // --- Handlers ---
+  // --- [Handlers] ---
   const handleGoToStudent = (sid, sname) => { setActiveTab('students'); setSearchTerm(sname); setExpandedStudentId(sid); };
-  const handleWeeklyMemoSave = async () => { await setDoc(doc(db, "weekly_memos", getStartOfWeek(scheduleDate).toISOString().split('T')[0]), { text: weeklyMemo }, { merge: true }); alert("주간 메모 저장 완료"); };
+  const handleWeeklyMemoSave = async () => { await setDoc(doc(db, "weekly_memos", formatDateLocal(getStartOfWeek(scheduleDate))), { text: weeklyMemo }, { merge: true }); alert("주간 메모 저장 완료"); };
   const handleSettlementMemoSave = async () => { const ym = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`; await setDoc(doc(db, "settlement_memos", ym), { text: settlementMemo }, { merge: true }); alert("저장됨"); };
 
-  const generateAvailableStudents = (selectedDateStr, editingItemName = null) => {
+  const generateAvailableStudents = (selectedDateStr, editingItemName = null, gridType = 'master') => {
     const weekStart = getStartOfWeek(selectedDateStr);
     const weekEnd = new Date(weekStart);
     weekEnd.setDate(weekStart.getDate() + 6);
-    const weekStartStr = weekStart.toISOString().split('T')[0];
-    const weekEndStr = weekEnd.toISOString().split('T')[0];
+    const weekStartStr = formatDateLocal(weekStart);
+    const weekEndStr = formatDateLocal(weekEnd);
 
     const bookedNames = new Set();
-    schedules.forEach(s => { if (s.date >= weekStartStr && s.date <= weekEndStr && s.studentName) bookedNames.add(s.studentName); });
-    fixedSchedules.forEach(s => { if (s.studentName) bookedNames.add(s.studentName); });
+
+    schedules.forEach(s => {
+      const sType = s.gridType || 'master';
+      if (sType !== gridType) return;
+
+      const isSpecialClass = s.memo && (s.memo.includes('보강') || s.memo.includes('추가'));
+      if (!isSpecialClass && s.date >= weekStartStr && s.date <= weekEndStr && s.studentName) {
+        bookedNames.add(s.studentName);
+      }
+    });
+
+    fixedSchedules.forEach(s => {
+      const sType = s.gridType || 'master';
+      if (sType === gridType && s.studentName) bookedNames.add(s.studentName);
+    });
+
     if (editingItemName) bookedNames.delete(editingItemName);
 
     const options = [];
@@ -363,9 +476,17 @@ function App() {
       const rotationWeek = getRotationWeek(student.firstDate, selectedDateStr);
       const weekConfig = student.schedule && student.schedule[rotationWeek - 1];
       if (weekConfig) {
-        const masterCount = Number(weekConfig.master || 0);
-        for (let i = 1; i <= masterCount; i++) {
-          const displayName = masterCount > 1 ? `${student.name}(${i})` : student.name;
+        let count = 0;
+        if (gridType === 'master') {
+          count = Number(weekConfig.master || 0);
+        } else {
+          count = Number(weekConfig.vocal || 0) + Number(weekConfig.vocal30 || 0);
+          if (count > 0 && count < 1) count = 1;
+          count = Math.floor(count);
+        }
+
+        for (let i = 1; i <= count; i++) {
+          const displayName = count > 1 ? `${student.name}(${i})` : student.name;
           if (!bookedNames.has(displayName)) options.push({ id: student.id, name: displayName, originalName: student.name });
         }
       }
@@ -422,10 +543,12 @@ function App() {
   const handleScheduleMonthChange = (e) => { const d = new Date(scheduleDate); d.setMonth(parseInt(e.target.value) - 1); setScheduleDate(d); };
   const handleScheduleWeekChange = (e) => { setScheduleDate(new Date(e.target.value)); };
 
-  const handleSlotClick = (dateStr, hourStr, dayOfWeek, existingItem = null) => {
+  const handleSlotClick = (dateStr, hourStr, dayOfWeek, existingItem = null, gridType = 'master') => {
     const editingName = existingItem ? existingItem.studentName : null;
-    const options = generateAvailableStudents(dateStr, editingName);
+    const options = generateAvailableStudents(dateStr, editingName, gridType);
     setAvailableStudents(options);
+
+    setSelectedMakeupId(null);
 
     if (existingItem) {
       const timeParts = existingItem.time.split(':');
@@ -436,7 +559,8 @@ function App() {
         time: timeParts[0],
         minute: timeParts[1],
         dayOfWeek,
-        id: isGhost ? null : existingItem.id
+        id: isGhost ? null : existingItem.id,
+        gridType: existingItem.gridType || 'master'
       });
       setSelectedMinute(timeParts[1]);
 
@@ -447,13 +571,17 @@ function App() {
         memo: existingItem.memo || '',
         category: existingItem.category || '레슨',
         isFixed: existingItem.isFixed || false,
-        status: existingItem.status || ''
+        status: existingItem.status || '',
+        gridType: existingItem.gridType || 'master'
       });
     } else {
-      setSelectedSlot({ date: dateStr, time: hourStr, minute: '00', dayOfWeek, id: null });
+      setSelectedSlot({ date: dateStr, time: hourStr, minute: '00', dayOfWeek, id: null, gridType });
       setSelectedMinute('00');
       setScheduleTab('lesson');
-      setScheduleForm({ studentId: '', studentName: '', memo: '', category: '레슨', isFixed: false, status: '' });
+      setScheduleForm({
+        studentId: '', studentName: '', memo: '', category: '레슨',
+        isFixed: false, status: '', gridType
+      });
     }
     setIsScheduleModalOpen(true);
   };
@@ -461,7 +589,8 @@ function App() {
   const handleTabChange = (tab) => {
     setScheduleTab(tab);
     if (tab === 'personal') {
-      setScheduleForm(prev => ({ ...prev, category: '야구', studentId: '', studentName: '', status: '' }));
+      const defaultCategory = scheduleForm.gridType === 'master' ? '야구' : '상담';
+      setScheduleForm(prev => ({ ...prev, category: defaultCategory, studentId: '', studentName: '', status: '' }));
     } else {
       setScheduleForm(prev => ({ ...prev, category: '레슨', isFixed: false, status: '' }));
     }
@@ -469,11 +598,15 @@ function App() {
 
   const handleScheduleSave = async () => {
     const timeToSave = `${selectedSlot.time}:${selectedMinute}`;
+    const finalGridType = selectedSlot.gridType || scheduleForm.gridType || 'master';
+
     const data = {
       time: timeToSave,
       ...scheduleForm,
+      gridType: finalGridType,
       date: scheduleForm.isFixed ? 'FIXED' : selectedSlot.date,
-      dayOfWeek: scheduleForm.isFixed ? selectedSlot.dayOfWeek : null
+      dayOfWeek: scheduleForm.isFixed ? selectedSlot.dayOfWeek : null,
+      relatedScheduleId: selectedMakeupId || null
     };
 
     if (scheduleTab === 'personal') {
@@ -486,10 +619,57 @@ function App() {
     } else {
       await addDoc(collection(db, "schedules"), data);
     }
+
+    if (selectedMakeupId) {
+      await updateDoc(doc(db, "schedules", selectedMakeupId), { status: 'reschedule_assigned' });
+      setHistorySchedules(prev => prev.map(h => h.id === selectedMakeupId ? { ...h, status: 'reschedule_assigned' } : h));
+    }
+
     setIsScheduleModalOpen(false);
   };
 
-  const handleScheduleDelete = async () => { if (selectedSlot.id && window.confirm("일정을 삭제하시겠습니까?")) { await deleteDoc(doc(db, "schedules", selectedSlot.id)); setIsScheduleModalOpen(false); } };
+  const handleScheduleDelete = async () => {
+    if (selectedSlot.id && window.confirm("일정을 삭제하시겠습니까?")) {
+      const currentSchedule = schedules.find(s => s.id === selectedSlot.id);
+
+      await deleteDoc(doc(db, "schedules", selectedSlot.id));
+
+      if (currentSchedule) {
+        let targetId = currentSchedule.relatedScheduleId;
+
+        if (!targetId && currentSchedule.memo && currentSchedule.memo.startsWith('보강(')) {
+          const match = currentSchedule.memo.match(/보강\(([^)]+)\)/);
+          if (match) {
+            const originalDate = match[1];
+            const found = historySchedules.find(h =>
+              h.studentId === currentSchedule.studentId &&
+              h.date === originalDate &&
+              h.status === 'reschedule_assigned'
+            );
+            if (found) targetId = found.id;
+          }
+        }
+
+        if (targetId) {
+          await updateDoc(doc(db, "schedules", targetId), { status: 'reschedule' });
+          setHistorySchedules(prev => prev.map(h => h.id === targetId ? { ...h, status: 'reschedule' } : h));
+        }
+      }
+
+      setIsScheduleModalOpen(false);
+    }
+  };
+
+  const handleToggleWeekLock = async () => {
+    const startStr = formatDateLocal(getStartOfWeek(scheduleDate));
+    const newStatus = !isWeekLocked;
+
+    if (newStatus && !window.confirm("이번 주 스케쥴을 최종 마감하시겠습니까?\n마감 후에는 수정이 불가능합니다.")) return;
+    if (!newStatus && !window.confirm("마감을 해제하시겠습니까?")) return;
+
+    await setDoc(doc(db, "weekly_locks", startStr), { locked: newStatus }, { merge: true });
+    setIsWeekLocked(newStatus);
+  };
 
   const handleNextDueDateChange = async (sid, date) => updateDoc(doc(db, "students", sid), { nextDueDate: date, isPaid: false });
   const handleAddUnpaid = async (s) => {
@@ -536,8 +716,8 @@ function App() {
   };
   const handleRetroactivePhotoUpload = async (sid, pid, f) => { if (!f) return; const s = await uploadBytes(ref(storage, `receipts/${sid}_${Date.now()}`), f); const u = await getDownloadURL(s.ref); await updateDoc(doc(db, "students", sid, "payments", pid), { imageUrl: u }); alert("업로드됨"); };
   const handleDeletePayment = async (sid, pid) => { if (window.confirm("삭제하시겠습니까?")) { await deleteDoc(doc(db, "students", sid, "payments", pid)); await updateStudentLastDate(sid); setTimeout(() => fetchSettlementData(), 500); } };
-  const handleUnpaidChipClick = (s, i) => { setSelectedUnpaidId(i.id); setPaymentForm(p => ({ ...p, id: null, targetDate: i.targetDate, amount: i.amount, paymentDate: new Date().toISOString().split('T')[0] })); document.getElementById('payment-form-area')?.scrollIntoView({ behavior: 'smooth' }); };
-  const resetPaymentForm = (amt = '') => { setPaymentForm({ ...initialPaymentForm, amount: amt, targetDate: new Date().toISOString().split('T')[0] }); setPaymentFile(null); setSelectedUnpaidId(null); };
+  const handleUnpaidChipClick = (s, i) => { setSelectedUnpaidId(i.id); setPaymentForm(p => ({ ...p, id: null, targetDate: i.targetDate, amount: i.amount, paymentDate: formatDateLocal(new Date()) })); document.getElementById('payment-form-area')?.scrollIntoView({ behavior: 'smooth' }); };
+  const resetPaymentForm = (amt = '') => { setPaymentForm({ ...initialPaymentForm, amount: amt, targetDate: formatDateLocal(new Date()) }); setPaymentFile(null); setSelectedUnpaidId(null); };
   const handlePaymentFormChange = (e) => setPaymentForm(p => ({ ...p, [e.target.name]: e.target.value }));
   const handleEditHistoryClick = (p) => { setPaymentForm({ ...p, method: p.paymentMethod, receiptMemo: p.receiptMemo || '' }); setPaymentFile(null); document.getElementById('payment-form-area')?.scrollIntoView({ behavior: 'smooth' }); };
   const handleChange = (e) => setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -549,8 +729,36 @@ function App() {
   const toggleStatus = async (s) => await updateDoc(doc(db, "students", s.id), { isActive: !s.isActive });
   const handleEditClick = (s) => { setEditingId(s.id); const sch = (s.schedule || initialFormState.schedule).map(w => ({ ...w, vocal30: w.vocal30 || '' })); setFormData({ ...initialFormState, ...s, schedule: sch, rates: s.rates || initialFormState.rates }); setIsModalOpen(true); };
   const closeModal = () => { setIsModalOpen(false); setEditingId(null); setFormData(initialFormState); };
-  const handleAttendanceChange = async (studentId, status) => { const existing = attendanceData[studentId]; const data = { date: attendanceDate, studentId, status, memo: existing?.memo || '' }; if (existing) { if (status === existing.status) { await deleteDoc(doc(db, "attendance", existing.id)); } else { await updateDoc(doc(db, "attendance", existing.id), { status }); } } else { await addDoc(collection(db, "attendance"), data); } };
-  const handleAttendanceMemo = async (studentId, memo) => { const existing = attendanceData[studentId]; if (existing) { await updateDoc(doc(db, "attendance", existing.id), { memo }); } else { await addDoc(collection(db, "attendance"), { date: attendanceDate, studentId, status: 'none', memo }); } };
+
+  // --- [기간제 출석 토글 핸들러] ---
+  const handlePeriodAttendanceToggle = async (studentId, dateStr, type, index) => {
+    // 잠금 상태면 수정 불가
+    if (isAttendanceLocked) return;
+
+    // [FIXED] Key에 type과 index를 추가하여 중복 방지
+    const key = `${studentId}_${dateStr}_${type}_${index}`;
+    const existing = periodAttendance[key];
+
+    let nextStatus = 'present';
+    if (existing) {
+      if (existing.status === 'present') nextStatus = 'late';
+      else if (existing.status === 'late') nextStatus = 'absent';
+      else if (existing.status === 'absent') nextStatus = 'none';
+    }
+
+    if (nextStatus === 'none') {
+      if (existing) await deleteDoc(doc(db, "attendance", existing.id));
+    } else {
+      // [FIXED] 저장할 때 type과 index 함께 저장
+      const data = { date: dateStr, studentId, status: nextStatus, type, index };
+      if (existing) {
+        await updateDoc(doc(db, "attendance", existing.id), { status: nextStatus });
+      } else {
+        await addDoc(collection(db, "attendance"), data);
+      }
+    }
+  };
+
   const filteredStudents = students.filter(s => { let m = true; if (viewStatus === 'active') m = s.isActive; else if (viewStatus === 'inactive') m = !s.isActive; else if (viewStatus === 'artist') m = s.isArtist; return m && (s.name.includes(searchTerm) || (s.phone && s.phone.includes(searchTerm))); });
   const currentItems = filteredStudents.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
   const totalPages = Math.ceil(filteredStudents.length / itemsPerPage);
@@ -585,22 +793,60 @@ function App() {
               </button>
             ))}
           </nav>
-          <button onClick={handleLogout} className="flex items-center gap-2 text-xs md:text-sm font-bold text-gray-400 hover:text-red-500"><FaSignOutAlt /> 로그아웃</button>
+
+          <div className="flex items-center gap-4">
+            {activeTab === 'schedule' && (
+              (() => {
+                const ghostsMaster = getGhostSchedules('master');
+                const ghostsVocal = getGhostSchedules('vocal');
+                const weekStartStr = formatDateLocal(getStartOfWeek(scheduleDate));
+                const weekEnd = new Date(weekStartStr); weekEnd.setDate(weekEnd.getDate() + 6);
+                const weekEndStr = formatDateLocal(weekEnd);
+
+                const relevantSchedules = schedules.filter(s => s.date >= weekStartStr && s.date <= weekEndStr && s.category === '레슨');
+                const hasGhosts = ghostsMaster.length > 0 || ghostsVocal.length > 0;
+                const hasPending = relevantSchedules.some(s => !s.status || s.status === 'pending');
+
+                const isAllProcessed = !hasGhosts && !hasPending && relevantSchedules.length > 0;
+
+                return (
+                  <button
+                    onClick={handleToggleWeekLock}
+                    disabled={!isWeekLocked && !isAllProcessed}
+                    className={`btn btn-sm border-none gap-2 font-bold ${isWeekLocked
+                        ? 'bg-red-100 text-red-600 hover:bg-red-200'
+                        : (isAllProcessed ? 'bg-black text-white hover:bg-gray-800' : 'bg-gray-100 text-gray-400')
+                      }`}
+                  >
+                    {isWeekLocked ? <><FaLockOpen /> 해제</> : <><FaLock /> 최종</>}
+                  </button>
+                );
+              })()
+            )}
+            <button onClick={handleLogout} className="flex items-center gap-2 text-xs md:text-sm font-bold text-gray-400 hover:text-red-500"><FaSignOutAlt /> 로그아웃</button>
+          </div>
         </header>
 
         <main className="flex-1 p-4 md:p-12 lg:px-16 bg-white overflow-y-auto">
           {/* ----- 스케쥴 탭 ----- */}
           {activeTab === 'schedule' && (
-            <div className="flex flex-col h-full">
-              <div className="flex flex-col gap-4 mb-4">
+            <div className="flex flex-col h-full gap-4">
+              {/* (스케쥴 탭 내용은 기존과 동일) */}
+              <div className="flex flex-col gap-4">
                 <div className="flex justify-between items-center">
                   <div className="flex items-center gap-4 bg-white px-6 py-3 rounded-2xl shadow-sm border border-gray-100">
                     <select className="select select-ghost text-2xl font-extrabold focus:bg-gray-50 rounded-xl px-2 h-12 min-w-[120px]" value={scheduleDate.getFullYear()} onChange={handleScheduleYearChange}>{Array.from({ length: 10 }, (_, i) => new Date().getFullYear() - 5 + i).map(y => <option key={y} value={y}>{y}년</option>)}</select>
                     <select className="select select-ghost text-2xl font-extrabold focus:bg-gray-50 rounded-xl px-2 h-12 text-orange-500" value={scheduleDate.getMonth() + 1} onChange={handleScheduleMonthChange}>{Array.from({ length: 12 }, (_, i) => i + 1).map(m => <option key={m} value={m}>{m}월</option>)}</select>
                     <div className="w-[2px] h-6 bg-gray-200 mx-2"></div>
-                    <select className="select select-ghost font-bold text-gray-600 text-base h-12 min-w-[240px]" onChange={handleScheduleWeekChange} value={getStartOfWeek(scheduleDate).toISOString()}>
+                    <select
+                      className="select select-ghost font-bold text-gray-600 text-base h-12 min-w-[240px]"
+                      onChange={handleScheduleWeekChange}
+                      value={formatDateLocal(getStartOfWeek(scheduleDate))}
+                    >
                       {weeksInMonth.map((w, i) => (
-                        <option key={i} value={w.start.toISOString()}>{i + 1}주차 ({w.start.getDate()}일~{w.end.getDate()}일)</option>
+                        <option key={i} value={formatDateLocal(w.start)}>
+                          {i + 1}주차 ({w.start.getDate()}일~{w.end.getDate()}일)
+                        </option>
                       ))}
                     </select>
                   </div>
@@ -626,92 +872,85 @@ function App() {
                 </div>
                 <div className="flex-1 overflow-y-auto">
                   {(() => {
-                    const ghostSchedules = getGhostSchedules();
+                    const ghostsMaster = getGhostSchedules('master');
+                    const ghostsVocal = getGhostSchedules('vocal');
 
                     return hours.map((hour) => (
-                      <div key={hour} className="grid grid-cols-8 border-b border-gray-100 min-h-[100px]">
+                      <div key={hour} className="grid grid-cols-8 border-b border-gray-100 min-h-[120px]">
                         <div className="p-2 text-center text-xs font-bold text-gray-400 border-r border-gray-100 flex flex-col justify-between items-center py-2">
                           <span>{`PM ${hour > 12 ? hour - 12 : hour}`}</span>
                         </div>
                         {weekDays.map((day, i) => {
-                          const dateStr = day.toISOString().split('T')[0];
+                          const dateStr = formatDateLocal(day);
                           const dayOfWeek = day.getDay();
 
-                          const getSchedule = (tStr) => {
-                            const matchStr = `${tStr}`;
-                            const normal = schedules.filter(s => s.date === dateStr && s.time === matchStr);
-                            const fixed = fixedSchedules.filter(s => s.dayOfWeek === dayOfWeek && s.time === matchStr);
-                            const ghosts = ghostSchedules.filter(g => g.date === dateStr && g.time === matchStr);
-
-                            const all = [...normal];
-                            fixed.forEach(f => { if (!all.some(n => n.time === f.time)) all.push(f); });
-
-                            if (all.length === 0) {
-                              all.push(...ghosts);
-                            }
-
-                            return all;
+                          const getScheduleItems = (gType) => {
+                            const ghosts = gType === 'master' ? ghostsMaster : ghostsVocal;
+                            const getByTime = (tStr) => {
+                              const matchStr = `${tStr}`;
+                              const normal = schedules.filter(s => s.date === dateStr && s.time === matchStr && (s.gridType || 'master') === gType);
+                              const fixed = fixedSchedules.filter(s =>
+                                s.dayOfWeek === dayOfWeek &&
+                                s.time === matchStr &&
+                                (s.gridType || 'master') === gType
+                              );
+                              const ghostItems = ghosts.filter(g => g.date === dateStr && g.time === matchStr);
+                              const all = [...normal];
+                              fixed.forEach(f => { if (!all.some(n => n.time === f.time)) all.push(f); });
+                              if (all.length === 0) all.push(...ghostItems);
+                              return all;
+                            };
+                            return [...getByTime(`${hour}:00`), ...getByTime(`${hour}:30`)];
                           };
 
-                          const itemsTop = getSchedule(`${hour}:00`);
-                          const itemsBot = getSchedule(`${hour}:30`);
-                          const itemsInHour = [...itemsTop, ...itemsBot];
+                          const masterItems = getScheduleItems('master');
+                          const vocalItems = getScheduleItems('vocal');
+
+                          const renderItems = (items, gType) => (
+                            items.length > 0 ? (
+                              items.map((item, idx) => {
+                                let statusStyle = '';
+                                let statusIcon = null;
+                                const isVocal = gType === 'vocal';
+
+                                if (item.isGhost) statusStyle = 'bg-gray-50 text-gray-400 border-dashed border-gray-300 opacity-60 grayscale';
+                                else if (item.status === 'completed') { statusStyle = 'bg-gray-600 text-white border-gray-700 opacity-80'; statusIcon = <FaCheckCircle className="text-green-400 text-[9px]" />; }
+                                // [FIXED] reschedule_assigned도 노란색으로 표시
+                                else if (item.status === 'reschedule' || item.status === 'reschedule_assigned') { statusStyle = 'bg-yellow-50 text-yellow-800 border-yellow-200 ring-1 ring-yellow-300'; statusIcon = <FaClock className="text-yellow-600 text-[9px]" />; }
+                                else if (item.status === 'absent') { statusStyle = 'bg-red-50 text-red-800 border-red-200 ring-1 ring-red-300'; statusIcon = <FaTimesCircle className="text-red-500 text-[9px]" />; }
+                                else {
+                                  if (item.isFixed) statusStyle = 'bg-purple-50 text-purple-900 border-purple-100';
+                                  else if (item.category === '상담') statusStyle = isVocal ? 'bg-slate-200 text-slate-800 border-slate-300' : 'bg-green-50 text-green-800 border-green-100';
+                                  else if (item.category === '레슨') statusStyle = isVocal ? 'bg-blue-100 text-blue-900 border-blue-200' : 'bg-orange-50 text-orange-900 border-orange-100';
+                                  else statusStyle = isVocal ? 'bg-slate-200 text-slate-800 border-slate-300' : 'bg-white text-gray-700 border-gray-200';
+                                }
+
+                                return (
+                                  <div key={idx} onClick={(e) => { e.stopPropagation(); handleSlotClick(dateStr, String(hour), dayOfWeek, item, gType); }} className={`w-full rounded-md p-1 text-[10px] flex items-center gap-1 shadow-sm border overflow-hidden shrink-0 transition-all ${statusStyle}`}>
+                                    <span className={`px-1 rounded text-[8px] font-bold shrink-0 ${item.status === 'completed' ? 'bg-gray-500 text-gray-200' : item.time.endsWith('30') ? 'bg-blue-200 text-blue-800' : 'bg-yellow-200 text-yellow-800'}`}>{item.time.split(':')[1]}</span>
+                                    {item.isFixed && <FaThumbtack className="text-[8px] text-purple-400 min-w-fit" />}
+                                    {statusIcon}
+                                    <span className="truncate font-bold">{item.studentName || item.category}</span>
+                                    {item.isGhost && <span className="text-[8px] bg-gray-200 text-gray-500 px-1 rounded ml-auto">예상</span>}
+                                    {!item.isGhost && item.memo && <span className="hidden md:inline truncate opacity-75 font-normal ml-1">({item.memo})</span>}
+                                  </div>
+                                );
+                              })
+                            ) : (
+                              <div className="w-full h-full flex items-center justify-center opacity-0 group-hover:opacity-100"><FaPlus className="text-gray-300 text-xs" /></div>
+                            )
+                          );
 
                           return (
                             <div key={i} className="border-r border-gray-100 last:border-none p-0 flex flex-col h-full">
-                              <div className="flex-[2] bg-white p-1 flex flex-col gap-1 overflow-y-auto cursor-pointer relative group hover:bg-gray-50 transition-colors" onClick={() => handleSlotClick(dateStr, String(hour), dayOfWeek)}>
-                                {itemsInHour.length > 0 ? (
-                                  itemsInHour.map((item, idx) => {
-                                    // [수정] 상태별 스타일 정의
-                                    let statusStyle = '';
-                                    let statusIcon = null;
-
-                                    if (item.isGhost) {
-                                      statusStyle = 'bg-gray-50 text-gray-400 border-dashed border-gray-300 opacity-60 grayscale';
-                                    } else if (item.status === 'completed') {
-                                      statusStyle = 'bg-gray-600 text-white border-gray-700 opacity-80'; // 완료: 어두운 배경
-                                      statusIcon = <FaCheckCircle className="text-green-400 text-[9px]" />;
-                                    } else if (item.status === 'reschedule') {
-                                      statusStyle = 'bg-yellow-50 text-yellow-800 border-yellow-200 ring-1 ring-yellow-300'; // 보강예정: 노란색
-                                      statusIcon = <FaClock className="text-yellow-600 text-[9px]" />;
-                                    } else if (item.status === 'absent') {
-                                      statusStyle = 'bg-red-50 text-red-800 border-red-200 ring-1 ring-red-300'; // 결석: 붉은색
-                                      statusIcon = <FaTimesCircle className="text-red-500 text-[9px]" />;
-                                    } else {
-                                      // 일반(예정) 상태
-                                      if (item.isFixed) statusStyle = 'bg-purple-50 text-purple-900 border-purple-100';
-                                      else if (item.category === '상담') statusStyle = 'bg-green-50 text-green-800 border-green-100';
-                                      else if (item.category === '레슨') statusStyle = 'bg-orange-50 text-orange-900 border-orange-100';
-                                      else statusStyle = 'bg-gray-100 text-gray-700 border-gray-200';
-                                    }
-
-                                    return (
-                                      <div key={idx}
-                                        onClick={(e) => { e.stopPropagation(); handleSlotClick(dateStr, String(hour), dayOfWeek, item); }}
-                                        className={`w-full rounded-md p-1 text-[10px] flex items-center gap-1 shadow-sm border overflow-hidden shrink-0 transition-all ${statusStyle}`}>
-                                        <span className={`px-1 rounded text-[8px] font-bold shrink-0 ${item.status === 'completed' ? 'bg-gray-500 text-gray-200' :
-                                            item.time.endsWith('30') ? 'bg-blue-200 text-blue-800' : 'bg-yellow-200 text-yellow-800'
-                                          }`}>
-                                          {item.time.split(':')[1]}
-                                        </span>
-                                        {item.isFixed && <FaThumbtack className="text-[8px] text-purple-400 min-w-fit" />}
-
-                                        {statusIcon}
-
-                                        <span className={`truncate font-bold ${item.status === 'completed' ? 'line-through decoration-gray-400' : ''}`}>
-                                          {item.studentName || item.category}
-                                        </span>
-
-                                        {item.isGhost && <span className="text-[8px] bg-gray-200 text-gray-500 px-1 rounded ml-auto">예상</span>}
-                                        {!item.isGhost && item.memo && <span className="truncate opacity-75 font-normal ml-1">({item.memo})</span>}
-                                      </div>
-                                    );
-                                  })
-                                ) : (
-                                  <div className="w-full h-full flex items-center justify-center opacity-0 group-hover:opacity-100"><FaPlus className="text-gray-300 text-xs" /></div>
-                                )}
+                              <div className="flex-[1] bg-white p-1 flex flex-col gap-1 overflow-y-auto cursor-pointer relative group hover:bg-gray-50 transition-colors border-b border-gray-100"
+                                onClick={() => handleSlotClick(dateStr, String(hour), dayOfWeek, null, 'master')}>
+                                {renderItems(masterItems, 'master')}
                               </div>
-                              <div className="flex-[1] bg-gray-200 border-t border-gray-100 cursor-pointer hover:bg-gray-300 transition-colors"></div>
+                              <div className="flex-[1] bg-gray-50 p-1 flex flex-col gap-1 overflow-y-auto cursor-pointer relative group hover:bg-gray-200 transition-colors"
+                                onClick={() => handleSlotClick(dateStr, String(hour), dayOfWeek, null, 'vocal')}>
+                                {renderItems(vocalItems, 'vocal')}
+                              </div>
                             </div>
                           );
                         })}
@@ -723,17 +962,256 @@ function App() {
             </div>
           )}
 
+          {/* ----- 출석부 탭 ----- */}
           {activeTab === 'attendance' && (
-            <div className="flex flex-col gap-6">
-              <div className="flex items-center gap-4 mb-2">
-                <h2 className="text-2xl font-extrabold text-gray-800">일일 출석부</h2>
-                <input type="date" className="input input-bordered font-bold" value={attendanceDate} onChange={(e) => setAttendanceDate(e.target.value)} />
+            <div className="flex flex-col gap-4 h-full">
+              {/* 상단 컨트롤 */}
+              <div className="flex flex-col md:flex-row justify-between items-center gap-4 bg-white p-4 rounded-[2rem] shadow-sm border border-gray-100">
+                <div className="tabs tabs-boxed bg-gray-100 p-1 rounded-full">
+                  <a className={`tab rounded-full ${attCategory === 'basic' ? 'tab-active bg-black text-white' : ''}`} onClick={() => setAttCategory('basic')}>기본 수강생</a>
+                  <a className={`tab rounded-full ${attCategory === 'monthly' ? 'tab-active bg-blue-600 text-white' : ''}`} onClick={() => setAttCategory('monthly')}>월정산</a>
+                  <a className={`tab rounded-full ${attCategory === 'artist' ? 'tab-active bg-purple-600 text-white' : ''}`} onClick={() => setAttCategory('artist')}>아티스트</a>
+                  <a className={`tab rounded-full ${attCategory === 'inactive' ? 'tab-active bg-gray-500 text-white' : ''}`} onClick={() => setAttCategory('inactive')}>비활성</a>
+                </div>
+
+                <div className="flex items-center gap-4">
+                  <button
+                    className={`btn btn-sm gap-2 ${isAttendanceLocked ? 'btn-ghost text-gray-400' : 'bg-red-100 text-red-500 border-none'}`}
+                    onClick={() => setIsAttendanceLocked(!isAttendanceLocked)}
+                  >
+                    {isAttendanceLocked ? <><FaLock /> 잠금</> : <><FaLockOpen /> 수정가능</>}
+                  </button>
+                  <div className="w-[1px] h-6 bg-gray-200 mx-2"></div>
+
+                  <button className="btn btn-sm btn-circle btn-ghost" onClick={() => {
+                    const d = new Date(attBaseDate);
+                    d.setDate(d.getDate() - (7 * 12));
+                    setAttBaseDate(d);
+                  }}><FaChevronLeft /></button>
+
+                  <div className="text-center flex flex-col items-center">
+                    {(() => {
+                      const weeks = get12Weeks(attBaseDate);
+                      return (
+                        <>
+                          <span className="font-extrabold text-gray-800 text-lg">
+                            {weeks[0].label} ~ {weeks[11].end.getFullYear().toString().slice(2)}.{String(weeks[11].end.getMonth() + 1).padStart(2, '0')}.{String(weeks[11].end.getDate()).padStart(2, '0')}
+                          </span>
+                          <span className="text-xs text-gray-400 font-bold">총 12주 코스</span>
+                        </>
+                      );
+                    })()}
+                  </div>
+
+                  <button className="btn btn-sm btn-circle btn-ghost" onClick={() => {
+                    const d = new Date(attBaseDate);
+                    d.setDate(d.getDate() + (7 * 12));
+                    setAttBaseDate(d);
+                  }}><FaChevronRight /></button>
+
+                  <button className="btn btn-sm btn-ghost text-xs" onClick={() => setAttBaseDate(getStartOfWeek(new Date()))}>오늘</button>
+                </div>
               </div>
-              <div className="bg-white rounded-[2rem] shadow-sm border border-gray-100 p-6 overflow-x-auto">
-                <table className="table w-full"><thead><tr className="text-gray-500 border-b border-gray-100"><th className="w-16">No.</th><th>이름</th><th className="text-center">상태</th><th>메모</th></tr></thead><tbody>{students.filter(s => s.isActive).map((student, idx) => { const att = attendanceData[student.id] || {}; return (<tr key={student.id} className="hover:bg-gray-50 border-b border-gray-50"><td className="font-bold text-gray-400">{idx + 1}</td><td className="font-bold text-lg">{student.name}</td><td className="text-center"><div className="join"><button onClick={() => handleAttendanceChange(student.id, 'present')} className={`btn btn-sm join-item ${att.status === 'present' ? 'btn-primary text-white' : 'btn-outline border-gray-200 text-gray-400'}`}>출석</button><button onClick={() => handleAttendanceChange(student.id, 'late')} className={`btn btn-sm join-item ${att.status === 'late' ? 'btn-warning text-white' : 'btn-outline border-gray-200 text-gray-400'}`}>지각</button><button onClick={() => handleAttendanceChange(student.id, 'absent')} className={`btn btn-sm join-item ${att.status === 'absent' ? 'btn-error text-white' : 'btn-outline border-gray-200 text-gray-400'}`}>결석</button></div></td><td><input type="text" placeholder="특이사항..." className="input input-sm input-bordered w-full" defaultValue={att.memo || ''} onBlur={(e) => handleAttendanceMemo(student.id, e.target.value)} /></td></tr>) })}</tbody></table>
+
+              {/* 메인 그리드 */}
+              <div className="bg-white rounded-[2rem] shadow-sm border border-gray-100 p-6 flex-1 overflow-auto">
+                <table className="table w-full border-separate border-spacing-0">
+                  <thead className="sticky top-0 bg-white z-20 shadow-sm">
+                    <tr className="text-center text-gray-500 text-xs font-bold border-b-2 border-gray-100">
+                      <th className="sticky left-0 bg-white z-30 min-w-[150px] border-r border-gray-100 pl-6 text-left py-4">이름</th>
+                      {get12Weeks(attBaseDate).map((w, i) => (
+                        <th key={i} className="min-w-[80px] border-r border-gray-50 last:border-none py-4 bg-white">
+                          <div className="flex flex-col items-center">
+                            <span className="text-[10px] text-gray-400 mb-1">{w.weekNum}주차</span>
+                            <span className="text-xs text-gray-800 font-bold">{w.label}</span>
+                          </div>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {students
+                      .filter(s => {
+                        if (attCategory === 'basic') return s.isActive && !s.isMonthly && !s.isArtist;
+                        if (attCategory === 'monthly') return s.isActive && s.isMonthly;
+                        if (attCategory === 'artist') return s.isActive && s.isArtist;
+                        if (attCategory === 'inactive') return !s.isActive;
+                        return false;
+                      })
+                      .sort((a, b) => new Date(a.firstDate || 0) - new Date(b.firstDate || 0))
+                      .map((student, idx) => {
+                        const weeks = get12Weeks(attBaseDate);
+                        return (
+                          <tr key={student.id} className="text-center hover:bg-gray-50 group">
+                            <td className="sticky left-0 bg-white group-hover:bg-gray-50 z-10 border-r border-gray-100 text-left pl-6 py-3 font-bold text-gray-800 align-middle border-b-[2px] border-gray-300">
+                              <span className="text-gray-400 text-xs mr-2">{idx + 1}</span>
+                              {student.name}
+                            </td>
+
+                            {weeks.map((w, i) => {
+                              const rotationWeek = getRotationWeek(student.firstDate, w.startStr);
+                              const weekConfig = student.schedule && student.schedule[rotationWeek - 1];
+
+                              const mCountBasic = Number(weekConfig?.master || 0);
+                              const vCountBasic = Number(weekConfig?.vocal || 0) + Number(weekConfig?.vocal30 || 0);
+
+                              const weekSchedules = attSchedules.filter(s =>
+                                s.studentId === student.id &&
+                                s.date >= w.startStr &&
+                                s.date <= w.endStr
+                              );
+
+                              const extraMCount = weekSchedules.filter(s => (s.gridType === 'master' || !s.gridType) && s.category !== '상담' && s.memo && s.memo.includes('추가')).length;
+                              const extraVCount = weekSchedules.filter(s => s.gridType === 'vocal' && s.memo && s.memo.includes('추가')).length;
+
+                              const mTotal = mCountBasic + extraMCount;
+                              const vTotal = vCountBasic + extraVCount;
+
+                              const completedM = weekSchedules
+                                .filter(s => (s.gridType === 'master' || !s.gridType) && s.category !== '상담')
+                                .sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time));
+
+                              const completedV = weekSchedules
+                                .filter(s => s.gridType === 'vocal')
+                                .sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time));
+
+                              const renderSlot = (type, index, actualScheds) => {
+                                const sched = actualScheds[index];
+                                const isMaster = type === 'M';
+
+                                const manualKey = `${student.id}_${w.startStr}_${type}_${index}`;
+                                const manualRecord = periodAttendance[manualKey];
+                                const manualStatus = manualRecord ? manualRecord.status : 'none';
+
+                                let boxClass = isMaster
+                                  ? "bg-gray-100 border-dashed border-gray-300 text-gray-400"
+                                  : "bg-white border-dashed border-gray-200 text-gray-300";
+                                let content = type + (index + 1);
+                                let icon = null;
+
+                                if (sched) {
+                                  const dateShort = sched.date.substring(5).replace('-', '.');
+
+                                  if (sched.status === 'completed') {
+                                    boxClass = isMaster
+                                      ? "bg-green-200 border-solid border-green-300 text-green-900 font-bold"
+                                      : "bg-green-50 border-solid border-green-200 text-green-700 font-bold";
+                                    content = dateShort;
+                                    icon = <FaCheck className="text-[8px]" />;
+                                  } else if (sched.status === 'absent') {
+                                    boxClass = isMaster
+                                      ? "bg-red-200 border-solid border-red-300 text-red-900 font-bold"
+                                      : "bg-red-50 border-solid border-red-200 text-red-700 font-bold";
+                                    content = dateShort;
+                                    icon = <FaTimesCircle className="text-[8px]" />;
+
+                                    // [NEW] 보강 로직 세분화
+                                  } else if (sched.status === 'reschedule') {
+                                    // 1. 보강 미배정 (Not Assigned)
+                                    boxClass = isMaster
+                                      ? "bg-red-50 border-dashed border-red-300 text-red-400 font-bold"
+                                      : "bg-white border-dashed border-red-200 text-red-300";
+                                    content = "미배정";
+                                    icon = <FaExclamationCircle className="text-[8px]" />;
+
+                                  } else if (sched.status === 'reschedule_assigned') {
+                                    // 보강 배정됨. 완료 여부 확인
+                                    const makeupMemoStr = `보강(${sched.date})`;
+                                    const makeupClass = attSchedules.find(s =>
+                                      s.studentId === sched.studentId &&
+                                      s.memo && s.memo.includes(makeupMemoStr)
+                                    );
+
+                                    if (makeupClass && makeupClass.status === 'completed') {
+                                      // 3. 보강 완료 (Done) -> 실제 보강 날짜 표기
+                                      boxClass = isMaster
+                                        ? "bg-yellow-200 border-solid border-yellow-400 text-yellow-900 font-extrabold ring-1 ring-yellow-400"
+                                        : "bg-yellow-100 border-solid border-yellow-300 text-yellow-800 font-bold";
+                                      content = makeupClass.date.substring(5).replace('-', '.');
+                                      icon = <FaCheckCircle className="text-[8px] text-green-600" />;
+                                    } else {
+                                      // 2. 보강 진행중 (Assigned / In Progress)
+                                      boxClass = isMaster
+                                        ? "bg-yellow-50 border-solid border-yellow-200 text-yellow-600 font-bold"
+                                        : "bg-white border-solid border-yellow-100 text-yellow-400";
+                                      content = "진행중";
+                                      icon = <FaClock className="text-[8px]" />;
+                                    }
+
+                                  } else {
+                                    // pending (예정)
+                                    boxClass = isMaster
+                                      ? "bg-gray-200 border-solid border-gray-300 text-gray-600"
+                                      : "bg-gray-50 border-solid border-gray-200 text-gray-400";
+                                    content = "예정";
+                                  }
+                                } else {
+                                  // 매칭된 스케쥴 없음 -> 수동 체크
+                                  if (manualStatus === 'present') {
+                                    boxClass = isMaster ? "bg-green-200 text-green-900" : "bg-green-50 text-green-700";
+                                    icon = <FaCheck className="text-[8px]" />;
+                                  } else if (manualStatus === 'late') {
+                                    boxClass = isMaster ? "bg-yellow-200 text-yellow-900" : "bg-yellow-50 text-yellow-700";
+                                    icon = <FaClock className="text-[8px]" />;
+                                  } else if (manualStatus === 'absent') {
+                                    boxClass = isMaster ? "bg-red-200 text-red-900" : "bg-red-50 text-red-700";
+                                    icon = <FaTimesCircle className="text-[8px]" />;
+                                  }
+                                }
+
+                                return (
+                                  <div
+                                    key={`${type}-${index}`}
+                                    className={`h-6 w-9 rounded-md text-[9px] flex flex-col items-center justify-center border cursor-pointer leading-none gap-0.5 ${boxClass}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handlePeriodAttendanceToggle(student.id, w.startStr, type, index);
+                                    }}
+                                  >
+                                    {icon}
+                                    <span>{content}</span>
+                                  </div>
+                                );
+                              };
+
+                              return (
+                                <td key={i} className="border-r border-gray-50 p-1 align-top min-h-[60px] border-b-[2px] border-gray-300">
+                                  <div className="flex flex-col gap-1.5 h-full justify-center py-1">
+                                    {mTotal > 0 && (
+                                      <div className="flex gap-1 justify-center flex-wrap">
+                                        {Array.from({ length: mTotal }).map((_, idx) => renderSlot('M', idx, completedM))}
+                                      </div>
+                                    )}
+                                    {vTotal > 0 && (
+                                      <div className="flex gap-1 justify-center flex-wrap">
+                                        {Array.from({ length: vTotal }).map((_, idx) => renderSlot('V', idx, completedV))}
+                                      </div>
+                                    )}
+                                    {mTotal === 0 && vTotal === 0 && (
+                                      <div className="text-center text-gray-200 text-xs">-</div>
+                                    )}
+                                  </div>
+                                </td>
+                              );
+                            })}
+                          </tr>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="flex justify-end gap-6 text-xs font-bold text-gray-500 px-6 py-2 bg-gray-50 rounded-full mx-4 mb-2">
+                <span className="text-gray-400">범례:</span>
+                <div className="flex items-center gap-1"><div className="w-4 h-4 rounded bg-green-200 border border-green-300"></div> M출석</div>
+                <div className="flex items-center gap-1"><div className="w-4 h-4 rounded bg-green-50 border border-green-200"></div> V출석</div>
+                <div className="flex items-center gap-1"><div className="w-4 h-4 rounded bg-yellow-200 border border-yellow-300"></div> 보강완료</div>
+                <div className="flex items-center gap-1"><div className="w-4 h-4 rounded bg-red-200 border border-red-300"></div> 결석</div>
               </div>
             </div>
           )}
+
+          {/* ----- 학생 관리 탭 ----- */}
           {activeTab === 'students' && (
             <>
               <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-6 gap-4"><div><h2 className="text-2xl md:text-3xl font-extrabold mb-2">수강생 리스트</h2><div className="flex gap-2"><button onClick={() => { setViewStatus('active'); setCurrentPage(1) }} className={`text-sm px-3 py-1 rounded-lg ${viewStatus === 'active' ? 'bg-black text-white' : 'bg-gray-100 text-gray-400'}`}>수강중</button><button onClick={() => { setViewStatus('inactive'); setCurrentPage(1) }} className={`text-sm px-3 py-1 rounded-lg ${viewStatus === 'inactive' ? 'bg-black text-white' : 'bg-gray-100 text-gray-400'}`}>종료/비활성</button><button onClick={() => { setViewStatus('artist'); setCurrentPage(1) }} className={`text-sm px-3 py-1 rounded-lg ${viewStatus === 'artist' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-400'}`}>아티스트</button></div></div><div className="flex gap-2 w-full md:w-auto"><div className="relative group flex-1 md:flex-none"><FaSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" /><input type="text" placeholder="검색..." className="input w-full md:w-64 bg-gray-50 border-2 border-gray-100 pl-10 rounded-2xl h-12 outline-none font-medium" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} /></div><button onClick={() => { setEditingId(null); setFormData(initialFormState); setIsModalOpen(true) }} className="btn h-12 bg-gray-900 text-white border-none px-6 rounded-2xl font-bold shadow-lg flex items-center gap-2"><FaPlus /> 등록</button></div></div>
@@ -744,6 +1222,8 @@ function App() {
               })}</tbody></table></div><div className="flex justify-center mt-6 gap-4"><button onClick={() => paginate(currentPage - 1)} disabled={currentPage === 1} className="btn btn-circle btn-sm bg-white border-none shadow-sm disabled:text-gray-300"><FaChevronLeft /></button><span className="font-bold text-gray-600 text-sm">Page {currentPage}</span><button onClick={() => paginate(currentPage + 1)} disabled={currentPage === totalPages} className="btn btn-circle btn-sm bg-white border-none shadow-sm disabled:text-gray-300"><FaChevronRight /></button></div></div>
             </>
           )}
+
+          {/* ----- 정산 탭 ----- */}
           {activeTab === 'settlement' && (
             <div className="flex flex-col gap-6"><div className="flex flex-col gap-2"><div className="flex flex-col md:flex-row justify-between items-center gap-4"><div className="flex items-center bg-white px-4 py-2 rounded-2xl shadow-sm border border-gray-100"><button onClick={() => changeMonth(-1)} className="btn btn-circle btn-sm btn-ghost"><FaChevronLeft /></button><div className="flex items-center mx-2"><select className="select select-sm bg-transparent border-none font-extrabold text-lg text-center w-24 focus:outline-none" value={currentDate.getFullYear()} onChange={handleYearChange}>{Array.from({ length: 10 }, (_, i) => new Date().getFullYear() - 5 + i).map(y => <option key={y} value={y}>{y}년</option>)}</select><select className="select select-sm bg-transparent border-none font-extrabold text-lg text-center w-20 focus:outline-none" value={currentDate.getMonth() + 1} onChange={handleMonthChange}>{Array.from({ length: 12 }, (_, i) => i + 1).map(m => <option key={m} value={m}>{m}월</option>)}</select></div><button onClick={() => changeMonth(1)} className="btn btn-circle btn-sm btn-ghost"><FaChevronRight /></button></div><button onClick={fetchSettlementData} className="btn btn-sm btn-ghost text-gray-400"><FaUndo className="mr-1" /> 새로고침</button></div><div className="bg-white px-4 py-2 rounded-xl shadow-sm border border-gray-100 flex items-center gap-3"><div className="flex items-center gap-2 min-w-fit"><FaStickyNote className="text-yellow-500 text-base" /><span className="text-xs font-bold text-gray-500">메모</span></div><input type="text" className="input input-sm border-none bg-transparent flex-1 text-sm focus:outline-none" placeholder="이달의 정산 특이사항 입력..." value={settlementMemo} onChange={(e) => setSettlementMemo(e.target.value)} /><button onClick={handleSettlementMemoSave} className="btn btn-xs bg-gray-100 text-gray-500 border-none hover:bg-black hover:text-white"><FaSave className="mr-1" /> 저장</button></div></div><div className="grid grid-cols-2 md:grid-cols-4 gap-4"><div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100"><div className="text-sm font-bold text-gray-400 mb-2 flex items-center gap-2"><FaMoneyBillWave className="text-green-500" /> 총 매출 (미수금 포함)</div><div className="text-2xl font-extrabold text-gray-800">{formatCurrency(totalRevenueIncludingUnpaid)}원</div><div className="text-xs text-gray-400 mt-1">완료 {settlementIncome.length}건 / 미납 {settlementUnpaid.length}건</div></div><div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100"><div className="text-sm font-bold text-gray-400 mb-2 flex items-center gap-2"><FaFileInvoiceDollar className="text-red-500" /> 총 지출</div><div className="text-2xl font-extrabold text-gray-800">{formatCurrency(totalExpense)}원</div><div className="text-xs text-gray-400 mt-1">지출 내역 {expenses.length}건</div></div><div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 bg-blue-50/50"><div className="text-sm font-bold text-blue-500 mb-2 flex items-center gap-2"><FaCalculator /> 순수익 (예상)</div><div className="text-2xl font-extrabold text-blue-600">{formatCurrency(netProfitIncludingUnpaid)}원</div></div><div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100"><div className="text-sm font-bold text-gray-400 mb-2 flex items-center gap-2"><FaExclamationCircle className="text-orange-500" /> 미수금</div><div className="text-2xl font-extrabold text-gray-400">{formatCurrency(totalUnpaid)}원</div><div className="text-xs text-orange-400 mt-1 font-bold">{settlementUnpaid.length}건 미결제</div></div></div><div className="grid grid-cols-1 lg:grid-cols-2 gap-6"><div className="bg-white rounded-[2.5rem] shadow-sm border border-gray-100 overflow-hidden flex flex-col h-[600px]"><div className="p-6 border-b border-gray-100 flex justify-between items-center"><h3 className="text-lg font-bold text-gray-800">수익 내역</h3><span className="text-xs font-bold text-green-600 bg-green-50 px-2 py-1 rounded-lg">입금완료</span></div><div className="flex-1 overflow-y-auto p-4"><table className="table table-sm w-full"><thead>
               <tr className="text-gray-400"><th>재등록일</th><th>이름</th><th>금액</th><th>결제일(수단)</th><th className="text-right">관리</th></tr></thead><tbody>{settlementIncome.map((item, i) => (<tr key={i} className="border-b border-gray-50 last:border-none cursor-pointer hover:bg-gray-50" onClick={() => handleGoToStudent(item.studentId, item.studentName)}>
@@ -757,9 +1237,10 @@ function App() {
         {isScheduleModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/40 backdrop-blur-md p-4">
             <div className="bg-white w-full max-w-sm rounded-2xl shadow-xl p-6 relative">
-              <h3 className="text-lg font-bold mb-4">{selectedSlot.date} {selectedSlot.time}:00 일정</h3>
+              <h3 className="text-lg font-bold mb-4">
+                {selectedSlot.date} {selectedSlot.time}:00 {scheduleForm.gridType === 'master' ? '쌤일정' : '짱구일정'}
+              </h3>
 
-              {/* 분 선택 라디오 버튼 */}
               <div className="flex gap-4 mb-4">
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input type="radio" name="minute" className="radio radio-sm radio-primary" checked={selectedMinute === '00'} onChange={() => setSelectedMinute('00')} />
@@ -771,7 +1252,6 @@ function App() {
                 </label>
               </div>
 
-              {/* 탭: 레슨 vs 개인 */}
               <div className="tabs tabs-boxed bg-gray-100 p-1 mb-4">
                 <a className={`tab flex-1 ${scheduleTab === 'lesson' ? 'tab-active bg-white text-black font-bold' : ''}`} onClick={() => handleTabChange('lesson')}>수강생 레슨</a>
                 <a className={`tab flex-1 ${scheduleTab === 'personal' ? 'tab-active bg-white text-black font-bold' : ''}`} onClick={() => handleTabChange('personal')}>개인 일정</a>
@@ -792,13 +1272,25 @@ function App() {
                 ) : (
                   <>
                     <select className="select select-sm border-gray-200" value={scheduleForm.category} onChange={(e) => setScheduleForm({ ...scheduleForm, category: e.target.value })}>
-                      <option value="야구">야구</option>
-                      <option value="야구1:1">야구 1:1</option>
-                      <option value="작곡">작곡</option>
-                      <option value="합주">합주</option>
-                      <option value="미팅">미팅</option>
-                      <option value="병원">병원</option>
-                      <option value="기타">기타</option>
+                      {scheduleForm.gridType === 'master' ? (
+                        <>
+                          <option value="야구">야구</option>
+                          <option value="야구1:1">야구 1:1</option>
+                          <option value="작곡">작곡</option>
+                          <option value="합주">합주</option>
+                          <option value="미팅">미팅</option>
+                          <option value="병원">병원</option>
+                          <option value="기타">기타</option>
+                        </>
+                      ) : (
+                        <>
+                          <option value="상담">상담</option>
+                          <option value="PT">PT</option>
+                          <option value="피부과">피부과</option>
+                          <option value="병원">병원</option>
+                          <option value="기타">기타</option>
+                        </>
+                      )}
                     </select>
                     <div className="form-control">
                       <label className="label cursor-pointer justify-start gap-2">
@@ -810,15 +1302,93 @@ function App() {
                 )}
                 <input type="text" placeholder="메모" className="input input-sm border-gray-200" value={scheduleForm.memo} onChange={(e) => setScheduleForm({ ...scheduleForm, memo: e.target.value })} />
 
-                {/* [수정] 학생 이름이 있는 경우에만 표시 & 시간 체크 로직 추가 */}
+                {scheduleTab === 'lesson' && (
+                  <div className="flex flex-col gap-3 mt-2 pt-2 border-t border-gray-100">
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs font-bold text-gray-400">추가 수업 ({scheduleForm.gridType === 'master' ? 'Master' : 'Vocal'} 학생)</label>
+                      <select className="select select-sm border-gray-200 bg-gray-50"
+                        onChange={(e) => {
+                          if (!e.target.value) return;
+                          const [sid, sname] = e.target.value.split('|');
+                          setScheduleForm({ ...scheduleForm, studentId: sid, studentName: sname, category: '레슨', memo: '추가수업' });
+                        }}
+                        value=""
+                      >
+                        <option value="">학생 선택...</option>
+                        {students.filter(s => {
+                          if (!s.isActive) return false;
+                          const hasClass = s.schedule && s.schedule.some(w => {
+                            if (scheduleForm.gridType === 'master') return Number(w.master || 0) > 0;
+                            return Number(w.vocal || 0) > 0 || Number(w.vocal30 || 0) > 0;
+                          });
+                          return hasClass;
+                        }).sort((a, b) => a.name.localeCompare(b.name)).map(s => (
+                          <option key={s.id} value={`${s.id}|${s.name}`}>{s.name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {(() => {
+                      const makeupList = historySchedules.filter(h => h.status === 'reschedule' || h.status === 'reschedule_assigned').reduce((acc, h) => {
+
+                        if (h.status === 'reschedule_assigned') return acc;
+
+                        const s = students.find(st => st.id === h.studentId);
+                        if (!s || !s.isActive || !s.schedule?.some(w => {
+                          if (scheduleForm.gridType === 'master') return Number(w.master || 0) > 0;
+                          return Number(w.vocal || 0) > 0 || Number(w.vocal30 || 0) > 0;
+                        })) return acc;
+
+                        const expectedMemo = `보강(${h.date})`;
+                        const alreadyAssigned = schedules.some(sch => sch.studentId === h.studentId && sch.memo === expectedMemo);
+
+                        if (!alreadyAssigned) {
+                          acc.push({ ...h, studentName: s.name });
+                        }
+                        return acc;
+                      }, []);
+
+                      if (makeupList.length === 0) return null;
+
+                      return (
+                        <div className="flex flex-col gap-1">
+                          <label className="text-xs font-bold text-red-400">보강 대상</label>
+                          <select className="select select-sm border-red-100 bg-red-50"
+                            onChange={(e) => {
+                              if (!e.target.value) return;
+                              const item = JSON.parse(e.target.value);
+                              setScheduleForm({
+                                ...scheduleForm,
+                                studentId: item.studentId,
+                                studentName: item.studentName,
+                                category: '레슨',
+                                memo: `보강(${item.date})`
+                              });
+                              setSelectedMakeupId(item.id);
+                            }}
+                            value=""
+                          >
+                            <option value="">보강 학생 선택...</option>
+                            {makeupList.map((h, i) => (
+                              <option key={i} value={JSON.stringify(h)}>
+                                {h.studentName} ({h.date} {h.time} 결석)
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                )}
+
                 {scheduleForm.studentName && (
                   <div className="flex flex-col gap-1 mt-3">
                     <label className="text-xs font-bold text-gray-400">수업 상태 체크 ({scheduleForm.studentName})</label>
                     <div className="grid grid-cols-3 gap-2">
                       {(() => {
-                        // 현재 시간과 스케쥴 시간 비교
                         const targetDateTime = new Date(`${selectedSlot.date}T${selectedSlot.time.padStart(2, '0')}:${selectedMinute}:00`);
                         const isPast = new Date() > targetDateTime;
+                        const isMakeupAssignment = scheduleForm.memo && scheduleForm.memo.includes('보강');
 
                         return (
                           <>
@@ -829,13 +1399,17 @@ function App() {
                             >
                               {scheduleForm.status === 'completed' && <FaCheckCircle />} 완료
                             </button>
-                            <button
-                              disabled={!isPast}
-                              onClick={() => setScheduleForm(prev => ({ ...prev, status: prev.status === 'reschedule' ? '' : 'reschedule' }))}
-                              className={`btn btn-xs h-8 border-none disabled:bg-gray-100 disabled:text-gray-300 disabled:cursor-not-allowed ${scheduleForm.status === 'reschedule' ? 'bg-yellow-500 text-white' : 'bg-yellow-50 text-yellow-600'}`}
-                            >
-                              {scheduleForm.status === 'reschedule' && <FaClock />} 보강
-                            </button>
+
+                            {!isMakeupAssignment && (
+                              <button
+                                disabled={!isPast}
+                                onClick={() => setScheduleForm(prev => ({ ...prev, status: (prev.status === 'reschedule' || prev.status === 'reschedule_assigned') ? '' : 'reschedule' }))}
+                                className={`btn btn-xs h-8 border-none disabled:bg-gray-100 disabled:text-gray-300 disabled:cursor-not-allowed ${(scheduleForm.status === 'reschedule' || scheduleForm.status === 'reschedule_assigned') ? 'bg-yellow-500 text-white' : 'bg-yellow-50 text-yellow-600'}`}
+                              >
+                                {(scheduleForm.status === 'reschedule' || scheduleForm.status === 'reschedule_assigned') && <FaClock />} 보강
+                              </button>
+                            )}
+
                             <button
                               disabled={!isPast}
                               onClick={() => setScheduleForm(prev => ({ ...prev, status: prev.status === 'absent' ? '' : 'absent' }))}
@@ -851,8 +1425,8 @@ function App() {
                 )}
 
                 <div className="flex gap-2 mt-4">
-                  {selectedSlot.id && <button onClick={handleScheduleDelete} className="btn btn-sm bg-red-500 text-white hover:bg-red-600 flex-1 border-none">일정 삭제</button>}
-                  <button onClick={handleScheduleSave} className="btn btn-sm bg-black text-white flex-[2] border-none">저장</button>
+                  {selectedSlot.id && <button onClick={handleScheduleDelete} disabled={isWeekLocked} className="btn btn-sm bg-red-500 text-white hover:bg-red-600 flex-1 border-none disabled:bg-gray-200 disabled:text-gray-400">일정 삭제</button>}
+                  <button onClick={handleScheduleSave} disabled={isWeekLocked} className="btn btn-sm bg-black text-white flex-[2] border-none disabled:bg-gray-200 disabled:text-gray-400">저장</button>
                 </div>
               </div>
               <button onClick={() => setIsScheduleModalOpen(false)} className="btn btn-sm btn-circle btn-ghost absolute top-2 right-2">✕</button>
@@ -860,35 +1434,80 @@ function App() {
           </div>
         )}
 
-        {/* 모달: 수강생 등록/수정 (기존 유지) */}
+        {/* 수강생 등록/수정 모달 */}
         {isModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/40 backdrop-blur-md p-4">
-            <div className="bg-white w-full max-w-3xl rounded-[2.5rem] shadow-2xl p-8 relative max-h-[90vh] overflow-y-auto">
-              <div className="flex justify-between items-center mb-6"><h3 className="text-2xl font-extrabold">{editingId ? '수정' : '등록'}</h3><button onClick={closeModal} className="btn btn-sm btn-circle btn-ghost">✕</button></div>
-              <div className="space-y-6">
-                <div className="grid grid-cols-5 gap-4">
-                  <div className="col-span-2"><label className="text-xs font-bold text-gray-500 ml-1">이름</label><input type="text" name="name" className="input w-full bg-gray-50 border-gray-200 rounded-xl px-4 h-10 text-sm" placeholder="이름" value={formData.name} onChange={handleChange} /></div>
-                  <div className="col-span-2"><label className="text-xs font-bold text-gray-500 ml-1">연락처</label><input type="text" name="phone" className="input w-full bg-gray-50 border-gray-200 rounded-xl px-4 h-10 text-sm" placeholder="010-0000-0000" value={formData.phone} onChange={handlePhoneChange} maxLength="13" /></div>
-                  <div className="flex items-end gap-1"><button onClick={() => setFormData({ ...formData, isMonthly: !formData.isMonthly })} className={`btn flex-1 h-10 rounded-xl text-[10px] font-bold border-none ${formData.isMonthly ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-400'}`}>월정산</button><button onClick={() => setFormData({ ...formData, isArtist: !formData.isArtist })} className={`btn flex-1 h-10 rounded-xl text-[10px] font-bold border-none ${formData.isArtist ? 'bg-purple-500 text-white' : 'bg-gray-100 text-gray-400'}`}>아티스트</button></div>
+            <div className="bg-white w-full max-w-lg rounded-3xl shadow-2xl p-6 md:p-8 max-h-[90vh] overflow-y-auto">
+              <h2 className="text-2xl font-extrabold text-gray-800 mb-6">{editingId ? '수강생 정보 수정' : '신규 수강생 등록'}</h2>
+
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                <div className="form-control col-span-1">
+                  <label className="label-text text-xs font-bold text-gray-500 mb-1 ml-1">이름</label>
+                  <input type="text" name="name" className="input bg-gray-50 border-gray-100 rounded-xl" value={formData.name} onChange={handleChange} />
                 </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div><label className="text-xs font-bold text-gray-500 ml-1">최초 등록일</label><input type="date" name="firstDate" className={`input w-full border-gray-200 rounded-xl px-4 h-10 text-sm text-gray-600 ${editingId ? 'bg-gray-200 cursor-not-allowed' : 'bg-gray-50'}`} value={formData.firstDate} onChange={handleChange} disabled={!!editingId} /></div>
-                  <div><label className="text-xs font-bold text-gray-500 ml-1">재등록 회차</label><input type="number" name="count" className="input w-full bg-gray-50 border-gray-200 rounded-xl px-4 h-10 text-sm text-center font-bold" placeholder="1" value={formData.count} onChange={handleChange} /></div>
+                <div className="form-control col-span-1">
+                  <label className="label-text text-xs font-bold text-gray-500 mb-1 ml-1">연락처</label>
+                  <input type="text" name="phone" className="input bg-gray-50 border-gray-100 rounded-xl" value={formData.phone} onChange={handlePhoneChange} maxLength="13" />
                 </div>
-                <div className="bg-gray-50 rounded-2xl p-4 border border-gray-100">
-                  <div className="grid grid-cols-4 gap-2 text-center text-xs font-bold text-gray-400 mb-2"><div>Week</div><div className="text-orange-600">Master</div><div className="text-blue-600">Vocal</div><div className="text-cyan-600">V30(50%)</div></div>
-                  <div className="space-y-2">{formData.schedule.map((item, idx) => (<div key={idx} className="grid grid-cols-4 gap-2 items-center"><div className="text-xs font-bold text-gray-500 text-center">{item.week}주차</div><input type="number" step="0.1" className="input w-10 h-8 mx-auto text-center text-sm font-bold bg-white border-orange-100 focus:border-orange-500 [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield]" placeholder="0" value={item.master} onChange={(e) => handleScheduleChange(idx, 'master', e.target.value)} /><input type="number" step="0.1" className="input w-10 h-8 mx-auto text-center text-sm font-bold bg-white border-blue-100 focus:border-blue-500 [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield]" placeholder="0" value={item.vocal} onChange={(e) => handleScheduleChange(idx, 'vocal', e.target.value)} /><input type="number" step="0.1" className="input w-10 h-8 mx-auto text-center text-sm font-bold bg-white border-cyan-100 focus:border-cyan-500 [&::-webkit-inner-spin-button]:appearance-none [-moz-appearance:textfield]" placeholder="0" value={item.vocal30} onChange={(e) => handleScheduleChange(idx, 'vocal30', e.target.value)} /></div>))}</div>
-                </div>
-                <div className="bg-orange-50 rounded-2xl p-4 border border-orange-100 grid grid-cols-2 gap-3">
-                  <div><label className="text-[10px] font-bold text-orange-600 ml-1">마스터(1회당)</label><input type="text" className="input w-full h-10 text-right font-bold text-sm bg-white border-orange-200" value={formatCurrency(formData.rates.master)} onChange={(e) => handleRateChange('master', e.target.value)} /></div>
-                  <div><label className="text-[10px] font-bold text-orange-600 ml-1">발성(1회당)</label><input type="text" className="input w-full h-10 text-right font-bold text-sm bg-white border-orange-200" value={formatCurrency(formData.rates.vocal)} onChange={(e) => handleRateChange('vocal', e.target.value)} /></div>
-                </div>
-                <textarea name="memo" className="textarea w-full bg-gray-50 border-gray-200 rounded-2xl h-20 text-sm" placeholder="메모..." value={formData.memo} onChange={handleChange}></textarea>
               </div>
-              <div className="mt-8"><button className="btn w-full bg-gray-900 text-white rounded-2xl h-12 shadow-xl" onClick={handleSubmit}>저장하기</button></div>
+
+              <div className="flex gap-2 mb-6">
+                <label className="cursor-pointer label justify-start gap-2 bg-gray-50 px-3 py-2 rounded-xl">
+                  <input type="checkbox" name="isMonthly" className="checkbox checkbox-sm checkbox-primary" checked={formData.isMonthly} onChange={(e) => setFormData({ ...formData, isMonthly: e.target.checked })} />
+                  <span className="label-text font-bold text-gray-600">월정산</span>
+                </label>
+                <label className="cursor-pointer label justify-start gap-2 bg-gray-50 px-3 py-2 rounded-xl">
+                  <input type="checkbox" name="isArtist" className="checkbox checkbox-sm checkbox-secondary" checked={formData.isArtist} onChange={(e) => setFormData({ ...formData, isArtist: e.target.checked })} />
+                  <span className="label-text font-bold text-gray-600">아티스트</span>
+                </label>
+              </div>
+
+              <div className="divider text-xs font-bold text-gray-300">클래스 상세</div>
+
+              <div className="mb-4">
+                <div className="grid grid-cols-2 gap-4 mb-2">
+                  <div className="form-control">
+                    <label className="label-text text-xs font-bold text-gray-400 mb-1">Master 회당 단가</label>
+                    <input type="text" className="input input-sm bg-gray-50 border-gray-100" value={Number(formData.rates.master).toLocaleString()} onChange={(e) => handleRateChange('master', e.target.value)} />
+                  </div>
+                  <div className="form-control">
+                    <label className="label-text text-xs font-bold text-gray-400 mb-1">Vocal 회당 단가</label>
+                    <input type="text" className="input input-sm bg-gray-50 border-gray-100" value={Number(formData.rates.vocal).toLocaleString()} onChange={(e) => handleRateChange('vocal', e.target.value)} />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-2 mb-6">
+                {formData.schedule.map((week, idx) => (
+                  <div key={idx} className="flex items-center gap-2 bg-gray-50 p-2 rounded-xl">
+                    <span className="text-xs font-bold text-gray-400 w-8">{idx + 1}주</span>
+                    <input type="number" placeholder="M" className="input input-sm w-16 text-center border-gray-200 focus:border-orange-500" value={week.master} onChange={(e) => handleScheduleChange(idx, 'master', e.target.value)} />
+                    <input type="number" placeholder="V" className="input input-sm w-16 text-center border-gray-200 focus:border-blue-500" value={week.vocal} onChange={(e) => handleScheduleChange(idx, 'vocal', e.target.value)} />
+                    <input type="number" placeholder="V30" className="input input-sm w-16 text-center border-gray-200 focus:border-cyan-500" value={week.vocal30} onChange={(e) => handleScheduleChange(idx, 'vocal30', e.target.value)} />
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-2 gap-4 mb-6">
+                <div className="form-control">
+                  <label className="label-text text-xs font-bold text-gray-500 mb-1 ml-1">등록일(첫수업)</label>
+                  <input type="date" name="firstDate" className="input bg-gray-50 border-gray-100" value={formData.firstDate} onChange={handleChange} />
+                </div>
+              </div>
+
+              <div className="form-control mb-8">
+                <label className="label-text text-xs font-bold text-gray-500 mb-1 ml-1">메모</label>
+                <input type="text" name="memo" className="input bg-gray-50 border-gray-100" value={formData.memo} onChange={handleChange} />
+              </div>
+
+              <div className="flex gap-3">
+                <button onClick={closeModal} className="btn btn-ghost flex-1 text-gray-500">취소</button>
+                <button onClick={handleSubmit} className="btn bg-black text-white flex-[2] rounded-xl hover:bg-gray-800 border-none">저장하기</button>
+              </div>
             </div>
           </div>
         )}
+
       </div>
     </div>
   );
