@@ -36,12 +36,14 @@ function App() {
   const [loginPw, setLoginPw] = useState('');
 
   useEffect(() => {
+
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
       setLoading(false);
     });
     return () => unsubscribe();
   }, []);
+
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -107,6 +109,7 @@ function App() {
 
   const [weeklyMemo, setWeeklyMemo] = useState('');
   const [availableStudents, setAvailableStudents] = useState([]);
+
 
   // --- [출석 관리 상태] ---
   const [attCategory, setAttCategory] = useState('basic');
@@ -288,6 +291,7 @@ function App() {
 
     let startStr, endStr;
 
+    // 1. 날짜 범위 계산
     if (attViewMode === '12weeks') {
       const start = new Date(attBaseDate);
       const end = new Date(start);
@@ -310,10 +314,18 @@ function App() {
       endStr = formatDateLocal(adjustedEnd);
     }
 
+    // 2. 미래 버퍼 계산 (45일)
     const bufferEndDate = new Date(endStr);
     bufferEndDate.setDate(bufferEndDate.getDate() + 45);
     const bufferEndStr = formatDateLocal(bufferEndDate);
 
+    // 3. [핵심 수정] 과거 데이터 로딩 범위 확장 (3개월 전)
+    // 로테이션 계산을 위해 화면에 안 보이는 과거 수업 기록까지 가져옵니다.
+    const safeStartDate = new Date(startStr);
+    safeStartDate.setMonth(safeStartDate.getMonth() - 3);
+    const safeStartStr = formatDateLocal(safeStartDate);
+
+    // 4. 출석 체크 데이터 구독 (Attendance) - 화면 범위 기준
     const qAtt = query(
       collection(db, "attendance"),
       where("date", ">=", startStr),
@@ -329,9 +341,10 @@ function App() {
       setPeriodAttendance(map);
     });
 
+    // 5. 스케줄 데이터 구독 (Schedules) - [수정] safeStartStr(3개월 전)부터 조회
     const qSched = query(
       collection(db, "schedules"),
-      where("date", ">=", startStr),
+      where("date", ">=", safeStartStr),
       where("date", "<=", bufferEndStr)
     );
     const unsubSched = onSnapshot(qSched, (snapshot) => {
@@ -503,6 +516,8 @@ function App() {
   const handleWeeklyMemoSave = async () => { await setDoc(doc(db, "weekly_memos", formatDateLocal(getStartOfWeek(scheduleDate))), { text: weeklyMemo }, { merge: true }); alert("주간 메모 저장 완료"); };
   const handleSettlementMemoSave = async () => { const ym = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`; await setDoc(doc(db, "settlement_memos", ym), { text: settlementMemo }, { merge: true }); alert("저장됨"); };
 
+  // [수정] 등록 모달 학생 리스트 생성 함수 (고정 스케쥴 규칙에 의한 '유령 차단' 방지)
+  // [수정] 스케쥴 등록 모달의 학생 리스트 생성 함수 (고정 스케쥴 오버라이드 체크 추가)
   const generateAvailableStudents = (selectedDateStr, editingItemName = null, gridType = 'master') => {
     const weekStart = getStartOfWeek(selectedDateStr);
     const weekEnd = new Date(weekStart);
@@ -512,7 +527,7 @@ function App() {
 
     const bookedNames = new Set();
 
-    // 일반 스케쥴 체크
+    // 1. 일반 스케쥴(실제 등록된 수업) 체크 -> 중복이면 숨김
     schedules.forEach(s => {
       const sType = s.gridType || 'master';
       if (sType !== gridType) return;
@@ -523,10 +538,33 @@ function App() {
       }
     });
 
-    // 고정 스케쥴 체크 (시작일 비교 추가)
+    // 2. 고정 스케쥴(Fixed) 체크 (단, 다른 수업으로 덮어씌워진 경우는 무시)
     fixedSchedules.forEach(s => {
       const sType = s.gridType || 'master';
-      if (sType === gridType && s.studentName && (!s.fixedStartDate || s.fixedStartDate <= weekEndStr)) {
+
+      // 타입이 다르거나, 아직 시작 안 한 고정 스케쥴은 무시
+      if (sType !== gridType) return;
+      if (!s.studentName) return;
+      if (s.fixedStartDate && s.fixedStartDate > weekEndStr) return;
+
+      // [핵심 로직] 이 고정 스케쥴이 이번 주 정확히 며칠인지 계산
+      // weekStart는 월요일. s.dayOfWeek는 0(일)~6(토).
+      // 월(1)->0, 화(2)->1, ... 일(0)->6 인덱스로 변환
+      const dayIndex = (s.dayOfWeek === 0) ? 6 : s.dayOfWeek - 1;
+
+      const targetDate = new Date(weekStart);
+      targetDate.setDate(weekStart.getDate() + dayIndex);
+      const targetDateStr = formatDateLocal(targetDate);
+
+      // [핵심 로직] 해당 날짜/시간에 '일반 스케쥴'이 이미 존재하는지 확인 (오버라이드 여부)
+      // 예: 수요일 8시에 고정M이 있어도, 실제 스케쥴에 V가 등록되어 있다면 고정M은 무시해야 함
+      const isOverridden = schedules.some(sch =>
+        sch.date === targetDateStr &&
+        sch.time === s.time
+      );
+
+      // 덮어씌워지지 않고 살아있는 고정 스케쥴만 '예약됨'으로 처리
+      if (!isOverridden) {
         bookedNames.add(s.studentName);
       }
     });
@@ -535,7 +573,10 @@ function App() {
 
     const options = [];
     students.filter(s => s.isActive).forEach(student => {
-      const rotationWeek = getRotationWeek(student.firstDate, selectedDateStr);
+      // [수정 코드] selectedDateStr 대신 weekStartStr(월요일)을 넣으세요!
+      // 이렇게 하면 유령 스케줄과 똑같은 기준으로 주차를 계산하게 됩니다.
+      const weekStartStr = formatDateLocal(weekStart);
+      const rotationWeek = getRotationWeek(student.firstDate, weekStartStr);
       const weekConfig = student.schedule && student.schedule[rotationWeek - 1];
       if (weekConfig) {
         let count = 0;
@@ -549,7 +590,11 @@ function App() {
 
         for (let i = 1; i <= count; i++) {
           const displayName = count > 1 ? `${student.name}(${i})` : student.name;
-          if (!bookedNames.has(displayName)) options.push({ id: student.id, name: displayName, originalName: student.name });
+
+          // 예약된 이름이 아닐 때만 리스트에 추가 (숨김 기능 유지)
+          if (!bookedNames.has(displayName)) {
+            options.push({ id: student.id, name: displayName, originalName: student.name });
+          }
         }
       }
     });
@@ -843,6 +888,110 @@ function App() {
   const handleEditClick = (s) => { setEditingId(s.id); const sch = (s.schedule || initialFormState.schedule).map(w => ({ ...w, vocal30: w.vocal30 || '' })); setFormData({ ...initialFormState, ...s, schedule: sch, rates: s.rates || initialFormState.rates }); setIsModalOpen(true); };
   const closeModal = () => { setIsModalOpen(false); setEditingId(null); setFormData(initialFormState); };
 
+  // --- [NEW] 재등록 예정일 자동 등록 핸들러 (학생 이름 포함 수정) ---
+  const handleRegisterRotation = async (student, targetDateStr) => {
+    // [수정] 메시지에 student.name 추가
+    if (!window.confirm(`[${student.name}] 학생을 ${targetDateStr} 일자로 재등록(미수금) 생성하시겠습니까?`)) return;
+
+    try {
+      const amount = calculateTotalAmount(student);
+      const newItem = {
+        id: Date.now().toString(),
+        targetDate: targetDateStr,
+        amount: amount,
+        createdAt: new Date().toISOString()
+      };
+
+      const list = [...(student.unpaidList || []), newItem].sort((a, b) => new Date(a.targetDate) - new Date(b.targetDate));
+
+      await updateDoc(doc(db, "students", student.id), {
+        unpaidList: list,
+        isPaid: false
+      });
+      await updateStudentLastDate(student.id);
+      fetchSettlementData();
+      alert("재등록(미수금) 처리가 완료되었습니다.");
+    } catch (e) {
+      console.error(e);
+      alert("처리 중 오류가 발생했습니다.");
+    }
+  };
+
+  // --- [FIX] 학생별 완료기반 로테이션 시작일 계산 함수 (개선된 버전) ---
+  const calculateRotationStarts = (student) => {
+    // 1. 필요한 총 횟수 계산
+    let reqM = 0;
+    let reqV = 0;
+    (student.schedule || []).forEach(w => {
+      reqM += Number(w.master || 0);
+      reqV += Number(w.vocal || 0) + Number(w.vocal30 || 0);
+    });
+
+    if (reqM === 0 && reqV === 0) return new Set();
+
+    // 2. 기준일 설정
+    let lastRotationStartDate = student.firstDate;
+
+    // 미수금 내역 기준
+    if (student.unpaidList && student.unpaidList.length > 0) {
+      const sortedUnpaid = [...student.unpaidList].sort((a, b) => new Date(b.targetDate) - new Date(a.targetDate));
+      const lastUnpaidDate = sortedUnpaid[0].targetDate;
+      if (new Date(lastUnpaidDate) > new Date(lastRotationStartDate)) {
+        lastRotationStartDate = lastUnpaidDate;
+      }
+    }
+
+    // 최종 결제일 기준
+    if (student.lastDate && new Date(student.lastDate) > new Date(lastRotationStartDate)) {
+      lastRotationStartDate = student.lastDate;
+    }
+
+    // 3. [핵심 수정] 기준일 이후의 '모든' 스케줄(예정 포함)을 가져옵니다. (다음 시작일 찾기 용도)
+    const allFutureScheds = attSchedules
+      .filter(s => s.studentId === student.id && s.date >= lastRotationStartDate)
+      .sort((a, b) => {
+        const dtA = new Date((a.date || '') + 'T' + (a.time || '00:00'));
+        const dtB = new Date((b.date || '') + 'T' + (b.time || '00:00'));
+        return dtA - dtB;
+      });
+
+    // 4. 카운팅은 오직 '완료(completed)'된 수업으로만 합니다.
+    const completedScheds = allFutureScheds.filter(s => s.status === 'completed');
+
+    const startDates = new Set();
+    let curM = 0;
+    let curV = 0;
+
+    for (let i = 0; i < completedScheds.length; i++) {
+      const s = completedScheds[i];
+      const isMaster = (s.gridType === 'master' || !s.gridType) && s.category !== '상담';
+
+      if (isMaster) curM++;
+      else curV++;
+
+      // 목표 횟수를 채웠을 때
+      if (curM >= reqM && curV >= reqV) {
+
+        // [핵심 수정] 다음 수업 날짜를 찾을 때는 '완료된 수업' 뿐만 아니라 '전체 스케줄'에서 찾습니다.
+        // 현재 완료된 수업(s)보다 시간이 뒤에 있는 가장 빠른 스케줄을 찾습니다.
+        const currentDateTime = new Date((s.date || '') + 'T' + (s.time || '00:00'));
+        const nextClass = allFutureScheds.find(fs => {
+          const fsDateTime = new Date((fs.date || '') + 'T' + (fs.time || '00:00'));
+          return fsDateTime > currentDateTime;
+        });
+
+        if (nextClass) {
+          startDates.add(nextClass.date);
+          // 카운트 리셋 (연속 로테이션 계산을 위해)
+          curM = 0;
+          curV = 0;
+        }
+      }
+    }
+
+    return startDates;
+  };
+
   // --- [기간제 출석 토글 핸들러] ---
   const handlePeriodAttendanceToggle = async (studentId, dateStr, type, index) => {
     // 잠금 상태면 수정 불가
@@ -895,11 +1044,11 @@ function App() {
   );
 
   return (
-    // 1. 화면 전체 높이 고정 (스크롤 방지)
-    <div className="h-screen w-full bg-gray-100 font-sans flex justify-center overflow-hidden">
+    // [수정] 부모 컨테이너에 p-2 md:p-6 추가 (화면 안쪽으로 여백 확보)
+    <div className="h-screen w-full bg-gray-100 font-sans flex justify-center overflow-hidden p-2 md:p-6">
 
-      {/* 2. 중앙 컨텐츠 래퍼 */}
-      <div className="w-full max-w-[1600px] h-full flex flex-col bg-white md:rounded-[3rem] shadow-2xl overflow-hidden my-2 md:my-8 mx-2 md:mx-8">
+      {/* [수정] 마진(my-, mx-) 제거, h-full로 부모 패딩 내부를 꽉 채움 */}
+      <div className="w-full max-w-[1600px] h-full flex flex-col bg-white md:rounded-[3rem] shadow-2xl overflow-hidden">
 
         {/* 상단 헤더 (로고, 탭) - 고정 높이 */}
         <header className="flex-none px-4 py-4 md:px-12 md:py-6 border-b border-gray-100 flex flex-col md:flex-row items-center justify-between gap-4 bg-white z-20">
@@ -1091,7 +1240,8 @@ function App() {
 
           {/* ----- 출석부 탭 ----- */}
           {activeTab === 'attendance' && (
-            <div className="flex flex-col gap-4 h-full p-4 md:p-8 lg:px-12 overflow-y-auto">
+            // [수정] pb-20 추가
+            <div className="flex flex-col gap-4 h-full p-4 md:p-8 lg:px-12 pb-20 overflow-y-auto">
               {/* 상단 컨트롤 */}
               <div className="flex-none flex flex-col md:flex-row justify-between items-center gap-4 bg-white p-4 rounded-[2rem] shadow-sm border border-gray-100">
 
@@ -1261,6 +1411,10 @@ function App() {
                       .sort((a, b) => new Date(a.firstDate || 0) - new Date(b.firstDate || 0))
                       .map((student, idx) => {
                         const weeks = attViewMode === '12weeks' ? get12Weeks(attBaseDate) : getMonthWeeksForView(attMonth);
+
+                        // [NEW] 기본 수강생 로테이션 시작일 계산 (완료된 수업 기준)
+                        const rotationStarts = attCategory === 'basic' ? calculateRotationStarts(student) : new Set();
+
                         return (
                           <tr key={student.id} className="text-center hover:bg-gray-50 group">
                             <td className="sticky left-0 bg-white group-hover:bg-gray-50 z-10 border-r border-gray-100 text-left pl-6 py-3 font-bold text-gray-800 align-middle border-b-[2px] border-gray-300">
@@ -1340,6 +1494,45 @@ function App() {
                             {weeks.map((w, i) => {
                               const rotationWeek = getRotationWeek(student.firstDate, w.startStr);
                               const weekConfig = student.schedule && student.schedule[rotationWeek - 1];
+
+                              // --- [FIX] 상태 표시 우선순위 로직 수정 ---
+                              const isBasicStudent = attCategory === 'basic';
+                              let uiState = null; // 'paid', 'billed', 'register' 중 하나
+                              let targetUiDate = '';
+
+                              if (isBasicStudent) {
+                                // 이번 주차(w.start ~ w.end)의 날짜들을 하루씩 확인
+                                for (let d = new Date(w.start); d <= w.end; d.setDate(d.getDate() + 1)) {
+                                  const dStr = formatDateLocal(d);
+
+                                  // 1순위: 결제 완료 확인 (student.lastDate와 일치하는지)
+                                  if (student.lastDate === dStr) {
+                                    uiState = 'paid';
+                                    targetUiDate = dStr;
+                                    break; // 우선순위 가장 높으므로 루프 종료
+                                  }
+
+                                  // 2순위: 청구 중(미결제) 확인 (unpaidList에 있는지)
+                                  const isUnpaid = (student.unpaidList || []).some(u => u.targetDate === dStr);
+                                  if (isUnpaid) {
+                                    uiState = 'billed';
+                                    targetUiDate = dStr;
+                                    break;
+                                  }
+
+                                  // 3순위: 재등록 버튼 (계산된 로테이션 시작일인지)
+                                  if (rotationStarts.has(dStr)) {
+                                    uiState = 'register';
+                                    targetUiDate = dStr;
+                                    // 주의: 같은 주에 '결제완료'나 '청구중'이 이미 있다면 버튼을 덮어쓰지 않도록 
+                                    // 루프를 계속 돌지 않고 여기서 break 할 수도 있지만,
+                                    // 날짜가 겹치지 않는다면 버튼이 떠야 하므로 break는 신중해야 함.
+                                    // 하지만 보통 한 주에 로테이션 시작이 두 번일 수는 없으므로 break.
+                                    break;
+                                  }
+                                }
+                              }
+                              // ------------------------------------------------
 
                               const mCountBasic = Number(weekConfig?.master || 0);
                               const vCountBasic = Number(weekConfig?.vocal || 0) + Number(weekConfig?.vocal30 || 0);
@@ -1467,8 +1660,40 @@ function App() {
                               };
 
                               return (
-                                <td key={i} className="border-r border-gray-50 p-1 align-top min-h-[60px] border-b-[2px] border-gray-300">
-                                  <div className="flex flex-col gap-1.5 h-full justify-center py-1">
+                                <td key={i} className="border-r border-gray-50 p-1 align-top min-h-[60px] border-b-[2px] border-gray-300 relative">
+
+                                  {/* [FIX] 상태에 따른 UI 렌더링 (결제완료 > 청구중 > 재등록버튼) */}
+                                  {uiState === 'paid' && (
+                                    <div className="absolute top-0 right-0 left-0 -mt-3 flex justify-center z-10">
+                                      <span className="text-[9px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-bold border border-green-200 flex items-center gap-0.5">
+                                        <FaCheckCircle className="text-[7px]" /> 결제완료
+                                      </span>
+                                    </div>
+                                  )}
+
+                                  {uiState === 'billed' && (
+                                    <div className="absolute top-0 right-0 left-0 -mt-3 flex justify-center z-10">
+                                      <span className="text-[9px] bg-red-100 text-red-500 px-1.5 py-0.5 rounded-full font-bold border border-red-200 animate-pulse">
+                                        청구중
+                                      </span>
+                                    </div>
+                                  )}
+
+                                  {uiState === 'register' && (
+                                    <div className="absolute top-0 right-0 left-0 -mt-3 flex justify-center z-10">
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleRegisterRotation(student, targetUiDate);
+                                        }}
+                                        className="text-[9px] bg-blue-600 text-white px-2 py-0.5 rounded-full font-bold shadow-md hover:bg-blue-700 hover:scale-105 transition-all flex items-center gap-1"
+                                      >
+                                        <FaPlus className="text-[7px]" /> 재등록
+                                      </button>
+                                    </div>
+                                  )}
+
+                                  <div className="flex flex-col gap-1.5 h-full justify-center py-1 mt-1">
                                     {mTotal > 0 && (
                                       <div className="flex gap-1 justify-center flex-wrap">
                                         {Array.from({ length: mTotal }).map((_, idx) => renderSlot('M', idx, completedM))}
@@ -1505,7 +1730,8 @@ function App() {
 
           {/* ----- 학생 관리 탭 (기존 유지) ----- */}
           {activeTab === 'students' && (
-            <div className="flex flex-col h-full w-full p-4 md:p-8 lg:px-12 gap-6 overflow-y-auto">
+            // [수정] pb-20 추가
+            <div className="flex flex-col h-full w-full p-4 md:p-8 lg:px-12 pb-20 gap-6 overflow-y-auto">
               {/* ... (이전 코드와 동일, 생략 없음) ... */}
               <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-6 gap-4"><div><h2 className="text-2xl md:text-3xl font-extrabold mb-2">수강생 리스트</h2><div className="flex gap-2"><button onClick={() => { setViewStatus('active'); setCurrentPage(1) }} className={`text-sm px-3 py-1 rounded-lg ${viewStatus === 'active' ? 'bg-black text-white' : 'bg-gray-100 text-gray-400'}`}>수강중</button><button onClick={() => { setViewStatus('inactive'); setCurrentPage(1) }} className={`text-sm px-3 py-1 rounded-lg ${viewStatus === 'inactive' ? 'bg-black text-white' : 'bg-gray-100 text-gray-400'}`}>종료/비활성</button><button onClick={() => { setViewStatus('artist'); setCurrentPage(1) }} className={`text-sm px-3 py-1 rounded-lg ${viewStatus === 'artist' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-400'}`}>아티스트</button></div></div><div className="flex gap-2 w-full md:w-auto"><div className="relative group flex-1 md:flex-none"><FaSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" /><input type="text" placeholder="검색..." className="input w-full md:w-64 bg-gray-50 border-2 border-gray-100 pl-10 rounded-2xl h-12 outline-none font-medium" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} /></div><button onClick={() => { setEditingId(null); setFormData(initialFormState); setIsModalOpen(true) }} className="btn h-12 bg-gray-900 text-white border-none px-6 rounded-2xl font-bold shadow-lg flex items-center gap-2"><FaPlus /> 등록</button></div></div>
               <div className="bg-gray-50 rounded-[1.5rem] md:rounded-[2.5rem] p-2 min-h-[600px] flex flex-col"><div className="overflow-x-auto bg-white rounded-[1.5rem] md:rounded-[2rem] shadow-sm flex-1"><table className="table w-full"><thead className="sticky top-0 bg-white z-10 shadow-sm"><tr className="text-gray-500 text-xs md:text-sm font-bold border-b-2 border-gray-100"><th className="py-4 md:py-6 pl-4 md:pl-10 w-16">No.</th><th className="py-4 md:py-6">이름</th><th className="hidden md:table-cell py-4 md:py-6">클래스 상세</th><th className="hidden md:table-cell py-4 md:py-6">예상 금액 (4주)</th><th className="hidden md:table-cell py-4 md:py-6">등록일 / 재등록예정</th><th className="py-4 md:py-6 pr-4 md:pr-10 text-right">관리</th></tr></thead><tbody>{currentItems.map((student, idx) => {
@@ -1518,7 +1744,8 @@ function App() {
 
           {/* ----- 정산 탭 (기존 유지) ----- */}
           {activeTab === 'settlement' && (
-            <div className="flex flex-col gap-6 p-4 md:p-8 lg:px-12 overflow-y-auto"><div className="flex flex-col gap-2"><div className="flex flex-col md:flex-row justify-between items-center gap-4"><div className="flex items-center bg-white px-4 py-2 rounded-2xl shadow-sm border border-gray-100"><button onClick={() => changeMonth(-1)} className="btn btn-circle btn-sm btn-ghost"><FaChevronLeft /></button><div className="flex items-center mx-2"><select className="select select-sm bg-transparent border-none font-extrabold text-lg text-center w-24 focus:outline-none" value={currentDate.getFullYear()} onChange={handleYearChange}>{Array.from({ length: 10 }, (_, i) => new Date().getFullYear() - 5 + i).map(y => <option key={y} value={y}>{y}년</option>)}</select><select className="select select-sm bg-transparent border-none font-extrabold text-lg text-center w-20 focus:outline-none" value={currentDate.getMonth() + 1} onChange={handleMonthChange}>{Array.from({ length: 12 }, (_, i) => i + 1).map(m => <option key={m} value={m}>{m}월</option>)}</select></div><button onClick={() => changeMonth(1)} className="btn btn-circle btn-sm btn-ghost"><FaChevronRight /></button></div><button onClick={fetchSettlementData} className="btn btn-sm btn-ghost text-gray-400"><FaUndo className="mr-1" /> 새로고침</button></div><div className="bg-white px-4 py-2 rounded-xl shadow-sm border border-gray-100 flex items-center gap-3"><div className="flex items-center gap-2 min-w-fit"><FaStickyNote className="text-yellow-500 text-base" /><span className="text-xs font-bold text-gray-500">메모</span></div><input type="text" className="input input-sm border-none bg-transparent flex-1 text-sm focus:outline-none" placeholder="이달의 정산 특이사항 입력..." value={settlementMemo} onChange={(e) => setSettlementMemo(e.target.value)} /><button onClick={handleSettlementMemoSave} className="btn btn-xs bg-gray-100 text-gray-500 border-none hover:bg-black hover:text-white"><FaSave className="mr-1" /> 저장</button></div></div><div className="grid grid-cols-2 md:grid-cols-4 gap-4"><div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100"><div className="text-sm font-bold text-gray-400 mb-2 flex items-center gap-2"><FaMoneyBillWave className="text-green-500" /> 총 매출 (미수금 포함)</div><div className="text-2xl font-extrabold text-gray-800">{formatCurrency(totalRevenueIncludingUnpaid)}원</div><div className="text-xs text-gray-400 mt-1">완료 {settlementIncome.length}건 / 미납 {settlementUnpaid.length}건</div></div><div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100"><div className="text-sm font-bold text-gray-400 mb-2 flex items-center gap-2"><FaFileInvoiceDollar className="text-red-500" /> 총 지출</div><div className="text-2xl font-extrabold text-gray-800">{formatCurrency(totalExpense)}원</div><div className="text-xs text-gray-400 mt-1">지출 내역 {expenses.length}건</div></div><div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 bg-blue-50/50"><div className="text-sm font-bold text-blue-500 mb-2 flex items-center gap-2"><FaCalculator /> 순수익 (예상)</div><div className="text-2xl font-extrabold text-blue-600">{formatCurrency(netProfitIncludingUnpaid)}원</div></div><div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100"><div className="text-sm font-bold text-gray-400 mb-2 flex items-center gap-2"><FaExclamationCircle className="text-orange-500" /> 미수금</div><div className="text-2xl font-extrabold text-gray-400">{formatCurrency(totalUnpaid)}원</div><div className="text-xs text-orange-400 mt-1 font-bold">{settlementUnpaid.length}건 미결제</div></div></div><div className="grid grid-cols-1 lg:grid-cols-2 gap-6"><div className="bg-white rounded-[2.5rem] shadow-sm border border-gray-100 overflow-hidden flex flex-col h-[600px]"><div className="p-6 border-b border-gray-100 flex justify-between items-center"><h3 className="text-lg font-bold text-gray-800">수익 내역</h3><span className="text-xs font-bold text-green-600 bg-green-50 px-2 py-1 rounded-lg">입금완료</span></div><div className="flex-1 overflow-y-auto p-4"><table className="table table-sm w-full"><thead>
+            // [수정] pb-20 추가
+            <div className="flex flex-col gap-6 p-4 md:p-8 lg:px-12 pb-20 overflow-y-auto"><div className="flex flex-col gap-2"><div className="flex flex-col md:flex-row justify-between items-center gap-4"><div className="flex items-center bg-white px-4 py-2 rounded-2xl shadow-sm border border-gray-100"><button onClick={() => changeMonth(-1)} className="btn btn-circle btn-sm btn-ghost"><FaChevronLeft /></button><div className="flex items-center mx-2"><select className="select select-sm bg-transparent border-none font-extrabold text-lg text-center w-24 focus:outline-none" value={currentDate.getFullYear()} onChange={handleYearChange}>{Array.from({ length: 10 }, (_, i) => new Date().getFullYear() - 5 + i).map(y => <option key={y} value={y}>{y}년</option>)}</select><select className="select select-sm bg-transparent border-none font-extrabold text-lg text-center w-20 focus:outline-none" value={currentDate.getMonth() + 1} onChange={handleMonthChange}>{Array.from({ length: 12 }, (_, i) => i + 1).map(m => <option key={m} value={m}>{m}월</option>)}</select></div><button onClick={() => changeMonth(1)} className="btn btn-circle btn-sm btn-ghost"><FaChevronRight /></button></div><button onClick={fetchSettlementData} className="btn btn-sm btn-ghost text-gray-400"><FaUndo className="mr-1" /> 새로고침</button></div><div className="bg-white px-4 py-2 rounded-xl shadow-sm border border-gray-100 flex items-center gap-3"><div className="flex items-center gap-2 min-w-fit"><FaStickyNote className="text-yellow-500 text-base" /><span className="text-xs font-bold text-gray-500">메모</span></div><input type="text" className="input input-sm border-none bg-transparent flex-1 text-sm focus:outline-none" placeholder="이달의 정산 특이사항 입력..." value={settlementMemo} onChange={(e) => setSettlementMemo(e.target.value)} /><button onClick={handleSettlementMemoSave} className="btn btn-xs bg-gray-100 text-gray-500 border-none hover:bg-black hover:text-white"><FaSave className="mr-1" /> 저장</button></div></div><div className="grid grid-cols-2 md:grid-cols-4 gap-4"><div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100"><div className="text-sm font-bold text-gray-400 mb-2 flex items-center gap-2"><FaMoneyBillWave className="text-green-500" /> 총 매출 (미수금 포함)</div><div className="text-2xl font-extrabold text-gray-800">{formatCurrency(totalRevenueIncludingUnpaid)}원</div><div className="text-xs text-gray-400 mt-1">완료 {settlementIncome.length}건 / 미납 {settlementUnpaid.length}건</div></div><div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100"><div className="text-sm font-bold text-gray-400 mb-2 flex items-center gap-2"><FaFileInvoiceDollar className="text-red-500" /> 총 지출</div><div className="text-2xl font-extrabold text-gray-800">{formatCurrency(totalExpense)}원</div><div className="text-xs text-gray-400 mt-1">지출 내역 {expenses.length}건</div></div><div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 bg-blue-50/50"><div className="text-sm font-bold text-blue-500 mb-2 flex items-center gap-2"><FaCalculator /> 순수익 (예상)</div><div className="text-2xl font-extrabold text-blue-600">{formatCurrency(netProfitIncludingUnpaid)}원</div></div><div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100"><div className="text-sm font-bold text-gray-400 mb-2 flex items-center gap-2"><FaExclamationCircle className="text-orange-500" /> 미수금</div><div className="text-2xl font-extrabold text-gray-400">{formatCurrency(totalUnpaid)}원</div><div className="text-xs text-orange-400 mt-1 font-bold">{settlementUnpaid.length}건 미결제</div></div></div><div className="grid grid-cols-1 lg:grid-cols-2 gap-6"><div className="bg-white rounded-[2.5rem] shadow-sm border border-gray-100 overflow-hidden flex flex-col h-[600px]"><div className="p-6 border-b border-gray-100 flex justify-between items-center"><h3 className="text-lg font-bold text-gray-800">수익 내역</h3><span className="text-xs font-bold text-green-600 bg-green-50 px-2 py-1 rounded-lg">입금완료</span></div><div className="flex-1 overflow-y-auto p-4"><table className="table table-sm w-full"><thead>
               <tr className="text-gray-400"><th>재등록일</th><th>이름</th><th>금액</th><th>결제일(수단)</th><th className="text-right">관리</th></tr></thead><tbody>{settlementIncome.map((item, i) => (<tr key={i} className="border-b border-gray-50 last:border-none cursor-pointer hover:bg-gray-50" onClick={() => handleGoToStudent(item.studentId, item.studentName)}>
                 <td className="font-bold text-gray-600">{item.targetDate}</td><td className="font-bold flex items-center gap-1">{item.studentName}<FaExternalLinkAlt className="text-[10px] text-gray-300" /></td><td className="font-bold text-blue-600">{formatCurrency(item.amount)}</td>
                 <td className="text-xs text-gray-400 flex items-center gap-1"><span className="font-bold text-gray-600">{item.paymentDate}</span><span>({item.paymentMethod === 'card' ? '카드' : item.paymentMethod === 'transfer' ? '이체' : '현금'})</span></td>
