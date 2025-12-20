@@ -1476,69 +1476,74 @@ function App() {
                                 let statusIcon = null;
                                 const isVocal = gType === 'vocal';
 
-                                // 시간 비교 로직 추가 (현재 시간 vs 일정 시간)
                                 const [itemHour, itemMinute] = item.time.split(':');
                                 const targetDateTime = new Date(`${item.date}T${itemHour.padStart(2, '0')}:${itemMinute}:00`);
                                 const isPast = new Date() > targetDateTime;
 
                                 if (item.isGhost) {
-                                  statusStyle = 'bg-gray-50 text-gray-400 border-dashed border-gray-300 opacity-60 grayscale';
+                                  statusStyle = 'bg-gray-100 text-gray-400 border-dashed border-gray-200 opacity-60';
                                 }
                                 else if (item.status === 'completed') {
-                                  statusStyle = 'bg-gray-600 text-white border-gray-700 opacity-80';
-                                  statusIcon = <FaCheckCircle className="text-green-400 text-[9px]" />;
+                                  // 완료: 쌤(어두운 회색), 짱구(중간 회색) - 농도 상향
+                                  statusStyle = isVocal
+                                    ? 'bg-gray-300 text-gray-700 border-gray-400'
+                                    : 'bg-gray-800 text-white border-black';
+                                  statusIcon = <FaCheckCircle className="text-[9px] text-green-400" />;
                                 }
-                                // --- 보강 상태(reschedule) 로직 수정 시작 ---
                                 else if (item.status === 'reschedule' || item.status === 'reschedule_assigned') {
-                                  if (isPast) {
-                                    // 1. 시간이 지난 보강건: 기존의 노란색 스타일
-                                    statusStyle = 'bg-yellow-50 text-yellow-800 border-yellow-200 ring-1 ring-yellow-300';
-                                    statusIcon = <FaClock className="text-yellow-600 text-[9px]" />;
-                                  } else {
-                                    // 2. 아직 시간이 안 된 보강건: 연한 회색 + 점선 테두리
-                                    statusStyle = 'bg-gray-50 text-gray-400 border-dashed border-gray-200 opacity-70';
-                                    statusIcon = <FaClock className="text-gray-300 text-[9px]" />;
-                                  }
+                                  // 보강: 농도를 50에서 100으로 상향
+                                  statusStyle = 'bg-gray-100 text-gray-600 border-dashed border-gray-300';
+                                  statusIcon = <FaClock className="text-[9px] text-gray-400" />;
                                 }
-                                // --- 보강 상태 로직 수정 끝 ---
                                 else if (item.status === 'absent') {
-                                  statusStyle = 'bg-red-50 text-red-800 border-red-200 ring-1 ring-red-300';
-                                  statusIcon = <FaTimesCircle className="text-red-500 text-[9px]" />;
+                                  statusStyle = isVocal
+                                    ? 'bg-red-100 text-red-700 border-red-200'
+                                    : 'bg-red-200 text-red-900 border-red-400 ring-1 ring-red-300';
+                                  statusIcon = <FaTimesCircle className="text-[9px]" />;
                                 }
                                 else {
-                                  // 일반 상태(레슨/상담 등)
-                                  if (item.isFixed) statusStyle = 'bg-purple-50 text-purple-900 border-purple-100';
-                                  else if (item.category === '상담') statusStyle = isVocal ? 'bg-slate-200 text-slate-800 border-slate-300' : 'bg-green-50 text-green-800 border-green-100';
-                                  else if (item.category === '레슨') statusStyle = isVocal ? 'bg-blue-100 text-blue-900 border-blue-200' : 'bg-orange-50 text-orange-900 border-orange-100';
-                                  else statusStyle = isVocal ? 'bg-slate-200 text-slate-800 border-slate-300' : 'bg-white text-gray-700 border-gray-200';
+                                  // 일반 상태 (레슨, 상담 등) - 짱구 스케쥴 농도 전체 상향
+                                  if (item.isFixed) {
+                                    statusStyle = isVocal
+                                      ? 'bg-purple-100 text-purple-700 border-purple-200'
+                                      : 'bg-purple-200 text-purple-950 border-purple-400';
+                                  }
+                                  else if (item.category === '상담') {
+                                    statusStyle = isVocal
+                                      ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
+                                      : 'bg-emerald-200 text-emerald-950 border-emerald-400';
+                                  }
+                                  else if (item.category === '레슨') {
+                                    // 레슨: 쌤(오렌지 진하게), 짱구(블루 선명하게)
+                                    statusStyle = isVocal
+                                      ? 'bg-green-200 text-green-700 border-green-200'
+                                      : 'bg-orange-200 text-orange-950 border-orange-400 font-black';
+                                  }
+                                  else {
+                                    statusStyle = isVocal
+                                      ? 'bg-gray-200 text-gray-600 border-gray-300'
+                                      : 'bg-gray-100 text-gray-800 border-gray-300';
+                                  }
                                 }
 
                                 return (
                                   <div key={idx} onClick={(e) => { e.stopPropagation(); handleSlotClick(item.date, String(itemHour), item.dayOfWeek, item, gType); }}
                                     className={`w-full rounded-md p-1 text-[12px] flex items-center gap-1 shadow-sm border overflow-hidden shrink-0 transition-all ${statusStyle}`}>
 
-                                    {/* 시간(분) 표시 */}
-                                    <span className={`px-1 rounded text-[10px] font-bold shrink-0 ${item.status === 'completed' ? 'bg-gray-500 text-gray-200' : item.time.endsWith('30') ? 'bg-blue-200 text-blue-800' : 'bg-yellow-200 text-yellow-800'}`}>
+                                    <span className={`px-1 rounded text-[10px] font-bold shrink-0 ${item.status === 'completed' ? 'bg-black/10' : item.time.endsWith('30') ? 'bg-blue-200/50' : 'bg-yellow-200/50'
+                                      }`}>
                                       {item.time.split(':')[1]}
                                     </span>
 
-                                    {item.isFixed && <FaThumbtack className="text-[8px] text-purple-400 min-w-fit" />}
+                                    {item.isFixed && <FaThumbtack className="text-[8px] min-w-fit" />}
                                     {statusIcon}
 
-                                    {/* 이름 + 메모 (괄호) 표시 영역 */}
                                     <span className="truncate font-bold">
                                       {item.studentName || item.category}
-                                      {/* 유령 스케쥴이 아니고 메모가 있을 때만 표시 */}
                                       {!item.isGhost && item.memo && (
-                                        <span className="font-normal opacity-75 ml-1">({item.memo})</span>
+                                        <span className="font-normal opacity-70 ml-1">({item.memo})</span>
                                       )}
                                     </span>
-
-                                    {/* 상태 라벨 (예상/대기 등) */}
-                                    {item.isGhost && <span className="text-[8px] bg-gray-200 text-gray-500 px-1 rounded ml-auto">예상</span>}
-                                    {(item.status === 'reschedule' || item.status === 'reschedule_assigned') && !isPast && (
-                                      <span className="text-[8px] ml-auto opacity-50">대기</span>
-                                    )}
                                   </div>
                                 );
                               })
