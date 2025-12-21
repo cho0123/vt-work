@@ -188,7 +188,7 @@ function App() {
   const [previewImage, setPreviewImage] = useState(null);
 
   // 내역 정렬 상태
-  const [historySort, setHistorySort] = useState('paymentDate');
+  const [historySort, setHistorySort] = useState('targetDate');
 
   // 정산 관리
   const [currentDate, setCurrentDate] = useState(new Date());
@@ -313,13 +313,17 @@ function App() {
 
     if (students.length > 0) {
       for (const student of students) {
-        const payQ = query(collection(db, "students", student.id, "payments"),
-          where("targetDate", ">=", `${yearMonth}-01`),
-          where("targetDate", "<=", `${yearMonth}-31`)
-        );
+        // [FIX] 날짜 포맷(. 또는 -) 이슈로 쿼리 누락 방지를 위해, 기간 필터 없이 전체 조회 후 메모리 필터링
+        const payQ = query(collection(db, "students", student.id, "payments"));
         const paySnap = await getDocs(payQ);
         paySnap.forEach(doc => {
-          allPayments.push({ ...doc.data(), studentName: student.name, studentId: student.id });
+          const data = doc.data();
+          // 메모리 필터링: YYYY-MM 또는 YYYY.MM 포함 여부 확인
+          const tDate = data.targetDate || '';
+          const normTDate = tDate.replace(/\./g, '-'); // 전부 대시로 통일
+          if (normTDate.startsWith(yearMonth)) {
+            allPayments.push({ ...data, studentName: student.name, studentId: student.id });
+          }
         });
 
         if (student.unpaidList) {
@@ -520,7 +524,7 @@ function App() {
       // 탭 전환 시 호출되는 다른 로직을 확인해야 함.
       // (기존에는 스케줄 변경/삭제 시 등에서 호출됨)
     }
-  }, [activeTab, attViewMode, attMonth]);
+  }, [activeTab, attViewMode, attMonth, students]);
   // --- [Helpers] ---
   const getRotationWeek = (firstDate, targetDate) => {
     if (!firstDate) return 1;
@@ -2155,13 +2159,29 @@ function App() {
                                           unpaid => unpaid.memo === `${targetYearMonth}월 월정산 청구`
                                         );
 
-                                        // [NEW] 결제 완료 여부 확인 (해당 월 1일에 같은 금액으로 결제된 내역이 있는지)
-                                        // settlementIncome은 현재 선택된 월(targetYearMonth)의 데이터를 담고 있음
-                                        const isPaidCompleted = settlementIncome.some(pay =>
-                                          pay.studentId === student.id &&
-                                          Number(pay.amount) === totalAmount &&
-                                          pay.targetDate === `${targetYearMonth.replace('.', '-')}-01`
-                                        );
+                                        // [FIX] 결제 여부 확인 (최종 개선버전: 타입/포맷 무관하게 비교)
+                                        const isPaidCompleted = settlementIncome.some(pay => {
+                                          // 1. 학생 ID 비교 (문자열 변환)
+                                          if (String(pay.studentId) !== String(student.id)) return false;
+
+                                          // 2. 날짜 비교 완화 ([FIX] 년월 일치 여부, 구분자/자릿수 무관)
+                                          // targetYearMonth(2025.3 or 2025.03) -> "2025-03"으로 엄격하게 정규화
+                                          const [tYear, tMonth] = targetYearMonth.split(/[.-]/);
+                                          const normTargetMonth = `${tYear}-${String(tMonth).padStart(2, '0')}`;
+
+                                          const payDateStr = pay.targetDate || '';
+                                          // pay.targetDate가 "2025.3.1"일 수도 있고 "2025-03-01"일 수도 있음 -> 정규화
+                                          const [pYear, pMonth] = payDateStr.split(/[.-]/);
+                                          const normPayMonth = `${pYear}-${String(pMonth).padStart(2, '0')}`;
+
+                                          if (normPayMonth !== normTargetMonth) return false;
+
+                                          // 3. 금액 비교 (모든 특수문자 제거 후 정수 변환)
+                                          // 1000원 단위 차이 무시하고 정확히 일치하는지
+                                          const payAmt = Number(String(pay.amount || '0').replace(/[^0-9]/g, ''));
+                                          const reqAmt = Number(String(totalAmount || '0').replace(/[^0-9]/g, ''));
+                                          return payAmt === reqAmt;
+                                        });
 
                                         if (isPaidCompleted) {
                                           return (
