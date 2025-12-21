@@ -282,13 +282,15 @@ function App() {
 
   // --- [Data Fetching & Functions] ---
 
-  const fetchSettlementData = async () => {
+  // [수정] 정산 데이터 불러오기 (날짜 오버라이드 지원)
+  const fetchSettlementData = async (dateOverride = null) => {
     setSettlementIncome([]);
     setSettlementUnpaid([]);
     setMonthlySchedules([]);
 
-    const year = currentDate.getFullYear();
-    const month = String(currentDate.getMonth() + 1).padStart(2, '0');
+    const targetDate = dateOverride || currentDate;
+    const year = targetDate.getFullYear();
+    const month = String(targetDate.getMonth() + 1).padStart(2, '0');
     const yearMonth = `${year}-${month}`;
 
     try {
@@ -507,6 +509,18 @@ function App() {
 
     return () => { unsubAtt(); unsubSched(); unsubCancel(); };
   }, [user, activeTab, attBaseDate, attViewMode, attMonth]);
+
+  // [NEW] 출석부 월별 보기 시 정산 데이터 동기화
+  useEffect(() => {
+    if (activeTab === 'attendance' && attViewMode === 'month') {
+      fetchSettlementData(attMonth);
+    } else {
+      // 그 외(스케줄 탭 등)는 현재 날짜 기준
+      // 필요하다면 여기서 fetchSettlementData()를 호출하거나,
+      // 탭 전환 시 호출되는 다른 로직을 확인해야 함.
+      // (기존에는 스케줄 변경/삭제 시 등에서 호출됨)
+    }
+  }, [activeTab, attViewMode, attMonth]);
   // --- [Helpers] ---
   const getRotationWeek = (firstDate, targetDate) => {
     if (!firstDate) return 1;
@@ -2141,6 +2155,22 @@ function App() {
                                           unpaid => unpaid.memo === `${targetYearMonth}월 월정산 청구`
                                         );
 
+                                        // [NEW] 결제 완료 여부 확인 (해당 월 1일에 같은 금액으로 결제된 내역이 있는지)
+                                        // settlementIncome은 현재 선택된 월(targetYearMonth)의 데이터를 담고 있음
+                                        const isPaidCompleted = settlementIncome.some(pay =>
+                                          pay.studentId === student.id &&
+                                          Number(pay.amount) === totalAmount &&
+                                          pay.targetDate === `${targetYearMonth.replace('.', '-')}-01`
+                                        );
+
+                                        if (isPaidCompleted) {
+                                          return (
+                                            <div className="flex items-center gap-1 px-2 py-1 bg-orange-100 text-orange-600 text-[10px] font-bold rounded shadow-sm border border-orange-200">
+                                              <FaCheckCircle className="text-[10px]" /> 결제완료
+                                            </div>
+                                          );
+                                        }
+
                                         return isAlreadyBilled ? (
                                           /* 이미 청구된 경우: 비활성화 버튼 표시 */
                                           <div className="flex items-center gap-1 px-2 py-1 bg-gray-200 text-gray-500 text-[10px] font-bold rounded shadow-sm">
@@ -2153,9 +2183,9 @@ function App() {
                                               e.stopPropagation();
                                               handleMonthlySettlementRequest(student, totalAmount, targetYearMonth);
                                             }}
-                                            className="btn btn-xs h-6 min-h-0 bg-blue-600 text-white border-none rounded hover:bg-blue-700 flex items-center gap-1 shadow-sm"
+                                            className="flex items-center gap-1 px-2 py-1 bg-blue-600 text-white text-[10px] font-bold rounded shadow-sm hover:bg-blue-700 transition-colors cursor-pointer"
                                           >
-                                            <FaFileInvoiceDollar className="text-[10px]" /> 청구
+                                            <FaFileInvoiceDollar className="text-[10px]" /> 청구하기
                                           </button>
                                         );
                                       })()}
@@ -2944,6 +2974,9 @@ function App() {
                 // 5. [수정됨] 재등록 버튼 날짜 계산 (로컬 데이터 사용)
                 const calculateLocalStarts = () => {
                   const s = viewingStudentAtt;
+                  // [NEW] 월정산, 아티스트 학생은 재등록 버튼 노출 제외
+                  if (s.isMonthly || s.isArtist) return new Set();
+
                   let reqM = 0, reqV = 0;
                   (s.schedule || []).forEach(w => {
                     reqM += Number(w.master || 0);
