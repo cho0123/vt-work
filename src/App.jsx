@@ -209,11 +209,12 @@ function App() {
 
   // 주차 잠금 상태
   const [isWeekLocked, setIsWeekLocked] = useState(false);
+  const [isScheduleLocked, setIsScheduleLocked] = useState(false);
 
   const [scheduleTab, setScheduleTab] = useState('lesson');
   const [scheduleForm, setScheduleForm] = useState({
     studentId: '', studentName: '', memo: '', category: '레슨',
-    isFixed: false, status: '', gridType: 'master'
+    isFixed: false, status: '', gridType: 'master', isVocalProgress: false
   });
   const [selectedMakeupId, setSelectedMakeupId] = useState(null);
 
@@ -253,6 +254,7 @@ function App() {
     '임대료': 5005000, '임금': 0, '전기료': 0, '통신료': 55000,
     '세콤': 60500, '단말기': 5500, '정수기': 10000, '기타': 0
   };
+
 
   const initialPaymentForm = {
     id: null, targetDate: '', paymentDate: formatDateLocal(new Date()),
@@ -788,7 +790,8 @@ function App() {
         category: existingItem.category || '레슨',
         isFixed: existingItem.isFixed || false,
         status: existingItem.status || '',
-        gridType: existingItem.gridType || 'master'
+        gridType: existingItem.gridType || 'master',
+        isVocalProgress: existingItem.isVocalProgress || false
       });
     } else {
       setSelectedSlot({ date: dateStr, time: hourStr, minute: '00', dayOfWeek, id: null, gridType });
@@ -796,7 +799,7 @@ function App() {
       setScheduleTab('lesson');
       setScheduleForm({
         studentId: '', studentName: '', memo: '', category: '레슨',
-        isFixed: false, status: '', gridType
+        isFixed: false, status: '', gridType, isVocalProgress: false
       });
     }
     setIsScheduleModalOpen(true);
@@ -814,6 +817,7 @@ function App() {
 
   // [수정] 스케쥴 저장 함수 (당일 포함 미래 미수금 삭제)
   const handleScheduleSave = async () => {
+    if (isWeekLocked || isScheduleLocked) return;
     const timeToSave = `${selectedSlot.time}:${selectedMinute}`;
     const finalGridType = selectedSlot.gridType || scheduleForm.gridType || 'master';
     const saveDate = scheduleForm.isFixed ? formatDateLocal(new Date()) : selectedSlot.date;
@@ -924,6 +928,7 @@ function App() {
 
   // [수정] 스케쥴 삭제 함수 (월정산 청구 내역 삭제 로직 추가)
   const handleScheduleDelete = async () => {
+    if (isWeekLocked || isScheduleLocked) return;
     if (!selectedSlot.id || !window.confirm("일정을 삭제하시겠습니까?\n(관련된 미수금/월정산 청구 내역도 함께 정리됩니다.)")) return;
 
     try {
@@ -1314,15 +1319,26 @@ function App() {
                   <button
                     onClick={handleToggleWeekLock}
                     disabled={!isWeekLocked && !isAllProcessed}
-                    className={`btn btn-sm border-none gap-2 font-bold ${isWeekLocked
-                      ? 'bg-red-100 text-red-600 hover:bg-red-200'
-                      : (isAllProcessed ? 'bg-black text-white hover:bg-gray-800' : 'bg-gray-100 text-gray-400')
+                    className={`btn btn-sm border-none gap-2 font-bold rounded-2xl shadow-md transition-all px-6 ${isWeekLocked
+                      ? 'bg-orange-100 text-orange-600 hover:bg-orange-200 hover:shadow-lg'
+                      : (isAllProcessed ? 'bg-black text-white hover:bg-gray-800 hover:shadow-lg' : 'bg-gray-100 text-gray-400 cursor-not-allowed')
                       }`}
                   >
                     {isWeekLocked ? <><FaLockOpen /> 해제</> : <><FaLock /> 최종</>}
                   </button>
                 );
               })()
+            )}
+            {activeTab === 'schedule' && (
+              <button
+                onClick={() => setIsScheduleLocked(!isScheduleLocked)}
+                className={`btn btn-sm border-none gap-2 font-bold rounded-2xl shadow-md transition-all px-6 ${isScheduleLocked
+                  ? 'bg-red-100 text-red-600 hover:bg-red-200 hover:shadow-lg'
+                  : 'bg-gray-100 text-gray-500 hover:bg-black hover:text-white hover:shadow-lg'
+                  }`}
+              >
+                {isScheduleLocked ? <><FaLock /> 잠금</> : <><FaLockOpen /> 편집</>}
+              </button>
             )}
             <button onClick={handleLogout} className="flex items-center gap-2 text-xs md:text-sm font-bold text-gray-400 hover:text-red-500"><FaSignOutAlt /> 로그아웃</button>
           </div>
@@ -1403,7 +1419,7 @@ function App() {
                   </div>
 
                   <div className="flex gap-2">
-                    <button onClick={() => setScheduleDate(new Date())} className="btn btn-sm btn-ghost">오늘</button>
+                    <button onClick={() => setScheduleDate(new Date())} className="btn btn-sm bg-gray-100 text-gray-500 hover:bg-black hover:text-white rounded-2xl shadow-md transition-all px-6">오늘</button>
                   </div>
                 </div>
 
@@ -1413,26 +1429,40 @@ function App() {
 
                   <div className="flex items-center gap-2 min-w-fit"><FaStickyNote className="text-blue-500 text-base" /><span className="text-xs font-bold text-gray-500">주간 메모</span></div>
                   <input type="text" className="input input-sm border-none bg-transparent flex-1 text-sm focus:outline-none" placeholder="이번 주 특이사항..." value={weeklyMemo} onChange={(e) => setWeeklyMemo(e.target.value)} />
-                  <button onClick={handleWeeklyMemoSave} className="btn btn-xs bg-gray-100 text-gray-500 border-none hover:bg-black hover:text-white"><FaSave className="mr-1" /> 저장</button>
+                  <button
+                    className="btn btn-xs bg-gray-100 text-gray-500 border-none hover:bg-black hover:text-white rounded-2xl shadow-md transition-all px-6 hover:shadow-lg"
+                    onClick={handleWeeklyMemoSave}
+                  >
+                    <FaSave className="mr-1" /> 저장
+                  </button>
                 </div>
               </div>
 
               {/* 스케쥴 표 영역 (헤더 고정 + 바디 스크롤) */}
               <div className="flex-1 flex flex-col min-h-0 bg-white rounded-[2rem] shadow-sm border border-gray-100 overflow-hidden">
 
-                {/* 1. 요일 헤더 (flex-none으로 고정) */}
-                <div className="flex-none grid grid-cols-8 border-b border-gray-100 bg-gray-50 z-10">
-                  <div className="p-4 text-center text-xs font-bold text-gray-400 border-r border-gray-100">Time</div>
-                  {weekDays.map((day, i) => (
-                    <div key={i} className={`p-4 text-center border-r border-gray-100 last:border-none ${day.getDay() === 0 ? 'text-red-500' : day.getDay() === 6 ? 'text-blue-500' : 'text-gray-700'}`}>
-                      <div className="text-xs font-bold">{['일', '월', '화', '수', '목', '금', '토'][day.getDay()]}</div>
-                      <div className="text-lg font-extrabold">{day.getDate()}</div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* 2. 시간표 바디 (flex-1 overflow-y-auto로 여기만 스크롤) */}
+                {/* 스크롤 가능 영역 */}
                 <div className="flex-1 overflow-y-auto">
+                  {/* 1. 요일 헤더 (sticky로 고정) */}
+                  <div className="sticky top-0 grid grid-cols-8 border-b border-gray-100 bg-gray-50 z-10">
+                    <div className="p-4 text-center text-xs font-bold text-gray-400 border-r border-gray-100">Time</div>
+                    {weekDays.map((d, i) => {
+                      const isToday = formatDateLocal(d) === formatDateLocal(new Date());
+                      const isWeekend = d.getDay() === 0 || d.getDay() === 6;
+                      const dayColor = d.getDay() === 0 ? 'text-red-500' : d.getDay() === 6 ? 'text-blue-500' : 'text-gray-700';
+
+                      return (
+                        <div key={i} className={`text-center py-3 px-2 border-r border-gray-100 last:border-r-0 ${isToday ? 'bg-orange-50 rounded-lg shadow-md' : ''}`}>
+                          <div className="text-xs text-gray-400">{['일', '월', '화', '수', '목', '금', '토'][d.getDay()]}</div>
+                          <div className={`text-lg font-extrabold ${dayColor}`}>
+                            {d.getDate()}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* 2. 시간표 바디 */}
                   {(() => {
                     const ghostsMaster = getGhostSchedules('master');
                     const ghostsVocal = getGhostSchedules('vocal');
@@ -1505,8 +1535,8 @@ function App() {
                                   // 일반 상태 (레슨, 상담 등) - 짱구 스케쥴 농도 전체 상향
                                   if (item.isFixed) {
                                     statusStyle = isVocal
-                                      ? 'bg-purple-100 text-purple-700 border-purple-200'
-                                      : 'bg-purple-200 text-purple-950 border-purple-400';
+                                      ? 'bg-purple-50 text-purple-700 border-purple-200'
+                                      : 'bg-purple-100 text-purple-950 border-purple-400';
                                   }
                                   else if (item.category === '상담') {
                                     statusStyle = isVocal
@@ -1516,13 +1546,13 @@ function App() {
                                   else if (item.category === '레슨') {
                                     // 레슨: 쌤(오렌지 진하게), 짱구(블루 선명하게)
                                     statusStyle = isVocal
-                                      ? 'bg-green-200 text-green-700 border-green-200'
+                                      ? 'bg-blue-100 text-blue-700 border-blue-300'
                                       : 'bg-orange-200 text-orange-950 border-orange-400 font-black';
                                   }
                                   else {
                                     statusStyle = isVocal
-                                      ? 'bg-gray-200 text-gray-600 border-gray-300'
-                                      : 'bg-gray-100 text-gray-800 border-gray-300';
+                                      ? 'bg-gray-100 text-gray-700 border-blue-300'
+                                      : 'bg-gray-100 text-gray-700 border-orange-400';
                                   }
                                 }
 
@@ -1540,8 +1570,11 @@ function App() {
 
                                     <span className="truncate font-bold">
                                       {item.studentName || item.category}
+                                      {item.isVocalProgress && <span className="text-pink-600 ml-1">V</span>}
                                       {!item.isGhost && item.memo && (
-                                        <span className="font-normal opacity-70 ml-1">({item.memo})</span>
+                                        item.memo === "추가수업"
+                                          ? <FaPlus className="text-gray-600 ml-1 inline text-[10px]" />
+                                          : <span className="font-normal opacity-70 ml-1">({item.memo})</span>
                                       )}
                                     </span>
                                   </div>
@@ -2507,6 +2540,13 @@ function App() {
                 )}
                 <input type="text" placeholder="메모" className="input input-sm border-gray-200 bg-white" value={scheduleForm.memo} onChange={(e) => setScheduleForm({ ...scheduleForm, memo: e.target.value })} />
 
+                {scheduleTab === 'lesson' && scheduleForm.gridType === 'vocal' && (
+                  <label className="label cursor-pointer justify-start gap-2 mt-2">
+                    <input type="checkbox" className="checkbox checkbox-sm checkbox-primary" checked={scheduleForm.isVocalProgress} onChange={(e) => setScheduleForm({ ...scheduleForm, isVocalProgress: e.target.checked })} />
+                    <span className="label-text font-bold text-gray-700">보컬진행</span>
+                  </label>
+                )}
+
                 {scheduleTab === 'lesson' && (
                   <div className="flex flex-col gap-3 mt-2 pt-2 border-t border-gray-200">
                     <div className="flex flex-col gap-1">
@@ -2629,8 +2669,8 @@ function App() {
                 )}
 
                 <div className="flex gap-2 mt-4">
-                  {selectedSlot.id && <button onClick={handleScheduleDelete} disabled={isWeekLocked} className="btn btn-sm bg-red-500 text-white hover:bg-red-600 flex-1 border-none disabled:bg-gray-200 disabled:text-gray-400">일정 삭제</button>}
-                  <button onClick={handleScheduleSave} disabled={isWeekLocked} className="btn btn-sm bg-black text-white flex-[2] border-none disabled:bg-gray-200 disabled:text-gray-400">저장</button>
+                  {selectedSlot.id && <button onClick={handleScheduleDelete} disabled={isWeekLocked || isScheduleLocked} className="btn btn-sm bg-red-500 text-white hover:bg-red-600 flex-1 border-none disabled:bg-gray-200 disabled:text-gray-400">일정 삭제</button>}
+                  <button onClick={handleScheduleSave} disabled={isWeekLocked || isScheduleLocked} className="btn btn-sm bg-black text-white flex-[2] border-none disabled:bg-gray-200 disabled:text-gray-400">저장</button>
                 </div>
               </div>
               <button onClick={() => setIsScheduleModalOpen(false)} className="btn btn-sm btn-circle btn-ghost absolute top-2 right-2">✕</button>
