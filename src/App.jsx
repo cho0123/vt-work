@@ -209,7 +209,8 @@ function App() {
 
   // 주차 잠금 상태
   const [isWeekLocked, setIsWeekLocked] = useState(false);
-  const [isScheduleLocked, setIsScheduleLocked] = useState(false);
+  // 모바일(768px 미만)에서는 기본적으로 잠금 활성화
+  const [isScheduleLocked, setIsScheduleLocked] = useState(() => typeof window !== 'undefined' ? window.innerWidth < 768 : false);
 
   const [scheduleTab, setScheduleTab] = useState('lesson');
   const [scheduleForm, setScheduleForm] = useState({
@@ -2217,12 +2218,374 @@ function App() {
 
           {/* ----- 정산 탭 (기존 유지) ----- */}
           {activeTab === 'settlement' && (
-            // [수정] pb-20 추가
-            <div className="flex flex-col gap-6 p-4 md:p-8 lg:px-12 pb-20 overflow-y-auto"><div className="flex flex-col gap-2"><div className="flex flex-col md:flex-row justify-between items-center gap-4"><div className="flex items-center bg-white px-4 py-2 rounded-2xl shadow-sm border border-gray-100"><button onClick={() => changeMonth(-1)} className="btn btn-circle btn-sm btn-ghost"><FaChevronLeft /></button><div className="flex items-center mx-2"><select className="select select-sm bg-transparent border-none font-extrabold text-lg text-center w-24 focus:outline-none" value={currentDate.getFullYear()} onChange={handleYearChange}>{Array.from({ length: 10 }, (_, i) => new Date().getFullYear() - 5 + i).map(y => <option key={y} value={y}>{y}년</option>)}</select><select className="select select-sm bg-transparent border-none font-extrabold text-lg text-center w-20 focus:outline-none" value={currentDate.getMonth() + 1} onChange={handleMonthChange}>{Array.from({ length: 12 }, (_, i) => i + 1).map(m => <option key={m} value={m}>{m}월</option>)}</select></div><button onClick={() => changeMonth(1)} className="btn btn-circle btn-sm btn-ghost"><FaChevronRight /></button></div><button onClick={fetchSettlementData} className="btn btn-sm btn-ghost text-gray-400"><FaUndo className="mr-1" /> 새로고침</button></div><div className="bg-white px-4 py-2 rounded-xl shadow-sm border border-gray-100 flex items-center gap-3"><div className="flex items-center gap-2 min-w-fit"><FaStickyNote className="text-yellow-500 text-base" /><span className="text-xs font-bold text-gray-500">메모</span></div><input type="text" className="input input-sm border-none bg-transparent flex-1 text-sm focus:outline-none" placeholder="이달의 정산 특이사항 입력..." value={settlementMemo} onChange={(e) => setSettlementMemo(e.target.value)} /><button onClick={handleSettlementMemoSave} className="btn btn-xs bg-gray-100 text-gray-500 border-none hover:bg-black hover:text-white"><FaSave className="mr-1" /> 저장</button></div></div><div className="grid grid-cols-2 md:grid-cols-4 gap-4"><div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100"><div className="text-sm font-bold text-gray-400 mb-2 flex items-center gap-2"><FaMoneyBillWave className="text-green-500" /> 총 매출 (미수금 포함)</div><div className="text-2xl font-extrabold text-gray-800">{formatCurrency(totalRevenueIncludingUnpaid)}원</div><div className="text-xs text-gray-400 mt-1">완료 {settlementIncome.length}건 / 미납 {settlementUnpaid.length}건</div></div><div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100"><div className="text-sm font-bold text-gray-400 mb-2 flex items-center gap-2"><FaFileInvoiceDollar className="text-red-500" /> 총 지출</div><div className="text-2xl font-extrabold text-gray-800">{formatCurrency(totalExpense)}원</div><div className="text-xs text-gray-400 mt-1">지출 내역 {expenses.length}건</div></div><div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100 bg-blue-50/50"><div className="text-sm font-bold text-blue-500 mb-2 flex items-center gap-2"><FaCalculator /> 순수익 (예상)</div><div className="text-2xl font-extrabold text-blue-600">{formatCurrency(netProfitIncludingUnpaid)}원</div></div><div className="bg-white p-6 rounded-[2rem] shadow-sm border border-gray-100"><div className="text-sm font-bold text-gray-400 mb-2 flex items-center gap-2"><FaExclamationCircle className="text-orange-500" /> 미수금</div><div className="text-2xl font-extrabold text-gray-400">{formatCurrency(totalUnpaid)}원</div><div className="text-xs text-orange-400 mt-1 font-bold">{settlementUnpaid.length}건 미결제</div></div></div><div className="grid grid-cols-1 lg:grid-cols-2 gap-6"><div className="bg-white rounded-[2.5rem] shadow-sm border border-gray-100 overflow-hidden flex flex-col h-[600px]"><div className="p-6 border-b border-gray-100 flex justify-between items-center"><h3 className="text-lg font-bold text-gray-800">수익 내역</h3><span className="text-xs font-bold text-green-600 bg-green-50 px-2 py-1 rounded-lg">입금완료</span></div><div className="flex-1 overflow-y-auto p-4"><table className="table table-sm w-full"><thead>
-              <tr className="text-gray-400"><th>재등록일</th><th>이름</th><th>금액</th><th>결제일(수단)</th><th className="text-right">관리</th></tr></thead><tbody>{settlementIncome.map((item, i) => (<tr key={i} className="border-b border-gray-50 last:border-none cursor-pointer hover:bg-gray-50" onClick={() => handleGoToStudent(item.studentId, item.studentName)}>
-                <td className="font-bold text-gray-600">{item.targetDate}</td><td className="font-bold flex items-center gap-1">{item.studentName}<FaExternalLinkAlt className="text-[10px] text-gray-300" /></td><td className="font-bold text-blue-600">{formatCurrency(item.amount)}</td>
-                <td className="text-xs text-gray-400 flex items-center gap-1"><span className="font-bold text-gray-600">{item.paymentDate}</span><span>({item.paymentMethod === 'card' ? '카드' : item.paymentMethod === 'transfer' ? '이체' : '현금'})</span></td>
-                <td className="text-right"><button onClick={(e) => { e.stopPropagation(); handleDeletePayment(item.studentId, item.id); }} className="text-gray-300 hover:text-red-500"><FaTrash /></button></td></tr>))}</tbody></table>{settlementIncome.length === 0 && <div className="text-center text-gray-300 py-10">내역이 없습니다.</div>}</div><div className="border-t border-gray-100 bg-gray-50 p-4"><h4 className="text-xs font-bold text-gray-500 mb-2">미수금 예정 리스트</h4><div className="h-32 overflow-y-auto"><table className="table table-xs w-full"><tbody>{settlementUnpaid.map((item, i) => (<tr key={i} className="border-none cursor-pointer hover:bg-gray-50" onClick={() => handleGoToStudent(item.studentId, item.studentName)}><td className="text-gray-400">{item.targetDate}</td><td className="text-gray-600 font-bold flex items-center gap-1">{item.studentName}<FaExternalLinkAlt className="text-[10px] text-gray-300" /></td><td className="text-gray-400">{formatCurrency(item.amount)}원</td></tr>))}</tbody></table></div></div></div><div className="bg-white rounded-[2.5rem] shadow-sm border border-gray-100 overflow-hidden flex flex-col h-[600px]"><div className="p-6 border-b border-gray-100 flex justify-between items-center"><h3 className="text-lg font-bold text-gray-800">지출 관리</h3><span className="text-xs font-bold text-red-500 bg-red-50 px-2 py-1 rounded-lg">지출등록</span></div><div className="p-4 bg-gray-50 m-4 rounded-2xl border border-gray-200"><div className="grid grid-cols-2 gap-2 mb-2"><input type="date" name="date" className="input input-sm bg-white border-gray-200" value={expenseForm.date} onChange={handleExpenseChange} /><select name="category" className="select select-sm bg-white border-gray-200" value={expenseForm.category} onChange={handleExpenseChange}>{Object.keys(expenseDefaults).map(k => <option key={k} value={k}>{k}</option>)}</select></div><div className="flex gap-2 mb-2"><input type="number" name="amount" placeholder="금액" className="input input-sm bg-white border-gray-200 w-1/3 font-bold" value={expenseForm.amount} onChange={handleExpenseChange} /><input type="text" name="memo" placeholder="메모" className="input input-sm bg-white border-gray-200 flex-1" value={expenseForm.memo} onChange={handleExpenseChange} /></div><div className="flex gap-2">{editingExpenseId && <button onClick={cancelExpenseEdit} className="btn btn-sm btn-ghost flex-1">취소</button>}<button onClick={handleExpenseSubmit} className={`btn btn-sm ${editingExpenseId ? 'bg-blue-600' : 'bg-black'} text-white flex-1 border-none`}>{editingExpenseId ? '수정 완료' : '지출 추가'}</button></div></div><div className="flex-1 overflow-y-auto p-4 pt-0"><table className="table table-sm w-full"><thead><tr className="text-gray-400"><th>날짜</th><th>항목</th><th>금액</th><th>메모</th><th className="text-right">관리</th></tr></thead><tbody>{expenses.map((item) => (<tr key={item.id} className="border-b border-gray-50 last:border-none"><td className="text-gray-500">{item.date}</td><td className="font-bold text-gray-700">{item.category}</td><td className="font-bold text-red-500">-{formatCurrency(item.amount)}</td><td className="text-xs text-gray-400">{item.memo}</td><td className="text-right"><div className="flex justify-end gap-1"><button onClick={() => handleEditExpenseClick(item)} className="text-gray-300 hover:text-blue-500"><FaEdit /></button><button onClick={() => handleExpenseDelete(item.id)} className="text-gray-300 hover:text-red-500"><FaTimesCircle /></button></div></td></tr>))}</tbody></table>{expenses.length === 0 && <div className="text-center text-gray-300 py-10">지출 내역이 없습니다.</div>}</div></div></div></div>
+            <div className="flex flex-col gap-6 p-4 md:p-8 lg:px-12 pb-20 overflow-y-auto">
+              {/* 상단 컨트롤러 */}
+              <div className="flex flex-col gap-2">
+                <div className="flex flex-col md:flex-row justify-between items-center gap-4">
+                  <div className="flex items-center bg-white px-4 py-2 rounded-2xl shadow-sm border border-gray-100">
+                    <button onClick={() => changeMonth(-1)} className="btn btn-circle btn-sm btn-ghost"><FaChevronLeft /></button>
+                    <div className="flex items-center mx-2">
+                      <select className="select select-sm bg-transparent border-none font-extrabold text-lg text-center w-24 focus:outline-none" value={currentDate.getFullYear()} onChange={handleYearChange}>
+                        {Array.from({ length: 10 }, (_, i) => new Date().getFullYear() - 5 + i).map(y => <option key={y} value={y}>{y}년</option>)}
+                      </select>
+                      <select className="select select-sm bg-transparent border-none font-extrabold text-lg text-center w-20 focus:outline-none" value={currentDate.getMonth() + 1} onChange={handleMonthChange}>
+                        {Array.from({ length: 12 }, (_, i) => i + 1).map(m => <option key={m} value={m}>{m}월</option>)}
+                      </select>
+                    </div>
+                    <button onClick={() => changeMonth(1)} className="btn btn-circle btn-sm btn-ghost"><FaChevronRight /></button>
+                  </div>
+                  <button onClick={fetchSettlementData} className="btn btn-sm btn-ghost text-gray-400"><FaUndo className="mr-1" /> 새로고침</button>
+                </div>
+
+                {/* 월별 메모 */}
+                <div className="bg-white px-4 py-2 rounded-xl shadow-sm border border-gray-100 flex items-center gap-3">
+                  <div className="flex items-center gap-2 min-w-fit">
+                    <FaStickyNote className="text-yellow-500 text-base" />
+                    <span className="text-xs font-bold text-gray-500">메모</span>
+                  </div>
+                  <input
+                    type="text"
+                    className="input input-sm border-none bg-transparent flex-1 text-sm focus:outline-none"
+                    placeholder="이달의 정산 특이사항 입력..."
+                    value={settlementMemo}
+                    onChange={(e) => setSettlementMemo(e.target.value)}
+                  />
+                  <button
+                    onClick={handleSettlementMemoSave}
+                    className="btn btn-xs bg-gray-100 text-gray-500 border-none hover:bg-black hover:text-white rounded-2xl shadow-md transition-all px-6 hover:shadow-lg"
+                  >
+                    <FaSave className="mr-1" /> 저장
+                  </button>
+                </div>
+              </div>
+
+              {/* 요약 카드 (슬림형) */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                {/* 1. 총 매출 */}
+                <div className="bg-white p-4 rounded-[2rem] shadow-sm border border-gray-100">
+                  <div className="flex justify-between items-start mb-1">
+                    <div className="text-xs font-bold text-gray-400 flex items-center gap-2">
+                      <FaMoneyBillWave className="text-green-500" /> 총 매출
+                    </div>
+                    <div className="text-[11px] text-gray-400">
+                      (완료 {settlementIncome.length} / 미납 {settlementUnpaid.length})
+                    </div>
+                  </div>
+                  <div className="text-xl font-extrabold text-gray-800 tracking-tight">
+                    {formatCurrency(totalRevenueIncludingUnpaid)}원
+                  </div>
+                </div>
+
+                {/* 2. 총 지출 */}
+                <div className="bg-white p-4 rounded-[2rem] shadow-sm border border-gray-100">
+                  <div className="flex justify-between items-start mb-1">
+                    <div className="text-xs font-bold text-gray-400 flex items-center gap-2">
+                      <FaFileInvoiceDollar className="text-red-500" /> 총 지출
+                    </div>
+                    <div className="text-[11px] text-gray-400">
+                      ({expenses.length}건)
+                    </div>
+                  </div>
+                  <div className="text-xl font-extrabold text-gray-800 tracking-tight">
+                    {formatCurrency(totalExpense)}원
+                  </div>
+                </div>
+
+                {/* 3. 순수익 */}
+                <div className="bg-white p-4 rounded-[2rem] shadow-sm border border-gray-100 bg-blue-50/50">
+                  <div className="flex justify-between items-start mb-1">
+                    <div className="text-xs font-bold text-blue-500 flex items-center gap-2">
+                      <FaCalculator /> 순수익 (예상)
+                    </div>
+                  </div>
+                  <div className="text-xl font-extrabold text-blue-600 tracking-tight">
+                    {formatCurrency(netProfitIncludingUnpaid)}원
+                  </div>
+                </div>
+
+                {/* 4. 미수금 */}
+                <div className="bg-white p-4 rounded-[2rem] shadow-sm border border-gray-100">
+                  <div className="flex justify-between items-start mb-1">
+                    <div className="text-xs font-bold text-gray-400 flex items-center gap-2">
+                      <FaExclamationCircle className="text-orange-500" /> 미수금
+                    </div>
+                    <div className="text-[11px] text-orange-400 font-bold">
+                      ({settlementUnpaid.length}건 미결제)
+                    </div>
+                  </div>
+                  <div className="text-xl font-extrabold text-gray-400 tracking-tight">
+                    {formatCurrency(totalUnpaid)}원
+                  </div>
+                </div>
+              </div>
+
+              {/* 하단 상세 내역 (수익 내역 / 지출 관리) */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+                {/* 1. 수익 내역 */}
+                <div className="bg-white rounded-[2.5rem] shadow-sm border border-gray-100 overflow-hidden flex flex-col h-[600px]">
+                  <div className="p-6 border-b border-gray-100 flex justify-between items-center">
+                    <h3 className="text-lg font-bold text-gray-800">수익 내역</h3>
+                    <span className="text-xs font-bold text-green-600 bg-green-50 px-2 py-1 rounded-lg">입금완료</span>
+                  </div>
+                  <div className="flex-1 overflow-y-auto p-4">
+                    <table className="table table-sm w-full">
+                      <thead>
+                        <tr className="text-gray-400">
+                          <th>재등록일</th>
+                          <th>이름</th>
+                          <th>금액</th>
+                          <th>결제일(수단)</th>
+                          <th className="text-right">관리</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {settlementIncome.map((item, i) => (
+                          <tr key={i} className="border-b border-gray-50 last:border-none cursor-pointer hover:bg-gray-50" onClick={() => handleGoToStudent(item.studentId, item.studentName)}>
+                            <td className="font-bold text-gray-600">{item.targetDate}</td>
+                            <td className="font-bold flex items-center gap-1">
+                              {item.studentName}
+                              <FaExternalLinkAlt className="text-[10px] text-gray-300" />
+                            </td>
+                            <td className="font-bold text-blue-600">{formatCurrency(item.amount)}</td>
+                            <td className="text-xs text-gray-400 flex items-center gap-1">
+                              <span className="font-bold text-gray-600">{item.paymentDate}</span>
+                              <span>({item.paymentMethod === 'card' ? '카드' : item.paymentMethod === 'transfer' ? '이체' : '현금'})</span>
+                            </td>
+                            <td className="text-right">
+                              <button onClick={(e) => { e.stopPropagation(); handleDeletePayment(item.studentId, item.id); }} className="text-gray-300 hover:text-red-500">
+                                <FaTrash />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {settlementIncome.length === 0 && <div className="text-center text-gray-300 py-10">내역이 없습니다.</div>}
+                  </div>
+
+                  {/* 미수금 예정 리스트 */}
+                  <div className="border-t border-gray-100 bg-gray-50 p-4">
+                    <h4 className="text-xs font-bold text-gray-500 mb-2">미수금 예정 리스트</h4>
+                    <div className="h-32 overflow-y-auto">
+                      <table className="table table-xs w-full">
+                        <tbody>
+                          {settlementUnpaid.map((item, i) => (
+                            <tr key={i} className="border-none cursor-pointer hover:bg-gray-50" onClick={() => handleGoToStudent(item.studentId, item.studentName)}>
+                              <td className="text-gray-400">{item.targetDate}</td>
+                              <td className="text-gray-600 font-bold flex items-center gap-1">
+                                {item.studentName}
+                                <FaExternalLinkAlt className="text-[10px] text-gray-300" />
+                              </td>
+                              <td className="text-gray-400">{formatCurrency(item.amount)}원</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. 지출 관리 */}
+                <div className="bg-white rounded-[2.5rem] shadow-sm border border-gray-100 overflow-hidden flex flex-col h-[600px]">
+                  <div className="p-6 border-b border-gray-100 flex justify-between items-center">
+                    <h3 className="text-lg font-bold text-gray-800">지출 관리</h3>
+                    <span className="text-xs font-bold text-red-500 bg-red-50 px-2 py-1 rounded-lg">지출등록</span>
+                  </div>
+
+                  {/* 지출 입력 폼 */}
+                  <div className="p-4 bg-gray-50 m-4 rounded-2xl border border-gray-200">
+                    <div className="grid grid-cols-2 gap-2 mb-2">
+                      <input
+                        type="date"
+                        name="date"
+                        className="input input-sm bg-white border-gray-200"
+                        value={expenseForm.date}
+                        onChange={handleExpenseChange}
+                      />
+                      <select
+                        name="category"
+                        className="select select-sm bg-white border-gray-200"
+                        value={expenseForm.category}
+                        onChange={handleExpenseChange}
+                      >
+                        {/* 동적 카테고리 필터링: 이미 등록된 항목 제외 */}
+                        {(() => {
+                          const registeredCats = new Set(expenses.filter(e => e.category !== '기타').map(e => e.category));
+                          // 현재 수정중인 항목의 카테고리는 선택 가능해야 함
+                          if (editingExpenseId) {
+                            const editingItem = expenses.find(e => e.id === editingExpenseId);
+                            if (editingItem) registeredCats.delete(editingItem.category);
+                          }
+
+                          return Object.keys(expenseDefaults).filter(k => k === '기타' || !registeredCats.has(k)).map(k => (
+                            <option key={k} value={k}>{k}</option>
+                          ));
+                        })()}
+                      </select>
+                    </div>
+                    <div className="flex gap-2 mb-2">
+                      <input
+                        type="number"
+                        name="amount"
+                        placeholder="금액"
+                        className="input input-sm bg-white border-gray-200 w-1/3 font-bold"
+                        value={expenseForm.amount}
+                        onChange={handleExpenseChange}
+                      />
+                      <input
+                        type="text"
+                        name="memo"
+                        placeholder="메모"
+                        className="input input-sm bg-white border-gray-200 flex-1"
+                        value={expenseForm.memo}
+                        onChange={handleExpenseChange}
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      {editingExpenseId && <button onClick={cancelExpenseEdit} className="btn btn-sm btn-ghost flex-1">취소</button>}
+                      <button
+                        onClick={handleExpenseSubmit}
+                        className={`btn btn-sm ${editingExpenseId ? 'bg-blue-600' : 'bg-black'} text-white flex-1 border-none shadow-md hover:shadow-lg transition-all rounded-xl`}
+                      >
+                        {editingExpenseId ? '수정 완료' : '지출 추가'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* 지출 리스트 */}
+                  <div className="flex-1 overflow-y-auto p-4 pt-0">
+                    <table className="table table-sm w-full">
+                      <thead>
+                        <tr className="text-gray-400">
+                          <th>날짜</th>
+                          <th>항목</th>
+                          <th>금액</th>
+                          <th>메모</th>
+                          <th className="text-right">관리</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {expenses.map((item) => (
+                          <tr key={item.id} className="border-b border-gray-50 last:border-none">
+                            <td className="text-gray-500">{item.date}</td>
+                            <td className="font-bold text-gray-700">{item.category}</td>
+                            <td className="font-bold text-red-500">-{formatCurrency(item.amount)}</td>
+                            <td className="text-xs text-gray-400">{item.memo}</td>
+                            <td className="text-right">
+                              <div className="flex justify-end gap-1">
+                                <button onClick={() => handleEditExpenseClick(item)} className="text-gray-300 hover:text-blue-500">
+                                  <FaEdit />
+                                </button>
+                                <button onClick={() => handleExpenseDelete(item.id)} className="text-gray-300 hover:text-red-500">
+                                  <FaTimesCircle />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    {expenses.length === 0 && <div className="text-center text-gray-300 py-10">지출 내역이 없습니다.</div>}
+
+                    {/* 보컬 진행 지출 관리 영역 */}
+                    {(() => {
+                      const currentMonthPrefix = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
+
+                      const vocalCompletedEvents = schedules
+                        .filter(s => s.gridType === 'vocal' && s.status === 'completed' && s.isVocalProgress && s.date.startsWith(currentMonthPrefix))
+                        .sort((a, b) => a.date.localeCompare(b.date));
+
+                      const totalVocalWage = vocalCompletedEvents.length * 30000;
+
+                      const existingWageExpense = expenses.find(e =>
+                        e.category === '임금' && e.isVocalWage && e.targetMonth === currentMonthPrefix
+                      );
+
+                      return (
+                        <div className="mt-4 pt-4 border-t border-gray-100 bg-gray-50 rounded-xl p-4 mb-4">
+                          <h4 className="text-sm font-bold text-gray-700 mb-2 flex justify-between items-center">
+                            <span>{currentDate.getMonth() + 1}월 보컬 추가 수업</span>
+                            <span className="text-blue-600">{formatCurrency(totalVocalWage)}원 <span className="text-xs text-gray-400">({vocalCompletedEvents.length}건)</span></span>
+                          </h4>
+                          <div className="text-xs text-gray-500 mb-2">
+                            {currentDate.getMonth() + 1}월 보컬추가 : 회당 30,000원 x {vocalCompletedEvents.length}건 = {formatCurrency(totalVocalWage)}원
+                          </div>
+
+                          <div className="bg-white rounded-lg border border-gray-200 mb-3 max-h-32 overflow-y-auto">
+                            {vocalCompletedEvents.length === 0 ? (
+                              <div className="text-center text-gray-300 py-3 text-xs">해당 내역 없음</div>
+                            ) : (
+                              <table className="table table-xs w-full">
+                                <tbody>
+                                  {vocalCompletedEvents.map((ev, idx) => (
+                                    <tr key={idx} className="border-b border-gray-50 last:border-none">
+                                      <td className="text-gray-500 w-24 pl-4">
+                                        {ev.date.substring(5).replace('-', '월') + '일'}
+                                      </td>
+                                      <td className="font-bold text-gray-700">
+                                        {ev.studentName} 학생
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            )}
+                          </div>
+
+                          {vocalCompletedEvents.length > 0 && (
+                            existingWageExpense ? (
+                              existingWageExpense.paidDate ? (
+                                <button disabled className="btn btn-sm w-full bg-green-100 text-green-600 border-none rounded-xl font-bold">
+                                  지급 완료 ({existingWageExpense.paidDate})
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={async () => {
+                                    if (!window.confirm(`${formatCurrency(totalVocalWage)}원을 지급 처리하시겠습니까?`)) return;
+                                    try {
+                                      await updateDoc(doc(db, "expenses", existingWageExpense.id), {
+                                        paidDate: formatDateLocal(new Date()),
+                                        memo: existingWageExpense.memo + " [지급완료]"
+                                      });
+                                      fetchSettlementData();
+                                    } catch (e) { console.error(e); alert("처리 실패"); }
+                                  }}
+                                  className="btn btn-sm w-full bg-blue-600 text-white border-none hover:bg-blue-700 shadow-md rounded-xl"
+                                >
+                                  지급 하기
+                                </button>
+                              )
+                            ) : (
+                              <button
+                                onClick={async () => {
+                                  if (!window.confirm(`${currentDate.getMonth() + 1}월 보컬 수업료 ${formatCurrency(totalVocalWage)}원을 지출로 등록하시겠습니까?`)) return;
+                                  try {
+                                    await addDoc(collection(db, "expenses"), {
+                                      date: formatDateLocal(new Date()),
+                                      category: '임금',
+                                      amount: totalVocalWage,
+                                      memo: `${currentDate.getMonth() + 1}월 보컬 수업료 (${vocalCompletedEvents.length}건)`,
+                                      isVocalWage: true,
+                                      targetMonth: currentMonthPrefix,
+                                      paidDate: null
+                                    });
+                                    fetchSettlementData();
+                                  } catch (e) { console.error(e); alert("등록 실패"); }
+                                }}
+                                className="btn btn-sm w-full bg-black text-white border-none hover:bg-gray-800 shadow-md rounded-xl"
+                              >
+                                지출 등록
+                              </button>
+                            )
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+              </div>
+            </div>
           )}
         </main>
         {/* [FIX] 학생 개인별 전체 출석부 (재등록 버튼 계산 로직 수정) */}
