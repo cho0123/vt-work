@@ -616,6 +616,15 @@ function App() {
   // --- [Logic: Ghost Schedules] ---
   const getGhostSchedules = (gridType = 'master') => {
     const weekStart = getStartOfWeek(scheduleDate);
+
+    // [New] 해당 주차 월요일 자정(00:00)이 지났다면, 해당 주차의 예정 스케쥴 숨김
+    const mondayMidnight = new Date(weekStart);
+    mondayMidnight.setHours(0, 0, 0, 0);
+
+    if (new Date() >= mondayMidnight) {
+      return [];
+    }
+
     weekStart.setHours(12, 0, 0, 0);
 
     const ghosts = [];
@@ -1559,7 +1568,8 @@ function App() {
                 const weekEndStr = formatDateLocal(weekEnd);
 
                 const relevantSchedules = schedules.filter(s => s.date >= weekStartStr && s.date <= weekEndStr && s.category === '레슨');
-                const hasGhosts = ghostsMaster.length > 0 || ghostsVocal.length > 0;
+                const now = new Date();
+                const hasGhosts = [...ghostsMaster, ...ghostsVocal].some(g => new Date(`${g.date}T${g.time}:00`) > now);
                 const hasPending = relevantSchedules.some(s => !s.status || s.status === 'pending');
 
                 const isAllProcessed = !hasGhosts && !hasPending && relevantSchedules.length > 0;
@@ -1831,10 +1841,12 @@ function App() {
                                   <div key={idx} onClick={(e) => { e.stopPropagation(); handleSlotClick(dateStr, String(itemHour), item.dayOfWeek, item, gType); }}
                                     className={`w-full rounded-md p-1 text-[12px] flex items-center gap-1 shadow-sm border overflow-hidden shrink-0 transition-all ${statusStyle}`}>
 
-                                    <span className={`px-1 rounded text-[10px] font-bold shrink-0 ${item.status === 'completed' ? 'bg-black/10' : item.time.endsWith('30') ? 'bg-blue-200/50' : 'bg-yellow-200/50'
-                                      }`}>
-                                      {item.time.split(':')[1]}
-                                    </span>
+                                    {item.time.endsWith(':30') && (
+                                      <span className={`px-1 rounded text-[10px] font-bold shrink-0 ${item.status === 'completed' ? 'bg-black/10' : 'bg-pink-100 text-pink-600'
+                                        }`}>
+                                        30
+                                      </span>
+                                    )}
 
                                     {item.isFixed && <FaThumbtack className="text-[8px] min-w-fit" />}
                                     {statusIcon}
@@ -1867,7 +1879,7 @@ function App() {
                             <div key={i} className="border-r border-gray-100 last:border-none p-0 flex flex-col h-full">
 
                               {/* Master 영역 (흰색 유지) */}
-                              <div className="flex-[1] bg-white p-1 flex flex-col gap-1 overflow-y-auto cursor-pointer relative group hover:bg-gray-50 transition-colors border-b border-gray-100"
+                              <div className="flex-auto min-h-[40px] bg-white p-1 flex flex-col gap-1 cursor-pointer relative group hover:bg-gray-50 transition-colors border-b border-gray-100"
                                 onClick={() => handleSlotClick(dateStr, String(hour), dayOfWeek, null, 'master')}>
                                 {renderItems(masterItems, 'master')}
                               </div>
@@ -1875,7 +1887,7 @@ function App() {
                               {/* Vocal 영역 (수정됨: 회색 -> 연초록색) */}
                               {/* 기존: bg-gray-50 ... hover:bg-gray-200 */}
                               {/* 변경: bg-green-50 ... hover:bg-green-100 */}
-                              <div className="flex-[1] bg-green-50 p-1 flex flex-col gap-1 overflow-y-auto cursor-pointer relative group hover:bg-green-100 transition-colors"
+                              <div className="flex-auto min-h-[40px] bg-green-50 p-1 flex flex-col gap-1 cursor-pointer relative group hover:bg-green-100 transition-colors"
                                 onClick={() => handleSlotClick(dateStr, String(hour), dayOfWeek, null, 'vocal')}>
                                 {renderItems(vocalItems, 'vocal')}
                               </div>
