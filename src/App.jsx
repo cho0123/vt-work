@@ -1399,10 +1399,15 @@ function App() {
       if (sortedUnpaid[0].targetDate > anchorDate) anchorDate = sortedUnpaid[0].targetDate;
     }
 
+    // [FIX] 시작일 기준 완화 (7일 전까지 포함) - 등록일보다 조금 일찍 시작한 수업도 로테이션에 포함
+    const bufferDate = new Date(student.firstDate);
+    bufferDate.setDate(bufferDate.getDate() - 7);
+    const bufferDateStr = formatDateLocal(bufferDate);
+
     const allScheds = attSchedules
       .filter(s =>
         s.studentId === student.id &&
-        s.date >= student.firstDate &&
+        s.date >= bufferDateStr &&
         (s.status === 'completed' || s.status === 'late' || s.status === 'absent')
       )
       .sort((a, b) => new Date((a.date || '') + 'T' + (a.time || '00:00')) - new Date((b.date || '') + 'T' + (b.time || '00:00')));
@@ -1455,10 +1460,15 @@ function App() {
       reqV += Number(w.vocal || 0) + Number(w.vocal30 || 0);
     });
 
+    // [FIX] 시작일 기준 완화 (7일 전까지 포함)
+    const bufferDate = new Date(student.firstDate);
+    bufferDate.setDate(bufferDate.getDate() - 7);
+    const bufferDateStr = formatDateLocal(bufferDate);
+
     const allScheds = attSchedules
       .filter(s =>
         s.studentId === student.id &&
-        s.date >= student.firstDate &&
+        s.date >= bufferDateStr &&
         (s.status === 'completed' || s.status === 'late' || s.status === 'absent')
       )
       .sort((a, b) => new Date((a.date || '') + 'T' + (a.time || '00:00')) - new Date((b.date || '') + 'T' + (b.time || '00:00')));
@@ -2068,10 +2078,23 @@ function App() {
 
                         } else {
                           // 12주 보기: 카테고리 필터 적용
-                          if (attCategory === 'basic') return s.isActive && !s.isMonthly && !s.isArtist;
-                          if (attCategory === 'monthly') return s.isActive && s.isMonthly;
-                          if (attCategory === 'artist') return s.isActive && s.isArtist;
-                          if (attCategory === 'inactive') return !s.isActive;
+                          // [FIX] 비활성(Inactive) 상태여도, 현재 뷰 범위 내에 스케줄이 있다면 '활성'으로 간주하여 표시
+                          const weeks12 = get12Weeks(attBaseDate);
+                          const start12 = weeks12[0].startStr;
+                          const end12 = weeks12[weeks12.length - 1].endStr;
+
+                          const hasScheduleInView = attSchedules.some(sch =>
+                            sch.studentId === s.id &&
+                            sch.date >= start12 &&
+                            sch.date <= end12
+                          );
+
+                          const isEffectivelyActive = s.isActive || hasScheduleInView;
+
+                          if (attCategory === 'basic') return isEffectivelyActive && !s.isMonthly && !s.isArtist;
+                          if (attCategory === 'monthly') return isEffectivelyActive && s.isMonthly;
+                          if (attCategory === 'artist') return isEffectivelyActive && s.isArtist;
+                          if (attCategory === 'inactive') return !isEffectivelyActive;
                           return false;
                         }
                       })
@@ -3024,9 +3047,13 @@ function App() {
                     if (sortedUnpaid[0].targetDate > anchorDate) anchorDate = sortedUnpaid[0].targetDate;
                   }
 
-                  // 완료된 스케쥴만 추출 (여기가 핵심: 전역변수 대신 studentFullHistory 사용)
+                  // [FIX] 시작일 기준 완화 (7일 전까지 포함)
+                  const bufferDate = new Date(s.firstDate);
+                  bufferDate.setDate(bufferDate.getDate() - 7);
+                  const bufferDateStr = formatDateLocal(bufferDate);
+
                   const validScheds = studentFullHistory.filter(sch =>
-                    sch.date >= s.firstDate &&
+                    sch.date >= bufferDateStr &&
                     (sch.status === 'completed' || sch.status === 'late' || sch.status === 'absent')
                   );
 
@@ -3447,14 +3474,13 @@ function App() {
                 {/* 2. 최초등록일 / 회차 */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div>
-                    <label className="text-xs font-bold text-gray-500 mb-1.5 ml-2 block">최초 등록일 <span className="text-[10px] font-normal text-red-400 ml-1">{editingId ? '(수정 불가)' : '(첫 수업일)'}</span></label>
+                    <label className="text-xs font-bold text-gray-500 mb-1.5 ml-2 block">최초 등록일 <span className="text-[10px] font-normal text-blue-400 ml-1">(수정 가능)</span></label>
                     <input
                       type="date"
                       name="firstDate"
-                      className={`input w-full border-transparent rounded-2xl font-bold text-lg h-12 px-5 ${editingId ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-gray-50 text-gray-900 focus:bg-white focus:ring-2 focus:ring-black/5'}`}
+                      className="input w-full bg-gray-50 border-transparent focus:bg-white focus:ring-2 focus:ring-black/5 rounded-2xl font-bold text-lg text-gray-900 h-12 px-5"
                       value={formData.firstDate}
                       onChange={handleChange}
-                      disabled={!!editingId}
                     />
                   </div>
                   <div>
