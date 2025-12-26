@@ -29,6 +29,44 @@ const formatMonthDay = (dateStr) => {
   return dateStr.substring(5).replace('-', '.');
 };
 
+// 이미지 압축 헬퍼 함수 (Component 외부로 이동)
+const compressImage = (file) => new Promise((resolve, reject) => {
+  // 타임아웃 10초 설정
+  const timer = setTimeout(() => reject(new Error("이미지 압축 시간 초과")), 10000);
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const img = new Image();
+    img.onload = () => {
+      clearTimeout(timer);
+      const canvas = document.createElement('canvas');
+      const MAX_WIDTH = 800;
+      let width = img.width;
+      let height = img.height;
+
+      if (width > MAX_WIDTH) {
+        height *= MAX_WIDTH / width;
+        width = MAX_WIDTH;
+      }
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, width, height);
+      resolve(canvas.toDataURL('image/jpeg', 0.6));
+    };
+    img.onerror = (err) => {
+      clearTimeout(timer);
+      reject(new Error("이미지 개체 로드 실패"));
+    };
+    img.src = e.target.result;
+  };
+  reader.onerror = (err) => {
+    clearTimeout(timer);
+    reject(new Error("파일 읽기 실패"));
+  };
+  reader.readAsDataURL(file);
+});
+
 function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1245,16 +1283,36 @@ function App() {
   const handlePaymentSave = async (s) => {
     if (!paymentForm.amount) return alert("금액을 입력해주세요.");
     if (!window.confirm("결제를 처리하시겠습니까?")) return;
+
+    // TODO: 디버깅용 Alert
+    // alert(`결제 시작: ${!!paymentFile ? '사진있음' : '사진없음'}`);
+
     try {
       let url = paymentForm.imageUrl || '';
       if (paymentFile) {
-        const snap = await uploadBytes(ref(storage, `receipts/${s.id}_${Date.now()}`), paymentFile);
-        url = await getDownloadURL(snap.ref);
+        try {
+          // alert("이미지 압축 시작...");
+          const dataUrl = await compressImage(paymentFile);
+          // alert("이미지 압축 완료! 길이: " + dataUrl.length);
+
+          if (dataUrl.length > 900000) { // 900KB Checks
+            if (!window.confirm("이미지 용량이 큽니다. 그래도 저장하시겠습니까? (실패 가능성 있음)")) return;
+          }
+          url = dataUrl;
+        } catch (imgError) {
+          console.error("이미지 압축 실패:", imgError);
+          alert("이미지 처리 실패: " + imgError.message);
+          return;
+        }
       }
       const data = { ...paymentForm, paymentMethod: paymentForm.method, imageUrl: url, createdAt: new Date() };
       delete data.method; delete data.id;
+
+      // alert("DB 저장 시도...");
       if (paymentForm.id) await updateDoc(doc(db, "students", s.id, "payments", paymentForm.id), data);
       else await addDoc(collection(db, "students", s.id, "payments"), data);
+      // alert("DB 저장 완료");
+
       if (!paymentForm.id) {
         let list = s.unpaidList || [];
         if (selectedUnpaidId) list = list.filter(i => i.id !== selectedUnpaidId);
@@ -1265,39 +1323,15 @@ function App() {
       await updateStudentLastDate(s.id);
       fetchSettlementData();
       alert("결제 처리가 완료되었습니다."); resetPaymentForm(calculateTotalAmount(s));
-    } catch (e) { console.error(e); alert("결제 처리에 실패했습니다."); }
+    } catch (e) {
+      console.error(e);
+      alert("결제 처리에 실패했습니다: " + e.message);
+    }
   };
+
+
   const handleRetroactivePhotoUpload = async (sid, pid, f) => {
     if (!f) return;
-
-    // 이미지 압축 헬퍼 함수
-    const compressImage = (file) => new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const img = new Image();
-        img.onload = () => {
-          const canvas = document.createElement('canvas');
-          const MAX_WIDTH = 800; // 가로 최대 800px
-          let width = img.width;
-          let height = img.height;
-
-          if (width > MAX_WIDTH) {
-            height *= MAX_WIDTH / width;
-            width = MAX_WIDTH;
-          }
-          canvas.width = width;
-          canvas.height = height;
-          const ctx = canvas.getContext('2d');
-          ctx.drawImage(img, 0, 0, width, height);
-          // JPEG, 0.6 퀄리티로 압축
-          resolve(canvas.toDataURL('image/jpeg', 0.6));
-        };
-        img.onerror = (err) => reject(new Error("이미지 로드 실패"));
-        img.src = e.target.result;
-      };
-      reader.onerror = (err) => reject(new Error("파일 읽기 실패"));
-      reader.readAsDataURL(file);
-    });
 
     try {
       alert("서버 연결 문제 우회를 위해, 사진을 압축하여 데이터베이스에 직접 저장합니다. 확인을 누르고 잠시만 기다려주세요.");
@@ -3239,6 +3273,7 @@ function App() {
                           <option value="PT">PT</option>
                           <option value="피부과">피부과</option>
                           <option value="병원">병원</option>
+                          <option value="월말정산">월말정산</option>
                           <option value="기타">기타</option>
                         </>
                       )}
