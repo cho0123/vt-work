@@ -83,8 +83,8 @@ function App() {
     { v: 'bg-yellow-50 border-yellow-200', m: 'bg-yellow-200 border-yellow-300' }, // 6. 노랑
     { v: 'bg-teal-50 border-teal-200', m: 'bg-teal-200 border-teal-300' },     // 7. 청록
     { v: 'bg-indigo-50 border-indigo-200', m: 'bg-indigo-200 border-indigo-300' }, // 8. 남색
-    { v: 'bg-red-50 border-red-200', m: 'bg-red-200 border-red-300' },       // 9. 빨강
-    { v: 'bg-gray-100 border-gray-300', m: 'bg-gray-300 border-gray-400' }      // 10. 회색
+    { v: 'bg-red-50 border-red-200', m: 'bg-red-200 border-red-300' },        // 9. 빨강
+    { v: 'bg-lime-50 border-lime-200', m: 'bg-lime-200 border-lime-300' }       // 10. 라임 (기존 회색에서 변경)
   ];
 
   useEffect(() => {
@@ -258,7 +258,7 @@ function App() {
   const [scheduleTab, setScheduleTab] = useState('lesson');
   const [scheduleForm, setScheduleForm] = useState({
     studentId: '', studentName: '', memo: '', category: '레슨',
-    isFixed: false, status: '', gridType: 'master', isVocalProgress: false
+    isFixed: false, status: '', gridType: 'master', isVocalProgress: false, vocalType: '60', masterType: '60'
   });
   const [selectedMakeupId, setSelectedMakeupId] = useState(null);
 
@@ -719,7 +719,8 @@ function App() {
             category: lastRecord.category,
             memo: lastRecord.memo,
             dayOfWeek: lastDayOfWeek,
-            gridType: gridType
+            gridType: gridType,
+            vocalType: (gridType === 'vocal' && Number(weekConfig?.vocal30 || 0) > 0 && Number(weekConfig?.vocal || 0) === 0) ? '30' : '60'
           });
         }
       }
@@ -875,6 +876,25 @@ function App() {
 
   const handleSlotClick = (dateStr, hourStr, dayOfWeek, existingItem = null, gridType = 'master') => {
     const editingName = existingItem ? existingItem.studentName : null;
+
+    // [New] 보컬 정산 완료 여부 체크
+    if (gridType === 'vocal') {
+      const targetDate = new Date(dateStr);
+      const targetMonthPrefix = `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}`;
+
+      const wagePaid = expenses.some(e =>
+        e.category === '임금' &&
+        e.isVocalWage &&
+        e.targetMonth === targetMonthPrefix &&
+        e.paidDate
+      );
+
+      if (wagePaid) {
+        alert("해당 월의 보컬 정산(지급)이 완료되어 수정할 수 없습니다.\n수정이 필요하면 정산 내역을 확인해주세요.");
+        return;
+      }
+    }
+
     const options = generateAvailableStudents(dateStr, editingName, gridType);
     setAvailableStudents(options);
 
@@ -903,7 +923,9 @@ function App() {
         isFixed: existingItem.isFixed || false,
         status: existingItem.status || '',
         gridType: existingItem.gridType || 'master',
-        isVocalProgress: existingItem.isVocalProgress || false
+        isVocalProgress: existingItem.isVocalProgress || false,
+        vocalType: existingItem.vocalType || '60',
+        masterType: existingItem.masterType || '60'
       });
     } else {
       // [NEW] 이동 중인 스케줄이 있다면 해당 정보로 폼 초기화
@@ -917,13 +939,16 @@ function App() {
           isFixed: movingSchedule.isFixed || false,
           status: movingSchedule.status || '',
           gridType: gridType, // 이동하려는 새 슬롯의 gridType 적용
-          isVocalProgress: movingSchedule.isVocalProgress || false
+          isVocalProgress: movingSchedule.isVocalProgress || false,
+          vocalType: movingSchedule.vocalType || '60',
+          masterType: movingSchedule.masterType || '60'
         });
       } else {
         setScheduleTab('lesson');
         setScheduleForm({
           studentId: '', studentName: '', memo: '', category: '레슨',
-          isFixed: false, status: '', gridType, isVocalProgress: false
+          isFixed: false, status: '', gridType, isVocalProgress: false,
+          vocalType: '60', masterType: '60'
         });
       }
       setSelectedSlot({ date: dateStr, time: hourStr, minute: '00', dayOfWeek, id: null, gridType });
@@ -1018,6 +1043,93 @@ function App() {
       fixedStartDate: scheduleForm.isFixed ? (selectedSlot.date || formatDateLocal(new Date())) : null,
       relatedScheduleId: selectedMakeupId || null
     };
+
+    // [NEW] 로테이션 정보 '박제'(Freeze) 로직
+    // 상태가 완료/지각/결석이고 학생이 지정된 경우, 현재 시점의 로테이션 정보를 계산하여 데이터에 포함합니다.
+    const isCompletedStatus = (scheduleForm.status === 'completed' || scheduleForm.status === 'late' || scheduleForm.status === 'absent');
+    if (isCompletedStatus && scheduleForm.studentId && !scheduleForm.isFixed) {
+      try {
+        const studentRef = doc(db, "students", scheduleForm.studentId);
+        const studentSnap = await getDoc(studentRef);
+        if (studentSnap.exists()) {
+          const student = { id: studentSnap.id, ...studentSnap.data() };
+
+          let reqM = 0; let reqV = 0;
+          (student.schedule || []).forEach(w => {
+            reqM += Number(w.master || 0);
+            reqV += Number(w.vocal || 0) + Number(w.vocal30 || 0);
+          });
+
+          const bufferDate = new Date(student.firstDate);
+          bufferDate.setDate(bufferDate.getDate() - 7);
+          const bufferDateStr = formatDateLocal(bufferDate);
+
+          // [FIX] attSchedules 대신 Firestore에서 직접 내역을 가져와 정확성을 보장합니다.
+          const q = query(
+            collection(db, "schedules"),
+            where("studentId", "==", student.id),
+            where("date", ">=", bufferDateStr),
+            where("status", "in", ["completed", "late", "absent"])
+          );
+          const querySnap = await getDocs(q);
+          const allScheds = querySnap.docs
+            .map(d => ({ id: d.id, ...d.data() }))
+            .filter(s => s.id !== selectedSlot.id); // 기존 본인 데이터 제외
+
+          // 현재 저장하려는 데이터를 가상으로 추가하여 인덱스 계산
+          const virtualCurrent = {
+            id: selectedSlot.id || 'TEMP_ID',
+            date: selectedSlot.date,
+            time: timeToSave,
+            gridType: finalGridType,
+            vocalType: scheduleForm.vocalType,
+            masterType: scheduleForm.masterType
+          };
+          const combined = [...allScheds, virtualCurrent]
+            .sort((a, b) => new Date((a.date || '') + 'T' + (a.time || '00:00')) - new Date((b.date || '') + 'T' + (b.time || '00:00')));
+
+          const isTargetMaster = (finalGridType === 'master' || !finalGridType);
+          let typeScheds = [];
+          let currentWeightedCount = 0;
+          let limit = 0;
+
+          if (isTargetMaster) {
+            limit = reqM || 1;
+            for (const s of combined) {
+              if (s.gridType === 'master' || !s.gridType) {
+                const weight = s.masterType === '30' ? 0.5 : 1;
+                typeScheds.push({ ...s, _weight: weight });
+              }
+            }
+          } else {
+            limit = reqV || 1;
+            for (const s of combined) {
+              if (s.gridType === 'vocal') {
+                const weight = s.vocalType === '30' ? 0.5 : 1;
+                typeScheds.push({ ...s, _weight: weight });
+              }
+            }
+          }
+
+          let myWeightedIndex = -1;
+          for (let i = 0; i < typeScheds.length; i++) {
+            if (typeScheds[i].id === virtualCurrent.id) {
+              myWeightedIndex = currentWeightedCount;
+              break;
+            }
+            currentWeightedCount += typeScheds[i]._weight;
+          }
+
+          if (myWeightedIndex !== -1) {
+            const rotIdx = Math.floor(myWeightedIndex / limit);
+            data.rotationIndex = rotIdx;
+            data.rotationLabel = `R${rotIdx + 1}`;
+          }
+        }
+      } catch (e) {
+        console.error("Rotation Freeze Error:", e);
+      }
+    }
 
     if (scheduleTab === 'personal') {
       data.studentId = '';
@@ -1168,6 +1280,18 @@ function App() {
 
       const timeToSave = `${selectedSlot.time}:${selectedMinute}`;
       const saveDate = selectedSlot.date; // New Date
+
+      // [New] 보컬 정산 완료 여부 체크 (이동 시에도 체크)
+      const isTargetVocal = selectedSlot.gridType === 'vocal' || movingSchedule.gridType === 'vocal';
+      if (isTargetVocal) {
+        const targetDateObj = new Date(saveDate);
+        const targetMonthPrefix = `${targetDateObj.getFullYear()}-${String(targetDateObj.getMonth() + 1).padStart(2, '0')}`;
+        const wagePaid = expenses.some(e => e.category === '임금' && e.isVocalWage && e.targetMonth === targetMonthPrefix && e.paidDate);
+        if (wagePaid) {
+          alert("해당 월의 보컬 정산(지급)이 완료되어 일정을 이동할 수 없습니다.");
+          return;
+        }
+      }
 
       const updates = {
         ...scheduleForm,
@@ -1379,7 +1503,45 @@ function App() {
   const handlePhoneChange = (e) => { const v = e.target.value.replace(/[^0-9]/g, ''); let f = v; if (v.length > 3 && v.length <= 7) f = `${v.slice(0, 3)}-${v.slice(3)}`; else if (v.length > 7) f = `${v.slice(0, 3)}-${v.slice(3, 7)}-${v.slice(7, 11)}`; setFormData({ ...formData, phone: f }); };
   const handleScheduleChange = (i, f, v) => { const n = [...formData.schedule]; n[i][f] = v; setFormData({ ...formData, schedule: n }); };
   const handleRateChange = (f, v) => { const r = v.replace(/,/g, ''); if (!isNaN(r)) setFormData({ ...formData, rates: { ...formData.rates, [f]: r } }); };
-  const handleSubmit = async () => { if (!formData.name) return alert("이름"); try { if (editingId) await updateDoc(doc(db, "students", editingId), formData); else { const amt = calculateTotalAmount(formData); const up = { id: Date.now().toString(), targetDate: formData.firstDate, amount: amt, createdAt: new Date().toISOString() }; await addDoc(collection(db, "students"), { ...formData, lastDate: formData.firstDate, isActive: true, isPaid: false, unpaidList: [up], createdAt: new Date() }); } closeModal(); } catch (e) { alert("오류"); } };
+  const handleSubmit = async () => {
+    if (!formData.name) return alert("이름을 입력해주세요.");
+    if (!formData.firstDate) return alert("등록일을 입력해주세요.");
+
+    try {
+      if (editingId) {
+        // [수정]
+        await updateDoc(doc(db, "students", editingId), formData);
+      } else {
+        // [신규 등록]
+        const amt = calculateTotalAmount(formData);
+
+        // [NEW] 최초 등록 시 미수금 내역 자동 생성
+        const initialUnpaid = {
+          id: Date.now().toString(),
+          targetDate: formData.firstDate, // 등록일 기준
+          amount: amt,
+          createdAt: new Date().toISOString(),
+          memo: '최초 등록금' // 명시적 메모 추가
+        };
+
+        const newStudentData = {
+          ...formData,
+          lastDate: formData.firstDate,
+          isActive: true,
+          isPaid: false,
+          unpaidList: [initialUnpaid], // 리스트에 추가
+          createdAt: new Date()
+        };
+
+        await addDoc(collection(db, "students"), newStudentData);
+      }
+      closeModal();
+      fetchSettlementData(); // 데이터 갱신
+    } catch (e) {
+      console.error(e);
+      alert("저장 중 오류가 발생했습니다: " + e.message);
+    }
+  };
   const handleDelete = async (id, n) => { if (window.confirm("삭제?")) await deleteDoc(doc(db, "students", id)); };
   const toggleStatus = async (s) => await updateDoc(doc(db, "students", s.id), { isActive: !s.isActive });
   const handleEditClick = (s) => { setEditingId(s.id); const sch = (s.schedule || initialFormState.schedule).map(w => ({ ...w, vocal30: w.vocal30 || '' })); setFormData({ ...initialFormState, ...s, schedule: sch, rates: s.rates || initialFormState.rates }); setIsModalOpen(true); };
@@ -1442,12 +1604,22 @@ function App() {
       .filter(s =>
         s.studentId === student.id &&
         s.date >= bufferDateStr &&
-        (s.status === 'completed' || s.status === 'late' || s.status === 'absent')
+        (s.status === 'completed' || s.status === 'late' || s.status === 'absent' || s.status === 'pending' || !s.status)
       )
       .sort((a, b) => new Date((a.date || '') + 'T' + (a.time || '00:00')) - new Date((b.date || '') + 'T' + (b.time || '00:00')));
 
-    const mScheds = allScheds.filter(s => s.gridType === 'master' || !s.gridType);
-    const vScheds = allScheds.filter(s => s.gridType === 'vocal');
+    const mScheds = [];
+    const vScheds = [];
+
+    for (const s of allScheds) {
+      if (s.gridType === 'master' || !s.gridType) {
+        const weight = s.masterType === '30' ? 0.5 : 1;
+        mScheds.push({ ...s, _weight: weight });
+      } else if (s.gridType === 'vocal') {
+        const weight = s.vocalType === '30' ? 0.5 : 1;
+        vScheds.push({ ...s, _weight: weight });
+      }
+    }
 
     const startDates = new Set();
 
@@ -1457,13 +1629,29 @@ function App() {
       let vStartDate = null;
 
       if (reqM > 0) {
-        const targetIdx = i * reqM;
-        if (targetIdx < mScheds.length) mStartDate = mScheds[targetIdx].date;
+        let currentWeightedCount = 0;
+        let mTargetIdx = -1;
+        for (let j = 0; j < mScheds.length; j++) {
+          if (currentWeightedCount >= i * reqM) {
+            mTargetIdx = j;
+            break;
+          }
+          currentWeightedCount += mScheds[j]._weight;
+        }
+        if (mTargetIdx !== -1) mStartDate = mScheds[mTargetIdx].date;
       }
 
       if (reqV > 0) {
-        const targetIdx = i * reqV;
-        if (targetIdx < vScheds.length) vStartDate = vScheds[targetIdx].date;
+        let currentWeightedCount = 0;
+        let vTargetIdx = -1;
+        for (let j = 0; j < vScheds.length; j++) {
+          if (currentWeightedCount >= i * reqV) {
+            vTargetIdx = j;
+            break;
+          }
+          currentWeightedCount += vScheds[j]._weight;
+        }
+        if (vTargetIdx !== -1) vStartDate = vScheds[vTargetIdx].date;
       }
 
       let rotationTriggerDate = null;
@@ -1510,25 +1698,49 @@ function App() {
     const target = allScheds.find(s => s.id === targetSchedId);
     if (!target) return { index: -1, label: '' };
 
+    // [NEW] 저장된 로테이션 정보가 있으면 우선 사용
+    if (target.rotationLabel) {
+      return { index: target.rotationIndex ?? -1, label: target.rotationLabel };
+    }
+
     const isTargetMaster = (target.gridType === 'master' || !target.gridType);
 
     let typeScheds = [];
     let limit = 0;
+    let currentWeightedCount = 0;
 
     if (isTargetMaster) {
       if (reqM === 0) return { index: 0, label: 'R1' };
-      typeScheds = allScheds.filter(s => (s.gridType === 'master' || !s.gridType));
       limit = reqM;
+      for (const s of allScheds) {
+        if (s.gridType === 'master' || !s.gridType) {
+          const weight = s.masterType === '30' ? 0.5 : 1;
+          typeScheds.push({ ...s, _weight: weight });
+        }
+      }
     } else {
       if (reqV === 0) return { index: 0, label: 'R1' };
-      typeScheds = allScheds.filter(s => s.gridType === 'vocal');
       limit = reqV;
+      for (const s of allScheds) {
+        if (s.gridType === 'vocal') {
+          const weight = s.vocalType === '30' ? 0.5 : 1;
+          typeScheds.push({ ...s, _weight: weight });
+        }
+      }
     }
 
-    const myIndex = typeScheds.findIndex(s => s.id === targetSchedId);
-    if (myIndex === -1) return { index: -1, label: '' };
+    let myWeightedIndex = -1;
+    for (let i = 0; i < typeScheds.length; i++) {
+      if (typeScheds[i].id === targetSchedId) {
+        myWeightedIndex = currentWeightedCount;
+        break;
+      }
+      currentWeightedCount += typeScheds[i]._weight;
+    }
 
-    const rotationIndex = Math.floor(myIndex / limit);
+    if (myWeightedIndex === -1) return { index: -1, label: '' };
+
+    const rotationIndex = Math.floor(myWeightedIndex / limit);
 
     return { index: rotationIndex, label: `R${rotationIndex + 1}` };
   };
@@ -1869,10 +2081,9 @@ function App() {
                                       : 'bg-emerald-200 text-emerald-950 border-emerald-400';
                                   }
                                   else if (item.category === '레슨') {
-                                    // 레슨: 쌤(오렌지 진하게), 짱구(블루 선명하게)
                                     statusStyle = isVocal
                                       ? 'bg-blue-100 text-blue-700 border-blue-300'
-                                      : 'bg-orange-200 text-orange-950 border-orange-400 font-black';
+                                      : (item.masterType === '30' ? 'bg-[linear-gradient(135deg,#f97316_50%,#ffedd5_50%)] text-orange-950 border-orange-400 font-black' : 'bg-orange-200 text-orange-950 border-orange-400 font-black');
                                   }
                                   else {
                                     statusStyle = isVocal
@@ -1901,7 +2112,7 @@ function App() {
                                       ) : (
                                         <>
                                           {item.studentName || item.category}
-                                          {item.isVocalProgress && <span className="text-pink-600 ml-1">V</span>}
+                                          {item.isVocalProgress && <span className={`${item.vocalType === '30' ? 'text-green-600' : 'text-pink-600'} ml-1 font-extrabold`}>V</span>}
                                           {!item.isGhost && item.memo && (
                                             item.memo === "추가수업"
                                               ? <FaPlus className="text-gray-600 ml-1 inline text-[10px]" />
@@ -2318,7 +2529,7 @@ function App() {
                                     targetUiDate = dStr;
                                     // 주의: 같은 주에 '결제완료'나 '청구중'이 이미 있다면 버튼을 덮어쓰지 않도록 
                                     // 루프를 계속 돌지 않고 여기서 break 할 수도 있지만,
-                                    // 날짜가 겹치지 않는다면 버튼이 떠야 하므로 break는 신중해야 함.
+                                    // 날짜가 겹치지 않는다면 버튼이 떠야 하므로 break.
                                     // 하지만 보통 한 주에 로테이션 시작이 두 번일 수는 없으므로 break.
                                     break;
                                   }
@@ -2344,8 +2555,12 @@ function App() {
                                 );
                               });
 
-                              const extraMCount = weekSchedules.filter(s => (s.gridType === 'master' || !s.gridType) && s.category !== '상담' && s.memo && s.memo.includes('추가')).length;
-                              const extraVCount = weekSchedules.filter(s => s.gridType === 'vocal' && s.memo && s.memo.includes('추가')).length;
+                              const extraMCount = weekSchedules
+                                .filter(s => (s.gridType === 'master' || !s.gridType) && s.category !== '상담' && s.memo && s.memo.includes('추가'))
+                                .reduce((acc, s) => acc + (s.masterType === '30' ? 0.5 : 1), 0);
+                              const extraVCount = weekSchedules
+                                .filter(s => s.gridType === 'vocal' && s.memo && s.memo.includes('추가'))
+                                .reduce((acc, s) => acc + (s.vocalType === '30' ? 0.5 : 1), 0);
 
                               const mTotal = mCountBasic + extraMCount;
                               const vTotal = vCountBasic + extraVCount;
@@ -2423,7 +2638,7 @@ function App() {
                                   } else {
                                     // 로테이션 정보 없음 (기본)
                                     boxClass = isMaster
-                                      ? "bg-gray-100 border-solid border-gray-300 text-gray-500"
+                                      ? (sched.masterType === '30' ? "bg-[linear-gradient(135deg,#f97316_50%,#ffedd5_50%)] border-solid border-orange-300 text-orange-950" : "bg-gray-100 border-solid border-gray-300 text-gray-500")
                                       : "bg-white border-solid border-gray-200 text-gray-500";
                                   }
                                   // ----------------------------------------
@@ -2520,12 +2735,12 @@ function App() {
                                         {/* 1. Master 라인 (윗줄 고정) */}
                                         {/* min-h-[24px]로 설정하여 M 수업이 0개여도 높이를 확보해 V가 위로 올라오는 것을 방지합니다. */}
                                         <div className="flex gap-1 justify-center flex-wrap min-h-[24px]">
-                                          {mTotal > 0 && Array.from({ length: mTotal }).map((_, idx) => renderSlot('M', idx, completedM))}
+                                          {Array.from({ length: Math.ceil(mTotal) }).map((_, idx) => renderSlot('M', idx, completedM))}
                                         </div>
 
                                         {/* 2. Vocal 라인 (아랫줄 고정) */}
                                         <div className="flex gap-1 justify-center flex-wrap min-h-[24px]">
-                                          {vTotal > 0 && Array.from({ length: vTotal }).map((_, idx) => renderSlot('V', idx, completedV))}
+                                          {Array.from({ length: Math.ceil(vTotal) }).map((_, idx) => renderSlot('V', idx, completedV))}
                                         </div>
                                       </>
                                     ) : (
@@ -2854,7 +3069,7 @@ function App() {
                                 <button onClick={() => handleEditExpenseClick(item)} className="text-gray-300 hover:text-blue-500">
                                   <FaEdit />
                                 </button>
-                                <button onClick={() => handleExpenseDelete(item.id)} className="text-gray-300 hover:text-red-500">
+                                <button onClick={() => handleExpenseDelete(item.id)} className={`text-gray-300 ${item.paidDate ? 'cursor-not-allowed opacity-30' : 'hover:text-red-500'}`} disabled={!!item.paidDate}>
                                   <FaTimesCircle />
                                 </button>
                               </div>
@@ -2873,7 +3088,10 @@ function App() {
                         .filter(s => s.gridType === 'vocal' && s.status === 'completed' && s.isVocalProgress && s.date.startsWith(currentMonthPrefix))
                         .sort((a, b) => a.date.localeCompare(b.date));
 
-                      const totalVocalWage = vocalCompletedEvents.length * 30000;
+                      const totalVocalWage = vocalCompletedEvents.reduce((acc, curr) => {
+                        const cost = (curr.vocalType === '30') ? 15000 : 30000;
+                        return acc + cost;
+                      }, 0);
 
                       const existingWageExpense = expenses.find(e =>
                         e.category === '임금' && e.isVocalWage && e.targetMonth === currentMonthPrefix
@@ -2886,7 +3104,7 @@ function App() {
                             <span className="text-blue-600">{formatCurrency(totalVocalWage)}원 <span className="text-xs text-gray-400">({vocalCompletedEvents.length}건)</span></span>
                           </h4>
                           <div className="text-xs text-gray-500 mb-2">
-                            {currentDate.getMonth() + 1}월 보컬추가 : 회당 30,000원 x {vocalCompletedEvents.length}건 = {formatCurrency(totalVocalWage)}원
+                            {currentDate.getMonth() + 1}월 보컬추가 : {formatCurrency(totalVocalWage)}원 (1H: 30,000 / 30m: 15,000)
                           </div>
 
                           <div className="bg-white rounded-lg border border-gray-200 mb-3 max-h-32 overflow-y-auto">
@@ -2901,7 +3119,7 @@ function App() {
                                         {ev.date.substring(5).replace('-', '월') + '일'}
                                       </td>
                                       <td className="font-bold text-gray-700">
-                                        {ev.studentName} 학생
+                                        {ev.studentName} ({ev.vocalType === '30' ? '30분' : '1시간'})
                                       </td>
                                     </tr>
                                   ))}
@@ -2939,7 +3157,7 @@ function App() {
                                   if (!window.confirm(`${currentDate.getMonth() + 1}월 보컬 수업료 ${formatCurrency(totalVocalWage)}원을 지출로 등록하시겠습니까?`)) return;
                                   try {
                                     await addDoc(collection(db, "expenses"), {
-                                      date: formatDateLocal(new Date()),
+                                      date: formatDateLocal(currentDate), // [FIX] 현재 보고 있는 월의 날짜로 등록
                                       category: '임금',
                                       amount: totalVocalWage,
                                       memo: `${currentDate.getMonth() + 1}월 보컬 수업료 (${vocalCompletedEvents.length}건)`,
@@ -3037,26 +3255,54 @@ function App() {
                     reqV += Number(w.vocal || 0) + Number(w.vocal30 || 0);
                   });
                   const allCompleted = studentFullHistory.filter(s =>
-                    s.date >= viewingStudentAtt.firstDate &&
+                    // [FIX] 등록일 조건 제거: 과거 내역 포함
                     (s.status === 'completed' || s.status === 'late' || s.status === 'absent')
                   );
                   const target = allCompleted.find(s => s.id === targetSchedId);
                   if (!target) return { index: -1, label: '' };
 
+                  // [NEW] 저장된 로테이션 정보가 있으면 우선 사용
+                  if (target.rotationLabel) {
+                    return { index: target.rotationIndex ?? -1, label: target.rotationLabel };
+                  }
+
                   const isTargetMaster = (target.gridType === 'master' || !target.gridType);
-                  let typeScheds = [], limit = 0;
+                  let typeScheds = [];
+                  let limit = 0;
+                  let currentWeightedCount = 0;
+
                   if (isTargetMaster) {
                     if (reqM === 0) return { index: 0, label: 'R1' };
-                    typeScheds = allCompleted.filter(s => (s.gridType === 'master' || !s.gridType));
                     limit = reqM;
+                    for (const s of allCompleted) {
+                      if (s.gridType === 'master' || !s.gridType) {
+                        const weight = s.masterType === '30' ? 0.5 : 1;
+                        typeScheds.push({ ...s, _weight: weight });
+                      }
+                    }
                   } else {
                     if (reqV === 0) return { index: 0, label: 'R1' };
-                    typeScheds = allCompleted.filter(s => s.gridType === 'vocal');
                     limit = reqV;
+                    for (const s of allCompleted) {
+                      if (s.gridType === 'vocal') {
+                        const weight = s.vocalType === '30' ? 0.5 : 1;
+                        typeScheds.push({ ...s, _weight: weight });
+                      }
+                    }
                   }
-                  const myIndex = typeScheds.findIndex(s => s.id === targetSchedId);
-                  if (myIndex === -1) return { index: -1, label: '' };
-                  const rotationIndex = Math.floor(myIndex / limit);
+
+                  let myWeightedIndex = -1;
+                  for (let i = 0; i < typeScheds.length; i++) {
+                    if (typeScheds[i].id === targetSchedId) {
+                      myWeightedIndex = currentWeightedCount;
+                      break;
+                    }
+                    currentWeightedCount += typeScheds[i]._weight;
+                  }
+
+                  if (myWeightedIndex === -1) return { index: -1, label: '' };
+
+                  const rotationIndex = Math.floor(myWeightedIndex / limit);
                   return { index: rotationIndex, label: `R${rotationIndex + 1}` };
                 };
 
@@ -3088,22 +3334,48 @@ function App() {
 
                   const validScheds = studentFullHistory.filter(sch =>
                     sch.date >= bufferDateStr &&
-                    (sch.status === 'completed' || sch.status === 'late' || sch.status === 'absent')
+                    (sch.status === 'completed' || sch.status === 'late' || sch.status === 'absent' || sch.status === 'pending' || !sch.status)
                   );
 
-                  const mScheds = validScheds.filter(sch => sch.gridType === 'master' || !sch.gridType);
-                  const vScheds = validScheds.filter(sch => sch.gridType === 'vocal');
+                  const mScheds = [];
+                  const vScheds = [];
+
+                  for (const sch of validScheds) {
+                    if (sch.gridType === 'master' || !sch.gridType) {
+                      const weight = sch.masterType === '30' ? 0.5 : 1;
+                      mScheds.push({ ...sch, _weight: weight });
+                    } else if (sch.gridType === 'vocal') {
+                      const weight = sch.vocalType === '30' ? 0.5 : 1;
+                      vScheds.push({ ...sch, _weight: weight });
+                    }
+                  }
 
                   const starts = new Set();
                   for (let i = 1; i <= 100; i++) {
                     let mDate = null, vDate = null;
                     if (reqM > 0) {
-                      const idx = i * reqM;
-                      if (idx < mScheds.length) mDate = mScheds[idx].date;
+                      let currentWeightedCount = 0;
+                      let mTargetIdx = -1;
+                      for (let j = 0; j < mScheds.length; j++) {
+                        if (currentWeightedCount >= i * reqM) {
+                          mTargetIdx = j;
+                          break;
+                        }
+                        currentWeightedCount += mScheds[j]._weight;
+                      }
+                      if (mTargetIdx !== -1) mDate = mScheds[mTargetIdx].date;
                     }
                     if (reqV > 0) {
-                      const idx = i * reqV;
-                      if (idx < vScheds.length) vDate = vScheds[idx].date;
+                      let currentWeightedCount = 0;
+                      let vTargetIdx = -1;
+                      for (let j = 0; j < vScheds.length; j++) {
+                        if (currentWeightedCount >= i * reqV) {
+                          vTargetIdx = j;
+                          break;
+                        }
+                        currentWeightedCount += vScheds[j]._weight;
+                      }
+                      if (vTargetIdx !== -1) vDate = vScheds[vTargetIdx].date;
                     }
 
                     let trigger = null;
@@ -3154,9 +3426,9 @@ function App() {
 
                               for (let d = new Date(w.start); d <= w.end; d.setDate(d.getDate() + 1)) {
                                 const dStr = formatDateLocal(d);
-                                if (viewingStudentAtt.lastDate === dStr) { uiState = 'paid'; targetUiDate = dStr; break; }
                                 const isUnpaid = (viewingStudentAtt.unpaidList || []).some(u => u.targetDate === dStr);
                                 if (isUnpaid) { uiState = 'billed'; targetUiDate = dStr; break; }
+                                if (viewingStudentAtt.lastDate === dStr) { uiState = 'paid'; targetUiDate = dStr; break; }
                                 if (localRotationStarts.has(dStr)) { uiState = 'register'; targetUiDate = dStr; break; }
                               }
 
@@ -3175,7 +3447,7 @@ function App() {
                                       {completedM.length > 0 ? completedM.map((s, idx) => {
                                         const rotationInfo = getLocalRotationInfo(s.id);
                                         const dateShort = formatMonthDay(s.date);
-                                        let boxClass = rotationInfo.index !== -1 ? `${ROTATION_COLORS[rotationInfo.index % ROTATION_COLORS.length].m} border-solid font-bold text-gray-800` : "bg-gray-100 border-solid border-gray-300 text-gray-500";
+                                        let boxClass = rotationInfo.index !== -1 ? `${ROTATION_COLORS[rotationInfo.index % ROTATION_COLORS.length].m} border-solid font-bold text-gray-800` : (s.masterType === '30' ? "bg-[linear-gradient(135deg,#f97316_50%,#ffedd5_50%)] border-solid border-orange-300 text-orange-950" : "bg-gray-100 border-solid border-gray-300 text-gray-500");
                                         let icon = null; let statusColor = "text-gray-400";
                                         if (s.status === 'completed') { icon = <FaCheck className="text-[9px]" />; statusColor = "text-green-700"; }
                                         else if (s.status === 'absent') { icon = <FaTimesCircle className="text-[9px]" />; statusColor = "text-red-600"; boxClass += " text-red-600 bg-red-50 border-red-200"; }
@@ -3236,7 +3508,24 @@ function App() {
                 </label>
               </div>
 
-              {/* 탭 버튼 색상도 배경에 맞춰 살짝 조정 */}
+              {/* [NEW] Master 30분 진행 체크박스 (Master 그리드일 때만 노출) */}
+              {scheduleForm.gridType === 'master' && (
+                <div className="mb-4">
+                  <label className={`flex items-center justify-between p-3 rounded-xl border-2 transition-all cursor-pointer ${scheduleForm.masterType === '30' ? 'bg-orange-50 border-orange-200 text-orange-700' : 'bg-white border-gray-100 text-gray-400 hover:border-gray-200'}`}>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        className="checkbox checkbox-sm checkbox-warning rounded-md"
+                        checked={scheduleForm.masterType === '30'}
+                        onChange={(e) => setScheduleForm(prev => ({ ...prev, masterType: e.target.checked ? '30' : '60' }))}
+                      />
+                      <span className="font-extrabold">30분만 진행 (0.5회차 인정)</span>
+                    </div>
+                  </label>
+                </div>
+              )}
+
+              {/* [수정] Vocal 추가 수업 시 시간 선택 라디오 */}
               <div className={`tabs tabs-boxed p-1 mb-4 ${scheduleForm.gridType === 'master' ? 'bg-gray-100' : 'bg-green-100/50'}`}>
                 <a className={`tab flex-1 ${scheduleTab === 'lesson' ? 'tab-active bg-white text-black font-bold shadow-sm' : ''}`} onClick={() => handleTabChange('lesson')}>수강생 레슨</a>
                 <a className={`tab flex-1 ${scheduleTab === 'personal' ? 'tab-active bg-white text-black font-bold shadow-sm' : ''}`} onClick={() => handleTabChange('personal')}>개인 일정</a>
@@ -3288,11 +3577,39 @@ function App() {
                 )}
                 <input type="text" placeholder="메모" className="input input-sm border-gray-200 bg-white" value={scheduleForm.memo} onChange={(e) => setScheduleForm({ ...scheduleForm, memo: e.target.value })} />
 
+                {/* [FIX] 보컬 진행 시 시간 선택 (1시간 / 30분) */}
                 {scheduleTab === 'lesson' && scheduleForm.gridType === 'vocal' && (
-                  <label className="label cursor-pointer justify-start gap-2 mt-2">
-                    <input type="checkbox" className="checkbox checkbox-sm checkbox-primary" checked={scheduleForm.isVocalProgress} onChange={(e) => setScheduleForm({ ...scheduleForm, isVocalProgress: e.target.checked })} />
-                    <span className="label-text font-bold text-gray-700">보컬진행</span>
-                  </label>
+                  <div className="flex flex-col gap-2 mt-2 bg-white/50 p-2 rounded-xl border border-gray-100">
+                    <label className="label cursor-pointer justify-start gap-2 pb-0">
+                      <input type="checkbox" className="checkbox checkbox-sm checkbox-primary" checked={scheduleForm.isVocalProgress} onChange={(e) => setScheduleForm({ ...scheduleForm, isVocalProgress: e.target.checked })} />
+                      <span className="label-text font-bold text-gray-700">보컬진행 (추가수업)</span>
+                    </label>
+
+                    {scheduleForm.isVocalProgress && (
+                      <div className="flex gap-4 pl-8">
+                        <label className="flex items-center gap-1 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="vocalType"
+                            className="radio radio-xs radio-primary"
+                            checked={scheduleForm.vocalType !== '30'} // 기본값 or 60
+                            onChange={() => setScheduleForm({ ...scheduleForm, vocalType: '60' })}
+                          />
+                          <span className="text-xs font-bold text-gray-600">1시간 (3.0)</span>
+                        </label>
+                        <label className="flex items-center gap-1 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="vocalType"
+                            className="radio radio-xs radio-secondary"
+                            checked={scheduleForm.vocalType === '30'}
+                            onChange={() => setScheduleForm({ ...scheduleForm, vocalType: '30' })}
+                          />
+                          <span className="text-xs font-bold text-gray-600">30분 (1.5)</span>
+                        </label>
+                      </div>
+                    )}
+                  </div>
                 )}
 
                 {scheduleTab === 'lesson' && (
