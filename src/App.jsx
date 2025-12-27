@@ -75,17 +75,64 @@ function App() {
 
   // [VISUALIZATION] 로테이션 색상 정의 (M은 진하게, V는 연하게)
   const ROTATION_COLORS = [
-    { v: 'bg-blue-50 border-blue-200', m: 'bg-blue-200 border-blue-300' },   // 1. 파랑
-    { v: 'bg-orange-50 border-orange-200', m: 'bg-orange-200 border-orange-300' }, // 2. 주황
-    { v: 'bg-green-50 border-green-200', m: 'bg-green-200 border-green-300' },   // 3. 초록
-    { v: 'bg-purple-50 border-purple-200', m: 'bg-purple-200 border-purple-300' }, // 4. 보라
-    { v: 'bg-pink-50 border-pink-200', m: 'bg-pink-200 border-pink-300' },     // 5. 핑크
-    { v: 'bg-yellow-50 border-yellow-200', m: 'bg-yellow-200 border-yellow-300' }, // 6. 노랑
-    { v: 'bg-teal-50 border-teal-200', m: 'bg-teal-200 border-teal-300' },     // 7. 청록
-    { v: 'bg-indigo-50 border-indigo-200', m: 'bg-indigo-200 border-indigo-300' }, // 8. 남색
-    { v: 'bg-red-50 border-red-200', m: 'bg-red-200 border-red-300' },        // 9. 빨강
-    { v: 'bg-lime-50 border-lime-200', m: 'bg-lime-200 border-lime-300' }       // 10. 라임 (기존 회색에서 변경)
+    { v: 'bg-blue-50 border-blue-200', m: 'bg-blue-200 border-blue-300', v_hex: '#eff6ff', m_hex: '#bfdbfe' },    // 1. 파랑 (Blue 50 / 200)
+    { v: 'bg-orange-50 border-orange-200', m: 'bg-orange-200 border-orange-300', v_hex: '#fff7ed', m_hex: '#fed7aa' }, // 2. 주황 (Orange 50 / 200)
+    { v: 'bg-green-50 border-green-200', m: 'bg-green-200 border-green-300', v_hex: '#f0fdf4', m_hex: '#bbf7d0' },  // 3. 초록 (Green 50 / 200)
+    { v: 'bg-purple-50 border-purple-200', m: 'bg-purple-200 border-purple-300', v_hex: '#faf5ff', m_hex: '#e9d5ff' }, // 4. 보라 (Purple 50 / 200)
+    { v: 'bg-pink-50 border-pink-200', m: 'bg-pink-200 border-pink-300', v_hex: '#fdf2f8', m_hex: '#fbcfe8' },    // 5. 핑크 (Pink 50 / 200)
+    { v: 'bg-yellow-50 border-yellow-200', m: 'bg-yellow-200 border-yellow-300', v_hex: '#fefce8', m_hex: '#fef08a' }, // 6. 노랑 (Yellow 50 / 200)
+    { v: 'bg-teal-50 border-teal-200', m: 'bg-teal-200 border-teal-300', v_hex: '#f0fdfa', m_hex: '#99f6e4' },    // 7. 청록 (Teal 50 / 200)
+    { v: 'bg-indigo-50 border-indigo-200', m: 'bg-indigo-200 border-indigo-300', v_hex: '#eef2ff', m_hex: '#c7d2fe' }, // 8. 남색 (Indigo 50 / 200)
+    { v: 'bg-red-50 border-red-200', m: 'bg-red-200 border-red-300', v_hex: '#fef2f2', m_hex: '#fecaca' },      // 9. 빨강 (Red 50 / 200)
+    { v: 'bg-lime-50 border-lime-200', m: 'bg-lime-200 border-lime-300', v_hex: '#f7fee7', m_hex: '#d9f99d' }     // 10. 라임 (Lime 50 / 200)
   ];
+
+  const getBadgeStyle = (gridType, classType, rotationIndex, status, context = 'calendar') => {
+    const isVocal = gridType === 'vocal';
+    const is30 = String(classType) === '30'; // 숫자/문자열 모두 대응
+    const isSpecialStatus = status && status !== 'completed' && status !== 'late' && status !== 'absent' && status !== 'pending';
+
+    // 1. [History 전용] 배정만 된 경우 연한 그레이 2톤
+    if (context === 'history' && is30 && (status === 'pending' || !status)) {
+      return "bg-[linear-gradient(135deg,#e5e7eb_50%,#f9fafb_50%)] border-gray-300 text-gray-400 font-bold";
+    }
+
+    // 2. [공통] 로테이션 정보가 있으면 최우선 적용 (단, 특수 상태 제외)
+    // History context에서는 완료된 30분 수업도 이 로직을 타서 로테이션 컬러가 나와야 함.
+    if (rotationIndex !== undefined && rotationIndex !== null && rotationIndex !== -1 && !isSpecialStatus) {
+      const idx = Math.max(0, parseInt(rotationIndex)) % ROTATION_COLORS.length;
+      const colors = ROTATION_COLORS[idx];
+
+      if (colors) {
+        if (is30) {
+          const borderClass = colors.m.split(' ').find(c => c.startsWith('border-')) || (isVocal ? 'border-blue-400' : 'border-orange-400');
+          // [최종 개선] 흰색 선 대신 아주 연한 블랙 라인(10%)을 경계로 사용하여 밝은 테마에서도 대각선이 확실히 보이도록 수정
+          return `bg-[linear-gradient(135deg,${colors.m_hex}_49.5%,rgba(0,0,0,0.1)_49.5%,rgba(0,0,0,0.1)_50.5%,${colors.v_hex}_50.5%)] ${borderClass} border-[1.5px] font-bold text-gray-800`;
+        }
+        return `${isVocal ? colors.v : colors.m} font-bold text-gray-800`;
+      }
+    }
+
+    // 3. [Calendar 전용] 완료/결석/지각 상태의 30분 수업 처리 (그레이/블랙 2톤)
+    if (context === 'calendar' && is30 && (status === 'completed' || status === 'late' || status === 'absent')) {
+      if (isVocal) {
+        // 보컬 완료 30분: 연한 그레이 대각선
+        return "bg-[linear-gradient(135deg,#9ca3af_50%,#f3f4f6_50%)] border-gray-400 text-gray-800 font-bold";
+      } else {
+        // 마스터 완료 30분: 다크 그레이/블랙 대각선
+        return "bg-[linear-gradient(135deg,#030712_50%,#374151_50%)] border-black text-white font-bold";
+      }
+    }
+
+    // Default styles (No rotation or special status or safety fallback)
+    if (isVocal) {
+      if (is30) return "bg-[linear-gradient(135deg,#bfdbfe_50%,#eff6ff_50%)] border-blue-300 text-blue-900 font-bold";
+      return "bg-blue-100 text-blue-700 border-blue-300";
+    } else {
+      if (is30) return "bg-[linear-gradient(135deg,#fed7aa_50%,#fff7ed_50%)] border-orange-300 text-orange-900 font-bold";
+      return "bg-orange-200 text-orange-950 border-orange-400 font-black";
+    }
+  };
 
   useEffect(() => {
 
@@ -95,6 +142,26 @@ function App() {
     });
     return () => unsubscribe();
   }, []);
+
+  const getWeightRemainderSuffix = (student) => {
+    if (!student) return "";
+    let mWeight = 0;
+    let vWeight = 0;
+
+    // 현재 캐시된 출석부 데이터에서 완료된 수업들의 가중치 합산
+    const relevantScheds = attSchedules.filter(s =>
+      s.studentId === student.id &&
+      (s.status === 'completed' || s.status === 'late' || s.status === 'absent')
+    );
+
+    relevantScheds.forEach(s => {
+      if (s.gridType === 'master' || !s.gridType) mWeight += (s.masterType === '30' ? 0.5 : 1);
+      else if (s.gridType === 'vocal') vWeight += (s.vocalType === '30' ? 0.5 : 1);
+    });
+
+    if (mWeight % 1 !== 0 || vWeight % 1 !== 0) return " (30분)";
+    return "";
+  };
 
 
   const handleLogin = async (e) => {
@@ -1624,7 +1691,7 @@ function App() {
     const startDates = new Set();
 
     // 100회차까지 돌면서 시작일 찾기
-    for (let i = 1; i <= 100; i++) {
+    for (let i = 0; i <= 100; i++) {
       let mStartDate = null;
       let vStartDate = null;
 
@@ -1675,6 +1742,7 @@ function App() {
 
   // [FIX] 로테이션 정보 계산 (시각화용, M/V 독립 카운트 방식)
   const getScheduleRotationInfo = (student, targetSchedId) => {
+    if (!student) return { index: -1, label: '' };
     let reqM = 0;
     let reqV = 0;
     (student.schedule || []).forEach(w => {
@@ -2052,9 +2120,15 @@ function App() {
                                 }
                                 else if (item.status === 'completed') {
                                   // 완료: 쌤(어두운 회색), 짱구(중간 회색) - 농도 상향
-                                  statusStyle = isVocal
-                                    ? 'bg-gray-300 text-gray-700 border-gray-400'
-                                    : 'bg-gray-800 text-white border-black';
+                                  const is30m = isVocal ? item.vocalType === '30' : item.masterType === '30';
+                                  if (is30m) {
+                                    const badgeClass = getBadgeStyle(isVocal ? 'vocal' : 'master', '30', -1, item.status);
+                                    statusStyle = `${badgeClass} border-solid`;
+                                  } else {
+                                    statusStyle = isVocal
+                                      ? 'bg-gray-300 text-gray-700 border-gray-400'
+                                      : 'bg-gray-800 text-white border-black';
+                                  }
                                   statusIcon = <FaCheckCircle className="text-[9px] text-green-400" />;
                                 }
                                 else if (item.status === 'reschedule' || item.status === 'reschedule_assigned') {
@@ -2081,9 +2155,12 @@ function App() {
                                       : 'bg-emerald-200 text-emerald-950 border-emerald-400';
                                   }
                                   else if (item.category === '레슨') {
-                                    statusStyle = isVocal
-                                      ? 'bg-blue-100 text-blue-700 border-blue-300'
-                                      : (item.masterType === '30' ? 'bg-[linear-gradient(135deg,#f97316_50%,#ffedd5_50%)] text-orange-950 border-orange-400 font-black' : 'bg-orange-200 text-orange-950 border-orange-400 font-black');
+                                    const is30m = isVocal ? item.vocalType === '30' : item.masterType === '30';
+                                    const itemStudent = students.find(s => s.id === item.studentId);
+                                    const rotationInfo = getScheduleRotationInfo(itemStudent, item.id);
+                                    const badgeClass = getBadgeStyle(isVocal ? 'vocal' : 'master', is30m ? '30' : '60', rotationInfo.index, item.status);
+
+                                    statusStyle = `${badgeClass} border-solid font-black`;
                                   }
                                   else {
                                     statusStyle = isVocal
@@ -2355,6 +2432,7 @@ function App() {
                             <td className="sticky left-0 bg-white group-hover:bg-gray-50 z-10 border-r border-gray-100 text-left pl-6 py-3 font-bold text-gray-800 align-middle border-b-[2px] border-gray-300">
                               <span className="text-gray-400 text-xs mr-2">{idx + 1}</span>
                               {student.name}
+                              {getWeightRemainderSuffix(student)}
                               {/* [NEW] 아티스트 카운트 표시 */}
                               {student.isArtist && <span className="text-[10px] text-purple-600 font-bold ml-1">({student.count || 0}회)</span>}
 
@@ -2625,22 +2703,12 @@ function App() {
                                   content = dateShort;
 
                                   // --- [VISUALIZATION] 로테이션 배경색 적용 (진하기 구분) ---
-                                  if (rotationInfo.index !== -1) {
-                                    const colorSet = ROTATION_COLORS[rotationInfo.index % ROTATION_COLORS.length];
-
-                                    // M이면 진한색(m), V면 연한색(v) 적용
-                                    const baseColor = isMaster ? colorSet.m : colorSet.v;
-
-                                    // 텍스트 색상도 M은 좀 더 진하게 (선택사항)
-                                    const textColor = isMaster ? 'text-gray-800' : 'text-gray-600';
-
-                                    boxClass = `${baseColor} border-solid font-bold ${textColor}`;
-                                  } else {
-                                    // 로테이션 정보 없음 (기본)
-                                    boxClass = isMaster
-                                      ? (sched.masterType === '30' ? "bg-[linear-gradient(135deg,#f97316_50%,#ffedd5_50%)] border-solid border-orange-300 text-orange-950" : "bg-gray-100 border-solid border-gray-300 text-gray-500")
-                                      : "bg-white border-solid border-gray-200 text-gray-500";
-                                  }
+                                  // (전략: 기존 boxClass 결정 로직 대체)
+                                  const isM = (sched.gridType === 'master' || !sched.gridType) && sched.category !== '상담';
+                                  const isV = sched.gridType === 'vocal';
+                                  const classT = isV ? sched.vocalType : sched.masterType;
+                                  const bStyle = getBadgeStyle(isV ? 'vocal' : 'master', classT, rotationInfo.index, sched.status);
+                                  boxClass = `${bStyle} border-solid`;
                                   // ----------------------------------------
 
                                   // 상태별 아이콘 및 텍스트 색상 처리 (기존 로직 유지)
@@ -3194,7 +3262,7 @@ function App() {
                 </button>
                 <div>
                   <h2 className="text-2xl font-extrabold text-gray-900 flex items-center gap-2">
-                    {viewingStudentAtt.name} <span className="text-lg font-normal text-gray-400">전체 히스토리 (20주 보기)</span>
+                    {viewingStudentAtt.name}{getWeightRemainderSuffix(viewingStudentAtt)} <span className="text-lg font-normal text-gray-400">전체 히스토리 (20주 보기)</span>
                   </h2>
                   <p className="text-xs text-gray-400 font-bold mt-1 flex gap-2">
                     <span>등록일: {viewingStudentAtt.firstDate}</span>
@@ -3255,55 +3323,61 @@ function App() {
                     reqV += Number(w.vocal || 0) + Number(w.vocal30 || 0);
                   });
                   const allCompleted = studentFullHistory.filter(s =>
-                    // [FIX] 등록일 조건 제거: 과거 내역 포함
-                    (s.status === 'completed' || s.status === 'late' || s.status === 'absent')
+                    // [FIX] 보류/미입력 항목도 포함하여 로테이션 순서 예측 (일관성 유지)
+                    (s.status === 'completed' || s.status === 'late' || s.status === 'absent' || s.status === 'pending' || !s.status || s.id === targetSchedId)
                   );
                   const target = allCompleted.find(s => s.id === targetSchedId);
                   if (!target) return { index: -1, label: '' };
 
                   // [NEW] 저장된 로테이션 정보가 있으면 우선 사용
                   if (target.rotationLabel) {
-                    return { index: target.rotationIndex ?? -1, label: target.rotationLabel };
+                    let idx = target.rotationIndex;
+                    // 기존 데이터에 index가 없는 경우 라벨에서 추출 시도 (R1 -> 0)
+                    if (idx === undefined || idx === null || idx === -1) {
+                      const match = target.rotationLabel.match(/R(\d+)/);
+                      if (match) idx = parseInt(match[1]) - 1;
+                    }
+                    return { index: idx ?? -1, label: target.rotationLabel };
                   }
 
                   const isTargetMaster = (target.gridType === 'master' || !target.gridType);
-                  let typeScheds = [];
                   let limit = 0;
-                  let currentWeightedCount = 0;
-
                   if (isTargetMaster) {
                     if (reqM === 0) return { index: 0, label: 'R1' };
                     limit = reqM;
-                    for (const s of allCompleted) {
-                      if (s.gridType === 'master' || !s.gridType) {
-                        const weight = s.masterType === '30' ? 0.5 : 1;
-                        typeScheds.push({ ...s, _weight: weight });
-                      }
-                    }
                   } else {
                     if (reqV === 0) return { index: 0, label: 'R1' };
                     limit = reqV;
-                    for (const s of allCompleted) {
-                      if (s.gridType === 'vocal') {
-                        const weight = s.vocalType === '30' ? 0.5 : 1;
-                        typeScheds.push({ ...s, _weight: weight });
-                      }
+                  }
+
+                  const typeScheds = [];
+                  for (const s of allCompleted) {
+                    const isV = s.gridType === 'vocal';
+                    const isM = s.gridType === 'master' || !s.gridType;
+                    if (isTargetMaster && isM) {
+                      const weight = s.masterType === '30' ? 0.5 : 1;
+                      typeScheds.push({ ...s, _weight: weight });
+                    } else if (!isTargetMaster && isV) {
+                      const weight = s.vocalType === '30' ? 0.5 : 1;
+                      typeScheds.push({ ...s, _weight: weight });
                     }
                   }
 
+                  let currentWeightedCount = 0;
                   let myWeightedIndex = -1;
-                  for (let i = 0; i < typeScheds.length; i++) {
-                    if (typeScheds[i].id === targetSchedId) {
+                  for (const s of typeScheds) {
+                    if (s.id === targetSchedId) {
                       myWeightedIndex = currentWeightedCount;
                       break;
                     }
-                    currentWeightedCount += typeScheds[i]._weight;
+                    currentWeightedCount += s._weight;
                   }
 
                   if (myWeightedIndex === -1) return { index: -1, label: '' };
 
                   const rotationIndex = Math.floor(myWeightedIndex / limit);
-                  return { index: rotationIndex, label: `R${rotationIndex + 1}` };
+                  const weightRemain = myWeightedIndex % limit;
+                  return { index: rotationIndex, label: `R${rotationIndex + 1}-${Math.floor(weightRemain) + 1}` };
                 };
 
                 // 5. [수정됨] 재등록 버튼 날짜 계산 (로컬 데이터 사용)
@@ -3351,7 +3425,7 @@ function App() {
                   }
 
                   const starts = new Set();
-                  for (let i = 1; i <= 100; i++) {
+                  for (let i = 0; i <= 100; i++) {
                     let mDate = null, vDate = null;
                     if (reqM > 0) {
                       let currentWeightedCount = 0;
@@ -3383,7 +3457,9 @@ function App() {
                     else if (mDate) trigger = mDate;
                     else if (vDate) trigger = vDate;
 
-                    if (trigger && trigger > anchorDate) starts.add(trigger);
+                    if (trigger && trigger > anchorDate) {
+                      starts.add(trigger);
+                    }
                   }
                   return starts;
                 };
@@ -3447,11 +3523,11 @@ function App() {
                                       {completedM.length > 0 ? completedM.map((s, idx) => {
                                         const rotationInfo = getLocalRotationInfo(s.id);
                                         const dateShort = formatMonthDay(s.date);
-                                        let boxClass = rotationInfo.index !== -1 ? `${ROTATION_COLORS[rotationInfo.index % ROTATION_COLORS.length].m} border-solid font-bold text-gray-800` : (s.masterType === '30' ? "bg-[linear-gradient(135deg,#f97316_50%,#ffedd5_50%)] border-solid border-orange-300 text-orange-950" : "bg-gray-100 border-solid border-gray-300 text-gray-500");
+                                        const boxClass = getBadgeStyle('master', s.masterType, rotationInfo.index, s.status, 'history');
                                         let icon = null; let statusColor = "text-gray-400";
                                         if (s.status === 'completed') { icon = <FaCheck className="text-[9px]" />; statusColor = "text-green-700"; }
-                                        else if (s.status === 'absent') { icon = <FaTimesCircle className="text-[9px]" />; statusColor = "text-red-600"; boxClass += " text-red-600 bg-red-50 border-red-200"; }
-                                        else if (s.status === 'reschedule' || s.status === 'reschedule_assigned') { icon = <FaClock className="text-[9px]" />; statusColor = "text-yellow-700"; boxClass = "bg-yellow-50 border-dashed border-yellow-300 text-yellow-700"; }
+                                        else if (s.status === 'absent') { icon = <FaTimesCircle className="text-[9px]" />; statusColor = "text-red-600"; }
+                                        else if (s.status === 'reschedule' || s.status === 'reschedule_assigned') { icon = <FaClock className="text-[9px]" />; statusColor = "text-yellow-700"; }
 
                                         return (<div key={idx} className={`h-7 w-10 rounded-md text-[9px] flex flex-col items-center justify-center border cursor-pointer leading-none gap-0.5 relative overflow-hidden shadow-sm ${boxClass}`}>{rotationInfo.label && <span className="absolute top-0 right-0 bg-black/10 text-[6px] px-0.5 rounded-bl-sm font-extrabold text-gray-700 opacity-50">{rotationInfo.label}</span>}<span className={statusColor}>{icon}</span><span>{dateShort}</span></div>);
                                       }) : <div className="h-7 w-10"></div>}
@@ -3460,11 +3536,11 @@ function App() {
                                       {completedV.length > 0 ? completedV.map((s, idx) => {
                                         const rotationInfo = getLocalRotationInfo(s.id);
                                         const dateShort = formatMonthDay(s.date);
-                                        let boxClass = rotationInfo.index !== -1 ? `${ROTATION_COLORS[rotationInfo.index % ROTATION_COLORS.length].v} border-solid font-bold text-gray-600` : "bg-white border-solid border-gray-200 text-gray-500";
+                                        const boxClass = getBadgeStyle('vocal', s.vocalType, rotationInfo.index, s.status, 'history');
                                         let icon = null; let statusColor = "text-gray-400";
                                         if (s.status === 'completed') { icon = <FaCheck className="text-[9px]" />; statusColor = "text-green-600"; }
-                                        else if (s.status === 'absent') { icon = <FaTimesCircle className="text-[9px]" />; statusColor = "text-red-500"; boxClass += " text-red-600 bg-red-50 border-red-200"; }
-                                        else if (s.status === 'reschedule' || s.status === 'reschedule_assigned') { icon = <FaClock className="text-[9px]" />; statusColor = "text-yellow-600"; boxClass = "bg-yellow-50 border-dashed border-yellow-300 text-yellow-600"; }
+                                        else if (s.status === 'absent') { icon = <FaTimesCircle className="text-[9px]" />; statusColor = "text-red-500"; }
+                                        else if (s.status === 'reschedule' || s.status === 'reschedule_assigned') { icon = <FaClock className="text-[9px]" />; statusColor = "text-yellow-600"; }
 
                                         return (<div key={idx} className={`h-7 w-10 rounded-md text-[9px] flex flex-col items-center justify-center border cursor-pointer leading-none gap-0.5 relative overflow-hidden shadow-sm ${boxClass}`}>{rotationInfo.label && <span className="absolute top-0 right-0 bg-black/10 text-[6px] px-0.5 rounded-bl-sm font-extrabold text-gray-700 opacity-50">{rotationInfo.label}</span>}<span className={statusColor}>{icon}</span><span>{dateShort}</span></div>);
                                       }) : <div className="h-7 w-10"></div>}
@@ -3510,18 +3586,21 @@ function App() {
 
               {/* [NEW] Master 30분 진행 체크박스 (Master 그리드일 때만 노출) */}
               {scheduleForm.gridType === 'master' && (
-                <div className="mb-4">
-                  <label className={`flex items-center justify-between p-3 rounded-xl border-2 transition-all cursor-pointer ${scheduleForm.masterType === '30' ? 'bg-orange-50 border-orange-200 text-orange-700' : 'bg-white border-gray-100 text-gray-400 hover:border-gray-200'}`}>
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="checkbox"
-                        className="checkbox checkbox-sm checkbox-warning rounded-md"
-                        checked={scheduleForm.masterType === '30'}
-                        onChange={(e) => setScheduleForm(prev => ({ ...prev, masterType: e.target.checked ? '30' : '60' }))}
-                      />
-                      <span className="font-extrabold">30분만 진행 (0.5회차 인정)</span>
-                    </div>
-                  </label>
+                <div className="flex bg-gray-100 p-1 rounded-xl w-fit">
+                  <button
+                    type="button"
+                    onClick={() => setScheduleForm(prev => ({ ...prev, masterType: '60' }))}
+                    className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${scheduleForm.masterType !== '30' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                  >
+                    1시간
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setScheduleForm(prev => ({ ...prev, masterType: '30' }))}
+                    className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${scheduleForm.masterType === '30' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                  >
+                    30분
+                  </button>
                 </div>
               )}
 
@@ -3586,27 +3665,24 @@ function App() {
                     </label>
 
                     {scheduleForm.isVocalProgress && (
-                      <div className="flex gap-4 pl-8">
-                        <label className="flex items-center gap-1 cursor-pointer">
-                          <input
-                            type="radio"
-                            name="vocalType"
-                            className="radio radio-xs radio-primary"
-                            checked={scheduleForm.vocalType !== '30'} // 기본값 or 60
-                            onChange={() => setScheduleForm({ ...scheduleForm, vocalType: '60' })}
-                          />
-                          <span className="text-xs font-bold text-gray-600">1시간 (3.0)</span>
-                        </label>
-                        <label className="flex items-center gap-1 cursor-pointer">
-                          <input
-                            type="radio"
-                            name="vocalType"
-                            className="radio radio-xs radio-secondary"
-                            checked={scheduleForm.vocalType === '30'}
-                            onChange={() => setScheduleForm({ ...scheduleForm, vocalType: '30' })}
-                          />
-                          <span className="text-xs font-bold text-gray-600">30분 (1.5)</span>
-                        </label>
+                      <div className="flex flex-col gap-2 mt-1 pt-2 border-t border-blue-50">
+                        <span className="text-[10px] font-bold text-blue-400 ml-1">수업 시간 선택</span>
+                        <div className="flex bg-gray-100 p-1 rounded-xl w-fit">
+                          <button
+                            type="button"
+                            onClick={() => setScheduleForm(prev => ({ ...prev, vocalType: '60' }))}
+                            className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${scheduleForm.vocalType !== '30' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                          >
+                            1시간
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setScheduleForm(prev => ({ ...prev, vocalType: '30' }))}
+                            className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${scheduleForm.vocalType === '30' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                          >
+                            30분 (0.5회)
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>
