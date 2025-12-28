@@ -95,10 +95,14 @@ function App() {
 
     const isSplitClass = (gridType === 'master' && is30) || (gridType === 'vocal' && isHalf);
 
-    // 1. [History 전용] 배정만 된 경우(Pending) 또는 상태 없음 -> 연한 그레이 2톤 (확실한 2톤 적용)
-    // Master 30 또는 Vocal Half (반갈죽)인 경우 적용
-    if (context === 'history' && isSplitClass && (status === 'pending' || !status)) {
-      return "bg-[linear-gradient(135deg,#e5e7eb_50%,#f9fafb_50%)] border-gray-300 text-gray-400 font-bold opacity-80";
+    // 1. [History 전용] 배정만 된 경우(Pending) 또는 상태 없음 -> 연한 그레이
+    // 미래의 수업(아직 미진행)은 회색으로 표시되어야 함
+    if (context === 'history' && (status === 'pending' || !status)) {
+      if (isSplitClass) {
+        return "bg-[linear-gradient(135deg,#e5e7eb_50%,#f9fafb_50%)] border-gray-300 text-gray-400 font-bold opacity-80 shadow-none";
+      } else {
+        return "bg-gray-100 border-gray-200 text-gray-400 font-bold opacity-80 shadow-none";
+      }
     }
 
     // 2. [공통] 로테이션 정보가 있으면 최우선 적용 (특수 상태 제외)
@@ -194,6 +198,47 @@ function App() {
     if (window.confirm('로그아웃 하시겠습니까?')) signOut(auth);
   };
 
+  // [NEW] 정산 마감 토글 핸들러
+  const handleToggleSettlementStatus = async () => {
+    const year = currentDate.getFullYear();
+    const month = String(currentDate.getMonth() + 1).padStart(2, '0');
+    const yearMonth = `${year}-${month}`;
+
+    // 완료 처리 시 유효성 검사 (모든 스케줄 완료 여부)
+    if (settlementStatus === 'pending') {
+      // [FIX] '개인일정' 등은 제외하고 '레슨' 스케줄만 완료 여부 체크
+      const pendingSchedules = monthlySchedules.filter(s =>
+        s.category === '레슨' && (!s.status || s.status === 'pending')
+      );
+      if (pendingSchedules.length > 0) {
+        alert(`[정산 마감 불가]\n아직 상태 처리가 되지 않은 스케줄이 ${pendingSchedules.length}건 있습니다.\n모든 스케줄을 완료/결석/취소 처리 후 마감해주세요.`);
+        return;
+      }
+      if (!window.confirm(`${year}년 ${month}월 정산을 '마감(완료)' 처리하시겠습니까?\n마감 후에는 해당 월의 모든 스케줄 수정이 차단됩니다.`)) return;
+
+      try {
+        await setDoc(doc(db, "settlement_memos", yearMonth), { status: 'completed' }, { merge: true });
+        setSettlementStatus('completed');
+        alert("정산이 마감되었습니다.");
+      } catch (e) {
+        console.error(e);
+        alert("처리 중 오류가 발생했습니다.");
+      }
+    } else {
+      // 완료 -> 예정으로 복구
+      if (!window.confirm(`${year}년 ${month}월 정산 마감을 취소하고 '예정' 상태로 변경하시겠습니까?\n다시 스케줄 수정이 가능해집니다.`)) return;
+
+      try {
+        await setDoc(doc(db, "settlement_memos", yearMonth), { status: 'pending' }, { merge: true });
+        setSettlementStatus('pending');
+        alert("정산 상태가 '예정'으로 변경되었습니다.");
+      } catch (e) {
+        console.error(e);
+        alert("처리 중 오류가 발생했습니다.");
+      }
+    }
+  };
+
   // [수정] 월정산 청구 요청 핸들러 (해당 월 1일로 날짜 고정)
   const handleMonthlySettlementRequest = async (student, amount, targetYearMonth) => {
     // 0원이나 음수는 청구 불가
@@ -229,7 +274,9 @@ function App() {
 
       // 후처리
       await updateStudentLastDate(student.id);
-      fetchSettlementData();
+
+      // [FIX] 현재 청구한 '그 달'의 데이터를 다시 불러와야 함 (안 그러면 currentDate 기준인 오늘 날짜로 불러와서 화면 갱신 시 데이터 증발)
+      fetchSettlementData(billingDateObj);
 
       alert(`청구가 완료되었습니다.\n(${billingDate}일자 미결제 내역 생성)`);
     } catch (e) {
@@ -237,6 +284,8 @@ function App() {
       alert("청구 처리 중 오류가 발생했습니다.");
     }
   };
+
+
 
   // --- [2] 데이터 상태 ---
   const [activeTab, setActiveTab] = useState('schedule');
@@ -320,6 +369,34 @@ function App() {
   const [movingSchedule, setMovingSchedule] = useState(null); // [NEW] 일정 이동(보류) 상태
   const [expenses, setExpenses] = useState([]);
   const [settlementMemo, setSettlementMemo] = useState('');
+  const [studentMemo, setStudentMemo] = useState(''); // [NEW] 학생관리 탭 메모
+
+  // [NEW] 학생관리 탭 메모 로딩 & 저장 (TDZ 방지를 위해 State 선언 후 위치)
+  useEffect(() => {
+    const fetchStudentMemo = async () => {
+      if (!user || activeTab !== 'students') return;
+      try {
+        const docRef = doc(db, "site_settings", "student_tab");
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          setStudentMemo(docSnap.data().memo || '');
+        }
+      } catch (e) {
+        console.error("학생 메모 로딩 실패", e);
+      }
+    };
+    fetchStudentMemo();
+  }, [user, activeTab]);
+
+  const handleStudentMemoSave = async () => {
+    try {
+      await setDoc(doc(db, "site_settings", "student_tab"), { memo: studentMemo }, { merge: true });
+      alert("학생관리 메모가 저장되었습니다.");
+    } catch (e) {
+      console.error(e);
+      alert("저장 실패");
+    }
+  };
   const [expenseForm, setExpenseForm] = useState({ date: '', category: '기타', amount: '', memo: '' });
   const [editingExpenseId, setEditingExpenseId] = useState(null);
 
@@ -401,14 +478,16 @@ function App() {
     rates: { master: '', vocal: '' }, unpaidList: [], isPaid: true,
   };
   const [formData, setFormData] = useState(initialFormState);
+  const [settlementStatus, setSettlementStatus] = useState('pending'); // [NEW] 정산 상태 (pending | completed)
 
   // --- [Data Fetching & Functions] ---
 
   // [수정] 정산 데이터 불러오기 (날짜 오버라이드 지원)
   const fetchSettlementData = async (dateOverride = null) => {
-    setSettlementIncome([]);
-    setSettlementUnpaid([]);
-    setMonthlySchedules([]);
+    // [FIX] 데이터 로딩 중 기존 상태 유지 (UI 깜빡임 방지)
+    // setSettlementIncome([]); 
+    // setSettlementUnpaid([]);
+    // setMonthlySchedules([]);
 
     const targetDate = dateOverride || currentDate;
     const year = targetDate.getFullYear();
@@ -417,18 +496,29 @@ function App() {
 
     try {
       const memoDoc = await getDoc(doc(db, "settlement_memos", yearMonth));
-      setSettlementMemo(memoDoc.exists() ? memoDoc.data().text || '' : '');
+      if (memoDoc.exists()) {
+        const data = memoDoc.data();
+        setSettlementMemo(data.text || '');
+        setSettlementStatus(data.status || 'pending'); // [NEW] 상태 로드
+      } else {
+        setSettlementMemo('');
+        setSettlementStatus('pending');
+      }
 
       const schedQ = query(collection(db, "schedules"), where("date", ">=", `${yearMonth}-01`), where("date", "<=", `${yearMonth}-31`));
       const schedSnap = await getDocs(schedQ);
       setMonthlySchedules(schedSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-    } catch (e) { console.error("Settlement Data Fetch Error:", e); }
+    } catch (e) {
+      console.error("Settlement Data Fetch Error:", e);
+    }
 
-    const expenseQ = query(collection(db, "expenses"), where("date", ">=", `${yearMonth}-01`), where("date", "<=", `${yearMonth}-31`));
-    const expenseSnap = await getDocs(expenseQ);
-    const expenseList = expenseSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    expenseList.sort((a, b) => new Date(a.date) - new Date(b.date));
-    setExpenses(expenseList);
+    /* [FIX] 전역 expenses 상태를 덮어쓰지 않음 (Blocking Logic을 위해 전역 상태 유지)
+  const expenseQ = query(collection(db, "expenses"), where("date", ">=", `${yearMonth}-01`), where("date", "<=", `${yearMonth}-31`));
+  const expenseSnap = await getDocs(expenseQ);
+  const expenseList = expenseSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  expenseList.sort((a, b) => new Date(a.date) - new Date(b.date));
+  setExpenses(expenseList);
+  */
 
     let allPayments = [];
     let allUnpaid = [];
@@ -462,6 +552,29 @@ function App() {
   };
 
   // --- [UseEffects] ---
+
+  // [FIX] 정산 탭 계산 로직: 전역 expenses(전체역사)에서 현재 월 데이터만 필터링 및 계산
+  const currentMonthPrefix = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
+
+  const currentMonthExpenses = useMemo(() => {
+    return expenses.filter(e => e.date && e.date.startsWith(currentMonthPrefix));
+  }, [expenses, currentMonthPrefix]);
+
+  const currentMonthTotalExpense = useMemo(() => {
+    return currentMonthExpenses.reduce((acc, cur) => acc + Number(cur.amount || 0), 0);
+  }, [currentMonthExpenses]);
+
+  const currentMonthTotalRevenue = useMemo(() => {
+    const paid = settlementIncome.reduce((acc, cur) => acc + Number(String(cur.amount || 0).replace(/[^0-9]/g, '')), 0);
+    const unpaid = settlementUnpaid.reduce((acc, cur) => acc + Number(String(cur.amount || 0).replace(/[^0-9]/g, '')), 0);
+    return paid + unpaid;
+  }, [settlementIncome, settlementUnpaid]);
+
+  const currentMonthNetProfit = useMemo(() => {
+    return currentMonthTotalRevenue - currentMonthTotalExpense;
+  }, [currentMonthTotalRevenue, currentMonthTotalExpense]);
+
+
   useEffect(() => {
     if (!user) return;
     const q = query(collection(db, "students"), orderBy("lastDate", "desc"));
@@ -561,7 +674,7 @@ function App() {
 
   // --- [기간제/월별 출석부 데이터 & 스케쥴 로딩] ---
   useEffect(() => {
-    if (!user || activeTab !== 'attendance') return;
+    if (!user || (activeTab !== 'attendance' && activeTab !== 'students')) return;
 
     let startStr, endStr;
 
@@ -616,7 +729,7 @@ function App() {
     const qSched = query(
       collection(db, "schedules"),
       where("date", ">=", "2020-01-01"),
-      where("date", "<=", bufferEndStr)
+      where("date", "<=", "2030-12-31")
     );
     const unsubSched = onSnapshot(qSched, (snapshot) => {
       const list = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -1037,24 +1150,49 @@ function App() {
   const handleScheduleMonthChange = (e) => { const d = new Date(scheduleDate); d.setMonth(parseInt(e.target.value) - 1); setScheduleDate(d); };
   const handleScheduleWeekChange = (e) => { setScheduleDate(new Date(e.target.value)); };
 
-  const handleSlotClick = (dateStr, hourStr, dayOfWeek, existingItem = null, gridType = 'master') => {
+  const handleSlotClick = async (dateStr, hourStr, dayOfWeek, existingItem = null, gridType = 'master') => {
     const editingName = existingItem ? existingItem.studentName : null;
+
+    // [NEW] 월정산 마감(Lock) 여부 확인 (최우선 차단)
+    try {
+      const targetDate = new Date(dateStr);
+      const yStr = targetDate.getFullYear();
+      const mStr = String(targetDate.getMonth() + 1).padStart(2, '0');
+      const lockDocRef = doc(db, "settlement_memos", `${yStr}-${mStr}`);
+      const lockSnap = await getDoc(lockDocRef);
+      if (lockSnap.exists() && lockSnap.data().status === 'completed') {
+        alert(`[${yStr}년 ${mStr}월]은 정산이 마감(완료)되어 수정할 수 없습니다.\n수정이 필요하면 정산 관리에서 '정산완료'를 해제해주세요.`);
+        return;
+      }
+    } catch (e) { console.error("Lock Check Error", e); }
 
     // [New] 보컬 정산 완료 여부 체크
     if (gridType === 'vocal') {
       const targetDate = new Date(dateStr);
-      const targetMonthPrefix = `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}`;
+      // 포맷 정규화 (YYYY-MM)
+      const targetMonthNorm = `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}`;
 
-      const wagePaid = expenses.some(e =>
-        e.category === '임금' &&
-        e.isVocalWage &&
-        e.targetMonth === targetMonthPrefix &&
-        e.paidDate
-      );
+      // [FIX] 상태 의존성 제거 -> DB에서 직접 최신 정산 내역 조회 (강력한 차단)
+      try {
+        const expensesRef = collection(db, 'expenses');
+        const qCheck = query(expensesRef, where('category', '==', '임금'), where('isVocalWage', '==', true));
+        const qSnap = await getDocs(qCheck);
 
-      if (wagePaid) {
-        alert("해당 월의 보컬 정산(지급)이 완료되어 수정할 수 없습니다.\n수정이 필요하면 정산 내역을 확인해주세요.");
-        return;
+        let foundSettlement = false;
+        qSnap.forEach(doc => {
+          const data = doc.data();
+          let eMonth = data.targetMonth || data.date;
+          if (!eMonth) return;
+          const eMonthNorm = eMonth.replace(/\./g, '-').substring(0, 7);
+          if (eMonthNorm === targetMonthNorm) foundSettlement = true;
+        });
+
+        if (foundSettlement && existingItem && existingItem.isVocalProgress) {
+          alert(`[DB확인됨] 해당 월(${targetMonthNorm})의 보컬 정산 내역이 존재합니다.\n이미 정산이 진행되어 '보컬진행(추가수업)'을 수정할 수 없습니다.`);
+          return;
+        }
+      } catch (err) {
+        console.error("Blocking Check Failed:", err);
       }
     }
 
@@ -1072,24 +1210,43 @@ function App() {
         time: timeParts[0],
         minute: timeParts[1],
         dayOfWeek,
-        id: isGhost ? null : existingItem.id,
+        id: isGhost ? null : existingItem.id, // Ghost는 ID가 없음 (혹은 가상ID)
         gridType: existingItem.gridType || 'master'
       });
       setSelectedMinute(timeParts[1]);
 
-      setScheduleTab(existingItem.isFixed ? 'personal' : (existingItem.category === '레슨' || existingItem.category === '상담' ? 'lesson' : 'personal'));
-      setScheduleForm({
-        studentId: existingItem.studentId || '',
-        studentName: existingItem.studentName || '',
-        memo: existingItem.memo || '',
-        category: existingItem.category || '레슨',
-        isFixed: existingItem.isFixed || false,
-        status: existingItem.status || '',
-        gridType: existingItem.gridType || 'master',
-        isVocalProgress: existingItem.isVocalProgress || false,
-        vocalType: existingItem.vocalType || '60',
-        masterType: existingItem.masterType || '60'
-      });
+      // [FIX] 이동 중(movingSchedule)일 때, Ghost 스케줄(existingItem)을 클릭하면
+      // Ghost의 학생 정보가 아닌 '이동 중인 학생' 정보로 폼을 채워야 함.
+      if (movingSchedule) {
+        setScheduleTab(movingSchedule.category === '레슨' || movingSchedule.category === '상담' ? 'lesson' : 'personal');
+        setScheduleForm({
+          studentId: movingSchedule.studentId || '',
+          studentName: movingSchedule.studentName || '',
+          memo: movingSchedule.memo || '',
+          category: movingSchedule.category || '레슨',
+          isFixed: movingSchedule.isFixed || false,
+          status: movingSchedule.status || '',
+          gridType: existingItem.gridType || 'master', // GridType은 타겟 슬롯 따름
+          isVocalProgress: movingSchedule.isVocalProgress || false,
+          vocalType: movingSchedule.vocalType || '60',
+          masterType: movingSchedule.masterType || '60'
+        });
+      } else {
+        // 일반 클릭 (수정/생성)
+        setScheduleTab(existingItem.isFixed ? 'personal' : (existingItem.category === '레슨' || existingItem.category === '상담' ? 'lesson' : 'personal'));
+        setScheduleForm({
+          studentId: existingItem.studentId || '',
+          studentName: existingItem.studentName || '',
+          memo: existingItem.memo || '',
+          category: existingItem.category || '레슨',
+          isFixed: existingItem.isFixed || false,
+          status: existingItem.status || '',
+          gridType: existingItem.gridType || 'master',
+          isVocalProgress: existingItem.isVocalProgress || false,
+          vocalType: existingItem.vocalType || '60',
+          masterType: existingItem.masterType || '60'
+        });
+      }
     } else {
       // [NEW] 이동 중인 스케줄이 있다면 해당 정보로 폼 초기화
       if (movingSchedule) {
@@ -1137,7 +1294,69 @@ function App() {
     const finalGridType = selectedSlot.gridType || scheduleForm.gridType || 'master';
     const saveDate = scheduleForm.isFixed ? formatDateLocal(new Date()) : selectedSlot.date;
 
-    // 1. 학생 정보 업데이트
+    // [NEW] 월정산 청구 여부 확인 (청구가 생성된 달은 스케줄 수정 차단)
+    if (scheduleForm.studentId) {
+      const targetStudent = students.find(s => s.id === scheduleForm.studentId);
+      if (targetStudent && targetStudent.isMonthly) {
+        const sDateObj = new Date(saveDate);
+        const sYear = sDateObj.getFullYear();
+        const sMonth = sDateObj.getMonth() + 1;
+        const settlementMemoKey = `${sYear}.${sMonth}월 월정산 청구`;
+
+        const hasSettlement = (targetStudent.unpaidList || []).some(item => item.memo === settlementMemoKey);
+
+        if (hasSettlement) {
+          alert(`[${sYear}년 ${sMonth}월]은 이미 월정산 청구가 진행되었습니다.\n내역이 생성된 이후에는 스케줄을 추가/수정할 수 없습니다.`);
+          return;
+        }
+      }
+    }
+
+    // [NEW] 보컬 정산(지급) 완료된 달에는 '보컬진행(추가수업)' 생성/수정 불가
+    if (finalGridType === 'vocal' && scheduleForm.isVocalProgress) {
+      const vDateObj = new Date(saveDate);
+      const vMonthNorm = `${vDateObj.getFullYear()}-${String(vDateObj.getMonth() + 1).padStart(2, '0')}`;
+
+      try {
+        const expensesRef = collection(db, 'expenses');
+        const qCheck = query(expensesRef, where('category', '==', '임금'), where('isVocalWage', '==', true));
+        const qSnap = await getDocs(qCheck);
+
+        let foundSettlement = false;
+        qSnap.forEach(doc => {
+          const data = doc.data();
+          let eMonth = data.targetMonth || data.date;
+          if (!eMonth) return;
+          const eMonthNorm = eMonth.replace(/\./g, '-').substring(0, 7);
+          if (eMonthNorm === vMonthNorm) foundSettlement = true;
+        });
+
+        if (foundSettlement) {
+          alert(`[DB확인됨] 해당 월(${vMonthNorm})의 보컬 정산 내역이 이미 존재합니다.\n'보컬진행(추가수업)'을 추가하거나 수정할 수 없습니다.`);
+          return;
+        }
+      } catch (err) {
+        console.error("Save Blocking Check Failed:", err);
+      }
+    }
+
+    // [NEW] 월정산 마감(Lock) 여부 확인 (저장 시 최우선 차단)
+    try {
+      const sDateObj = new Date(saveDate);
+      const lyStr = sDateObj.getFullYear();
+      const lmStr = String(sDateObj.getMonth() + 1).padStart(2, '0');
+      const lockDocRef = doc(db, "settlement_memos", `${lyStr}-${lmStr}`);
+      const lockSnap = await getDoc(lockDocRef);
+      if (lockSnap.exists() && lockSnap.data().status === 'completed') {
+        alert(`[${lyStr}년 ${lmStr}월]은 정산이 마감(완료)되어 스케줄을 저장할 수 없습니다.`);
+        return;
+      }
+    } catch (e) {
+      console.error("Save Lock Check Error", e);
+      // 에러 시 안전을 위해 진행하거나 차단? 여기선 진행하지만 로그 남김
+    }
+
+    // [New] 보컬 정산 완료 여부 체크 (기존 로직 유지)
     if (scheduleForm.studentId) {
       try {
         const studentRef = doc(db, "students", scheduleForm.studentId);
@@ -1698,7 +1917,48 @@ function App() {
     try {
       if (editingId) {
         // [수정]
-        await updateDoc(doc(db, "students", editingId), formData);
+        const studentRef = doc(db, "students", editingId);
+        const studentSnap = await getDoc(studentRef);
+
+        if (studentSnap.exists()) {
+          const oldData = studentSnap.data();
+          let finalFormData = { ...formData };
+
+          // [NEW] 시작일(firstDate) 변경 감지 및 미수금 자동 수정 로직
+          if (oldData.firstDate && oldData.firstDate !== formData.firstDate) {
+            if (window.confirm("수강 시작일이 변경되었습니다.\n최초 미수금 내역의 날짜도 함께 변경하시겠습니까?")) {
+              const oldDate = oldData.firstDate;
+              const newDate = formData.firstDate;
+              const newAmount = calculateTotalAmount(formData); // 현재 단가 등 기준 재계산
+
+              let list = [...(oldData.unpaidList || [])];
+
+              // 1. 기존 날짜의 '최초 등록금' 내역 삭제
+              // (메모가 '최초 등록금'이거나, 혹은 날짜가 정확히 일치하는 미수금) - 여기선 메모 기준 권장
+              const initialCount = list.length;
+              list = list.filter(item => !(item.targetDate === oldDate && item.memo === '최초 등록금'));
+
+              // 2. 새로운 날짜로 내역 생성
+              list.push({
+                id: Date.now().toString(),
+                targetDate: newDate,
+                amount: newAmount,
+                createdAt: new Date().toISOString(),
+                memo: '최초 등록금'
+              });
+
+              // 날짜순 정렬
+              list.sort((a, b) => new Date(a.targetDate) - new Date(b.targetDate));
+
+              finalFormData.unpaidList = list;
+              finalFormData.isPaid = false; // 새로운 미수금이 생겼으므로 미납 상태로 변경
+
+              alert("최초 미수금 내역이 갱신되었습니다.");
+            }
+          }
+
+          await updateDoc(studentRef, finalFormData);
+        }
       } else {
         // [신규 등록]
         const amt = calculateTotalAmount(formData);
@@ -2569,9 +2829,24 @@ function App() {
                               {student.name}
                               {getWeightRemainderSuffix(student)}
                               {/* [NEW] 아티스트 카운트 표시 */}
-                              {student.isArtist && <span className="text-[10px] text-purple-600 font-bold ml-1">({student.count || 0}회)</span>}
+                              {/* 1. 수강 상태 (Active/Inactive) */}
+                              <span className={`px-2 py-0.5 rounded-[4px] border text-[10px] font-bold leading-none ${student.isActive ? 'bg-green-50 text-green-600 border-green-200' : 'bg-gray-100 text-gray-500 border-gray-200'}`}>
+                                {student.isActive ? '수강' : '종료'}
+                              </span>
 
-                              {attViewMode === 'month' && !student.isActive && <span className="ml-1 text-[9px] bg-gray-200 text-gray-500 px-1 rounded">종료</span>}
+                              {/* 2. 월정산 배지 */}
+                              {student.isMonthly && (
+                                <span className="px-2 py-0.5 rounded-[4px] border text-[10px] font-bold leading-none bg-indigo-50 text-indigo-600 border-indigo-100">
+                                  월정산
+                                </span>
+                              )}
+
+                              {/* 3. 재등록 요망 배지 (월정산/아티스트 제외) */}
+                              {!student.isMonthly && !student.isArtist && rotationStarts.size > 0 && (
+                                <div className="px-2 py-0.5 rounded-[4px] border text-[10px] font-bold leading-none bg-red-50 text-red-500 border-red-100 flex items-center gap-1">
+                                  <FaExclamationCircle /> 재등록 요망
+                                </div>
+                              )}
 
                               {/* [월별보기 > 월정산 탭 정산 계산 로직 & 청구 버튼] */}
                               {attViewMode === 'month' && attCategory === 'monthly' && (() => {
@@ -2842,8 +3117,29 @@ function App() {
                                   const isM = (sched.gridType === 'master' || !sched.gridType) && sched.category !== '상담';
                                   const isV = sched.gridType === 'vocal';
                                   const classT = isV ? sched.vocalType : sched.masterType;
-                                  const bStyle = getBadgeStyle(isV ? 'vocal' : 'master', classT, rotationInfo.index, sched.status, 'attendance');
-                                  boxClass = `${bStyle} border-solid`;
+
+                                  // [NEW] 미래/보류 일정 비활성 처리
+                                  // 오늘 날짜 구하기
+                                  const todayStr = formatDateLocal(new Date());
+                                  const isFutureOrToday = sched.date >= todayStr;
+                                  const isPending = !sched.status || sched.status === 'pending';
+
+                                  if (isFutureOrToday && isPending) {
+                                    // [MODIFY] 미래 대기 상태: History View와 동일한 연한 회색 스타일 적용
+                                    const is30 = String(classT) === '30';
+                                    const isHalf = String(classT) === 'half';
+                                    const isSplitClass = (isM && is30) || (isV && isHalf);
+
+                                    if (isSplitClass) {
+                                      boxClass = "bg-[linear-gradient(135deg,#e5e7eb_50%,#f9fafb_50%)] border-gray-300 text-gray-400 font-bold opacity-80 shadow-none";
+                                    } else {
+                                      boxClass = "bg-gray-100 border-gray-200 text-gray-400 font-bold opacity-80 shadow-none";
+                                    }
+                                  } else {
+                                    // 그 외(과거거나 완료된) 일정은 기존 로테이션 스타일 적용
+                                    const bStyle = getBadgeStyle(isV ? 'vocal' : 'master', classT, rotationInfo.index, sched.status, 'attendance');
+                                    boxClass = `${bStyle} border-solid`;
+                                  }
                                   // ----------------------------------------
 
                                   // 상태별 아이콘 및 텍스트 색상 처리 (기존 로직 유지)
@@ -2938,12 +3234,12 @@ function App() {
                                         {/* 1. Master 라인 (윗줄 고정) */}
                                         {/* min-h-[24px]로 설정하여 M 수업이 0개여도 높이를 확보해 V가 위로 올라오는 것을 방지합니다. */}
                                         <div className="flex gap-1 justify-center flex-wrap min-h-[24px]">
-                                          {Array.from({ length: Math.ceil(mTotal) }).map((_, idx) => renderSlot('M', idx, completedM))}
+                                          {Array.from({ length: Math.max(Math.ceil(mTotal), completedM.length) }).map((_, idx) => renderSlot('M', idx, completedM))}
                                         </div>
 
                                         {/* 2. Vocal 라인 (아랫줄 고정) */}
                                         <div className="flex gap-1 justify-center flex-wrap min-h-[24px]">
-                                          {Array.from({ length: Math.ceil(vTotal) }).map((_, idx) => renderSlot('V', idx, completedV))}
+                                          {Array.from({ length: Math.max(Math.ceil(vTotal), completedV.length) }).map((_, idx) => renderSlot('V', idx, completedV))}
                                         </div>
                                       </>
                                     ) : (
@@ -2973,11 +3269,31 @@ function App() {
 
           {/* ----- 학생 관리 탭 (기존 유지) ----- */}
           {activeTab === 'students' && (
-            // [수정] pb-20 추가
             <div className="flex flex-col h-full w-full p-4 md:p-8 lg:px-12 pb-20 gap-6 overflow-y-auto">
-              {/* ... (이전 코드와 동일, 생략 없음) ... */}
+
+              {/* [NEW] 학생관리 탭 상단 메모 */}
+              <div className="bg-white px-4 py-3 rounded-2xl shadow-sm border border-gray-100 flex items-center gap-3">
+                <div className="flex items-center gap-2 min-w-fit">
+                  <div className="w-8 h-8 rounded-full bg-purple-50 flex items-center justify-center">
+                    <FaStickyNote className="text-purple-500 text-sm" />
+                  </div>
+                  <span className="text-xs font-bold text-gray-500">학생관리 메모</span>
+                </div>
+                <input
+                  type="text"
+                  className="input input-sm border-none bg-transparent flex-1 text-sm focus:outline-none placeholder-gray-300 font-medium"
+                  placeholder="학생 관리 관련 메모를 입력하세요... (예: 대기자 명단 확인, 신규 문의 연락 등)"
+                  value={studentMemo}
+                  onChange={(e) => setStudentMemo(e.target.value)}
+                />
+                <button onClick={handleStudentMemoSave} className="btn btn-xs btn-circle bg-gray-900 text-white border-none shadow-md hover:scale-110 transition-transform">
+                  <FaSave />
+                </button>
+              </div>
+
               <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-6 gap-4"><div><h2 className="text-2xl md:text-3xl font-extrabold mb-2">수강생 리스트</h2><div className="flex gap-2"><button onClick={() => { setViewStatus('active'); setCurrentPage(1) }} className={`text-sm px-3 py-1 rounded-lg ${viewStatus === 'active' ? 'bg-black text-white' : 'bg-gray-100 text-gray-400'}`}>수강중</button><button onClick={() => { setViewStatus('inactive'); setCurrentPage(1) }} className={`text-sm px-3 py-1 rounded-lg ${viewStatus === 'inactive' ? 'bg-black text-white' : 'bg-gray-100 text-gray-400'}`}>종료/비활성</button><button onClick={() => { setViewStatus('artist'); setCurrentPage(1) }} className={`text-sm px-3 py-1 rounded-lg ${viewStatus === 'artist' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-400'}`}>아티스트</button></div></div><div className="flex gap-2 w-full md:w-auto"><div className="relative group flex-1 md:flex-none"><FaSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" /><input type="text" placeholder="검색..." className="input w-full md:w-64 bg-gray-50 border-2 border-gray-100 pl-10 rounded-2xl h-12 outline-none font-medium" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} /></div><button onClick={() => { setEditingId(null); setFormData(initialFormState); setIsModalOpen(true) }} className="btn h-12 bg-gray-900 text-white border-none px-6 rounded-2xl font-bold shadow-lg flex items-center gap-2"><FaPlus /> 등록</button></div></div>
               <div className="bg-gray-50 rounded-[1.5rem] md:rounded-[2.5rem] p-2 min-h-[600px] flex flex-col"><div className="overflow-x-auto bg-white rounded-[1.5rem] md:rounded-[2rem] shadow-sm flex-1"><table className="table w-full"><thead className="sticky top-0 bg-white z-10 shadow-sm"><tr className="text-gray-500 text-xs md:text-sm font-bold border-b-2 border-gray-100"><th className="py-4 md:py-6 pl-4 md:pl-10 w-16">No.</th><th className="py-4 md:py-6">이름</th><th className="hidden md:table-cell py-4 md:py-6">클래스 상세</th><th className="hidden md:table-cell py-4 md:py-6">예상 금액 (4주)</th><th className="hidden md:table-cell py-4 md:py-6">등록일 / 재등록예정</th><th className="py-4 md:py-6 pr-4 md:pr-10 text-right">관리</th></tr></thead><tbody>{currentItems.map((student, idx) => {
+                const rotationStarts = calculateRotationStarts(student); // [NEW] 재등록 여부 계산
                 const totalAmount = calculateTotalAmount(student); const daysPassed = getDaysPassed(student.lastDate); const isStale = daysPassed >= 29; const isExpanded = expandedStudentId === student.id; const isUnpaid = student.isPaid === false; const unpaidItems = student.unpaidList || []; let displayedHistory = []; let historyTotalPages = 0; let totalPaidAmount = 0; let totalUnpaidAmount = 0; if (isExpanded) { const unpaidRows = unpaidItems.map(item => ({ id: item.id, type: 'unpaid', paymentDate: '-', amount: item.amount || totalAmount, paymentMethod: 'unpaid', targetDate: item.targetDate, isCashReceipt: false, receiptMemo: '미결제 상태' })); const combinedHistory = [...unpaidRows, ...paymentHistory]; combinedHistory.sort((a, b) => { const dateA = a[historySort] || ''; const dateB = b[historySort] || ''; return dateB.localeCompare(dateA); }); historyTotalPages = Math.ceil(combinedHistory.length / historyPerPage); combinedHistory.forEach((item, index) => { item.cycle = combinedHistory.length - index; }); displayedHistory = combinedHistory.slice((historyPage - 1) * historyPerPage, historyPage * historyPerPage); totalPaidAmount = paymentHistory.reduce((acc, cur) => acc + Number(cur.amount || 0), 0); totalUnpaidAmount = unpaidItems.reduce((acc, cur) => acc + Number(cur.amount || 0), 0); } return (<Fragment key={student.id}><tr className={`hover:bg-gray-50 transition-colors border-b border-gray-50 last:border-none ${isUnpaid ? 'bg-red-50 hover:bg-red-50' : ''}`}>
                   <td className="pl-4 md:pl-10 font-bold text-gray-400">{filteredStudents.length - ((currentPage - 1) * itemsPerPage + idx)}</td>
                   {/* [수정됨] 이름 + 달력 아이콘 셀 */}
@@ -2997,12 +3313,18 @@ function App() {
                       {isExpanded ? <FaChevronUp className="text-gray-400 text-xs" /> : <FaChevronDown className="text-gray-400 text-xs" />}
                     </div>
                     {/* 상태 뱃지들 (아래쪽) */}
-                    <div className="flex gap-1 mt-1 flex-wrap">
-                      <span className={`px-2 py-0.5 rounded text-[10px] ${student.isActive ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-500'}`}>
+                    {/* 상태 뱃지들 (아래쪽) - 디자인 통일 */}
+                    <div className="flex gap-1.5 mt-1.5 flex-wrap items-center">
+                      <span className={`px-2 py-0.5 rounded-[4px] border text-[10px] font-bold leading-none ${student.isActive ? 'bg-green-50 text-green-600 border-green-200' : 'bg-gray-100 text-gray-500 border-gray-200'}`}>
                         {student.isActive ? '수강' : '종료'}
                       </span>
-                      {student.isMonthly && <span className="px-2 py-0.5 rounded text-[10px] bg-blue-100 text-blue-700">월정산</span>}
-                      {isUnpaid && <span className="px-2 py-0.5 rounded text-[10px] bg-red-100 text-red-600 font-bold">{unpaidItems.length}건 미결제</span>}
+                      {student.isMonthly && <span className="px-2 py-0.5 rounded-[4px] border text-[10px] font-bold leading-none bg-indigo-50 text-indigo-600 border-indigo-100">월정산</span>}
+                      {!student.isMonthly && !student.isArtist && rotationStarts.size > 0 && (
+                        <span className="px-2 py-0.5 rounded-[4px] border text-[10px] font-bold leading-none bg-red-50 text-red-500 border-red-100 flex items-center gap-1">
+                          <FaExclamationCircle /> 재등록 요망
+                        </span>
+                      )}
+                      {isUnpaid && <span className="px-2 py-0.5 rounded-[4px] border text-[10px] font-bold leading-none bg-red-50 text-red-600 border-red-100">{unpaidItems.length}건 미결제</span>}
                     </div>
                   </td>
                   <td className="hidden md:table-cell"><div className="flex gap-2">{student.schedule?.map((w, i) => { const hasAny = Number(w.master) > 0 || Number(w.vocal) > 0 || Number(w.vocal30) > 0; return (<div key={i} className={`flex flex-col items-center border rounded-lg p-1 w-16 ${hasAny ? 'bg-white border-gray-200' : 'bg-gray-50 border-dashed opacity-50'}`}><span className="text-[10px] text-gray-400 font-bold">{i + 1}주</span>{Number(w.master) > 0 && <span className="text-[10px] text-orange-600 font-bold">M({w.master})</span>}{Number(w.vocal) > 0 && <span className="text-[10px] text-blue-600 font-bold">V({w.vocal})</span>}{Number(w.vocal30) > 0 && <span className="text-[10px] text-cyan-600 font-bold">V30({w.vocal30})</span>}</div>) })}</div></td><td className="hidden md:table-cell font-bold text-gray-800 text-base">{formatCurrency(totalAmount)}원</td><td className="hidden md:table-cell text-xs"><div className="flex items-center gap-1 mb-1"><span className="text-gray-400 w-8">최종:</span><span className="font-bold text-gray-700">{student.lastDate}</span>{isStale && <FaExclamationCircle className="text-red-500 text-sm animate-pulse" />}</div><div className="flex items-center gap-1"><span className="text-gray-400 w-8">예정:</span><input type="date" className="bg-gray-100 border border-gray-200 rounded px-1 py-0.5 text-xs outline-none" value={tempDates[student.id] || ''} onChange={(e) => setTempDates({ ...tempDates, [student.id]: e.target.value })} /><button onClick={() => handleAddUnpaid(student)} className="btn btn-xs btn-square bg-black text-white hover:bg-gray-800 border-none rounded"><FaPlus className="text-[10px]" /></button></div></td><td className="pr-4 md:pr-10 text-right"><div className="md:hidden mb-2 flex justify-end items-center gap-1"><input type="date" className="input input-xs border-gray-200" value={tempDates[student.id] || ''} onChange={(e) => setTempDates({ ...tempDates, [student.id]: e.target.value })} /><button onClick={() => handleAddUnpaid(student)} className="btn btn-xs btn-square bg-black text-white"><FaPlus /></button></div><div className="flex justify-end gap-2"><button onClick={() => toggleStatus(student)} className="btn btn-sm btn-square border-none bg-gray-100 text-gray-400">{student.isActive ? <FaUserSlash /> : <FaUserCheck />}</button><button onClick={() => handleEditClick(student)} className="btn btn-sm btn-square bg-gray-100 border-none text-gray-400 hover:text-orange-500"><FaEdit /></button><button onClick={() => handleDelete(student.id, student.name)} className="btn btn-sm btn-square bg-gray-100 border-none text-gray-400 hover:text-red-500"><FaTrash /></button></div></td></tr>{isExpanded && (<tr className="bg-orange-50/30"><td colSpan="6" className="p-0"><div className="p-4 md:p-6 flex flex-col gap-6" id="payment-form-area"><div className={`bg-white p-4 md:p-6 rounded-2xl shadow-sm border ${paymentForm.id ? 'border-blue-200 ring-2 ring-blue-100' : 'border-orange-100'}`}><h4 className="text-sm font-bold text-gray-800 mb-4 flex justify-between items-center"><div className="flex items-center gap-2"><FaCreditCard className="text-orange-500" />{paymentForm.id ? <span className="text-blue-600">수정중...</span> : '결제 등록'}{selectedUnpaidId && !paymentForm.id && <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full animate-pulse">미결제 선택됨</span>}</div></h4><div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 items-end"><div className="form-control"><label className="label-text text-xs font-bold text-gray-500 mb-1">재등록일</label><input type="date" name="targetDate" className="input input-sm border-gray-200 bg-gray-50" value={paymentForm.targetDate} onChange={handlePaymentFormChange} /></div><div className="form-control"><label className="label-text text-xs font-bold text-gray-500 mb-1">결제일</label><input type="date" name="paymentDate" className="input input-sm border-gray-200 bg-gray-50" value={paymentForm.paymentDate} onChange={handlePaymentFormChange} /></div><div className="form-control"><label className="label-text text-xs font-bold text-gray-500 mb-1">수단</label><select name="method" className="select select-sm border-gray-200 bg-gray-50" value={paymentForm.method} onChange={handlePaymentFormChange}><option value="card">카드</option><option value="transfer">이체</option><option value="cash">현금</option></select></div><div className="form-control"><label className="label-text text-xs font-bold text-gray-500 mb-1">금액</label><input type="number" name="amount" className="input input-sm border-gray-200 bg-gray-50 font-bold" value={paymentForm.amount} onChange={handlePaymentFormChange} /></div><div className="form-control"><label className="label-text text-xs font-bold text-gray-500 mb-1">증빙</label><label className="flex items-center gap-2 cursor-pointer bg-gray-50 border border-gray-200 rounded-lg px-3 h-8 hover:bg-gray-100 transition-colors"><FaCamera className="text-gray-400" /><span className="text-xs text-gray-600 truncate max-w-[80px]">{paymentFile ? '선택됨' : '사진 첨부'}</span><input type="file" accept="image/*" className="hidden" onClick={(e) => e.target.value = null} onChange={(e) => setPaymentFile(e.target.files[0])} /></label></div></div><div className="mt-4 flex flex-col gap-4"><div className="flex items-center gap-2"><button className={`btn btn-sm ${paymentForm.isCashReceipt ? 'btn-warning text-black border-none font-bold' : 'btn-outline border-gray-300 text-gray-400'}`} onClick={() => setPaymentForm(prev => ({ ...prev, isCashReceipt: !prev.isCashReceipt }))}>현금영수증 {paymentForm.isCashReceipt ? 'ON' : 'OFF'}</button></div><input type="text" name="receiptMemo" placeholder="결제 관련 메모..." className="input input-sm border-gray-200 bg-gray-50 w-full" value={paymentForm.receiptMemo} onChange={handlePaymentFormChange} /><div className="flex gap-2 justify-end">{paymentForm.id && (<button className="btn btn-sm btn-ghost text-gray-500" onClick={() => resetPaymentForm(calculateTotalAmount(student))}><FaUndo className="mr-1" /> 취소</button>)}<button className={`btn btn-sm px-6 h-10 border-none text-white ${paymentForm.id ? 'bg-blue-600' : 'bg-black'}`} onClick={() => handlePaymentSave(student)}><FaCheckCircle className="mr-1" /> {paymentForm.id ? '수정 완료' : '결제 처리'}</button></div></div></div>{unpaidItems.length > 0 && (<div className="bg-red-50 p-4 rounded-2xl border border-red-100"><h4 className="text-xs font-bold text-red-500 mb-2">미결제 / 재등록 예정 내역 (클릭하여 처리)</h4><div className="flex flex-wrap gap-2">{unpaidItems.map((item) => (<div key={item.id} className={`flex items-center gap-2 px-3 py-2 rounded-lg border shadow-sm cursor-pointer transition-all ${selectedUnpaidId === item.id ? 'bg-red-100 border-red-300 ring-2 ring-red-200' : 'bg-white border-red-100 hover:bg-red-50'}`} onClick={() => handleUnpaidChipClick(student, item)}><div className="flex flex-col items-center leading-none"><span className="text-[10px] text-gray-400 mb-0.5">예정일</span><span className="text-sm font-bold text-red-600">{item.targetDate}</span></div><div className="w-[1px] h-6 bg-red-100 mx-1"></div><span className="text-xs font-bold text-gray-600">{formatCurrency(item.amount)}원</span><button onClick={(e) => { e.stopPropagation(); handleDeleteUnpaid(student, item.id); }} className="text-gray-300 hover:text-red-500 ml-1"><FaTimesCircle /></button></div>))}</div></div>)}<div className="bg-white p-4 md:p-5 rounded-2xl shadow-sm border border-gray-100"><div className="flex justify-between items-center mb-3"><h4 className="text-sm font-bold text-gray-700 flex items-center gap-2"><FaHistory className="text-orange-500" /> 전체 내역 <span className="text-xs font-normal text-gray-400">(완료: {paymentHistory.length}건 / {formatCurrency(totalPaidAmount)}원 | 미납: {unpaidItems.length}건 / {formatCurrency(totalUnpaidAmount)}원)</span></h4><div className="flex gap-2 items-center"><button onClick={() => setHistorySort(historySort === 'paymentDate' ? 'targetDate' : 'paymentDate')} className="btn btn-xs bg-gray-100 text-gray-500 hover:bg-gray-200 border-none flex gap-1 items-center"><FaSort /> {historySort === 'paymentDate' ? '결제일순' : '재등록일순'}</button>{historyTotalPages > 1 && (<div className="flex gap-2"><button onClick={() => setHistoryPage(p => Math.max(1, p - 1))} disabled={historyPage === 1} className="btn btn-xs btn-circle btn-ghost"><FaChevronLeft /></button><span className="text-xs pt-0.5">{historyPage}/{historyTotalPages}</span><button onClick={() => setHistoryPage(p => Math.min(historyTotalPages, p + 1))} disabled={historyPage === historyTotalPages} className="btn btn-xs btn-circle btn-ghost"><FaChevronRight /></button></div>)}</div></div><div className="w-full overflow-x-auto"><table className="table table-xs w-full"><thead><tr className="bg-gray-50 text-gray-500 border-b border-gray-100"><th>회차</th><th>재등록일</th><th>결제일</th><th>금액</th><th>수단</th><th>증빙/메모</th><th className="text-center">사진</th><th className="text-right">관리</th></tr></thead><tbody>{displayedHistory.map((pay, i) => { const isUnpaidItem = pay.type === 'unpaid'; const label = pay.paymentMethod === 'card' ? '카드' : pay.paymentMethod === 'transfer' ? '이체' : pay.paymentMethod === 'cash' ? '현금' : pay.paymentMethod; return (<tr key={pay.id === 'unpaid' ? `unpaid-${i}` : pay.id} className={`border-b border-gray-50 last:border-none ${isUnpaidItem ? 'bg-red-50/50' : ''}`}><td className="font-bold text-gray-700">{pay.cycle}회차</td><td className={`font-bold ${isUnpaidItem ? 'text-red-500' : 'text-gray-500'}`}>{pay.targetDate || '-'}</td><td>{isUnpaidItem ? '-' : <span className="font-bold text-gray-700">{pay.paymentDate}</span>}</td><td><span className="font-bold text-black">{formatCurrency(pay.amount)}원</span></td><td>{isUnpaidItem ? <span className="text-red-500 text-xs font-bold">미결제</span> : <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-gray-100 text-gray-600">{label}</span>}</td><td><div className="flex flex-col">{pay.isCashReceipt && <span className="text-[10px] text-orange-600 font-bold">현금영수증</span>}<span className="text-gray-500 text-xs truncate max-w-[100px]">{pay.receiptMemo}</span></div></td><td className="text-center">{pay.imageUrl ? (<button onClick={() => setPreviewImage({ url: pay.imageUrl, sid: student.id, pid: pay.id })} className="btn btn-xs btn-square btn-ghost text-blue-500"><FaImage /></button>) : (!isUnpaidItem && <label className="cursor-pointer text-gray-300 hover:text-blue-500"><FaCamera /><input type="file" className="hidden" onClick={(e) => e.target.value = null} onChange={(e) => handleRetroactivePhotoUpload(student.id, pay.id, e.target.files[0])} /></label>)}</td><td className="text-right">{!isUnpaidItem ? (<div className="flex justify-end gap-1"><button onClick={() => handleEditHistoryClick(pay)} className="text-gray-300 hover:text-blue-500"><FaEdit className="text-xs" /></button><button onClick={() => handleDeletePayment(student.id, pay.id)} className="text-gray-300 hover:text-red-500"><FaTrash className="text-xs" /></button></div>) : (<span className="text-xs text-gray-400">상단에서 처리</span>)}</td></tr>); })}</tbody></table></div></div></div></td></tr>)}</Fragment>);
@@ -3029,6 +3351,22 @@ function App() {
                     </div>
                     <button onClick={() => changeMonth(1)} className="btn btn-circle btn-sm btn-ghost"><FaChevronRight /></button>
                   </div>
+
+                  {/* [NEW] 정산 마감 토글 버튼 */}
+                  <button
+                    onClick={handleToggleSettlementStatus}
+                    className={`btn btn-sm px-4 rounded-xl border-none shadow-sm transition-all font-bold ${settlementStatus === 'completed'
+                      ? 'bg-red-50 text-red-600 hover:bg-red-100 ring-1 ring-red-200'
+                      : 'bg-green-50 text-green-600 hover:bg-green-100 ring-1 ring-green-200'
+                      }`}
+                  >
+                    {settlementStatus === 'completed'
+                      ? <><FaLock className="mr-1" /> 정산완료</>
+                      : <><FaLockOpen className="mr-1" /> 정산예정</>
+                    }
+                  </button>
+
+                  <div className="flex-1"></div> {/* Spacer */}
                   <button onClick={fetchSettlementData} className="btn btn-sm btn-ghost text-gray-400"><FaUndo className="mr-1" /> 새로고침</button>
                 </div>
 
@@ -3067,7 +3405,7 @@ function App() {
                     </div>
                   </div>
                   <div className="text-xl font-extrabold text-gray-800 tracking-tight">
-                    {formatCurrency(totalRevenueIncludingUnpaid)}원
+                    {formatCurrency(currentMonthTotalRevenue)}원
                   </div>
                 </div>
 
@@ -3078,11 +3416,11 @@ function App() {
                       <FaFileInvoiceDollar className="text-red-500" /> 총 지출
                     </div>
                     <div className="text-[11px] text-gray-400">
-                      ({expenses.length}건)
+                      ({currentMonthExpenses.length}건)
                     </div>
                   </div>
                   <div className="text-xl font-extrabold text-gray-800 tracking-tight">
-                    {formatCurrency(totalExpense)}원
+                    {formatCurrency(currentMonthTotalExpense)}원
                   </div>
                 </div>
 
@@ -3094,7 +3432,7 @@ function App() {
                     </div>
                   </div>
                   <div className="text-xl font-extrabold text-blue-600 tracking-tight">
-                    {formatCurrency(netProfitIncludingUnpaid)}원
+                    {formatCurrency(currentMonthNetProfit)}원
                   </div>
                 </div>
 
@@ -3206,7 +3544,7 @@ function App() {
                       >
                         {/* 동적 카테고리 필터링: 이미 등록된 항목 제외 */}
                         {(() => {
-                          const registeredCats = new Set(expenses.filter(e => e.category !== '기타').map(e => e.category));
+                          const registeredCats = new Set(currentMonthExpenses.filter(e => e.category !== '기타').map(e => e.category));
                           // 현재 수정중인 항목의 카테고리는 선택 가능해야 함
                           if (editingExpenseId) {
                             const editingItem = expenses.find(e => e.id === editingExpenseId);
@@ -3261,7 +3599,7 @@ function App() {
                         </tr>
                       </thead>
                       <tbody>
-                        {expenses.map((item) => (
+                        {currentMonthExpenses.map((item) => (
                           <tr key={item.id} className="border-b border-gray-50 last:border-none">
                             <td className="text-gray-500">{item.date}</td>
                             <td className="font-bold text-gray-700">{item.category}</td>
@@ -3281,7 +3619,7 @@ function App() {
                         ))}
                       </tbody>
                     </table>
-                    {expenses.length === 0 && <div className="text-center text-gray-300 py-10">지출 내역이 없습니다.</div>}
+                    {currentMonthExpenses.length === 0 && <div className="text-center text-gray-300 py-10">지출 내역이 없습니다.</div>}
 
                     {/* 보컬 진행 지출 관리 영역 */}
                     {(() => {
@@ -3387,859 +3725,869 @@ function App() {
           )}
         </main>
         {/* [FIX] 학생 개인별 전체 출석부 (재등록 버튼 계산 로직 수정) */}
-        {viewingStudentAtt && (
-          <div className="fixed inset-0 z-[9999] bg-white flex flex-col overflow-hidden animate-fade-in-up">
-            {/* 상단 헤더 */}
-            <div className="flex-none flex items-center justify-between p-4 md:p-6 border-b border-gray-100 bg-white shadow-sm">
-              <div className="flex items-center gap-4">
-                <button onClick={closeStudentAttView} className="btn btn-circle btn-ghost text-gray-500">
-                  <FaChevronLeft className="text-xl" />
-                </button>
-                <div>
-                  <h2 className="text-2xl font-extrabold text-gray-900 flex items-center gap-2">
-                    {viewingStudentAtt.name}{getWeightRemainderSuffix(viewingStudentAtt)} <span className="text-lg font-normal text-gray-400">전체 히스토리 (20주 보기)</span>
-                  </h2>
-                  <p className="text-xs text-gray-400 font-bold mt-1 flex gap-2">
-                    <span>등록일: {viewingStudentAtt.firstDate}</span>
-                    <span className="text-gray-300">|</span>
-                    <span className="text-blue-600">첫 수업일: {studentFullHistory.length > 0 ? studentFullHistory[0].date : '-'}</span>
-                  </p>
+        {
+          viewingStudentAtt && (
+            <div className="fixed inset-0 z-[9999] bg-white flex flex-col overflow-hidden animate-fade-in-up">
+              {/* 상단 헤더 */}
+              <div className="flex-none flex items-center justify-between p-4 md:p-6 border-b border-gray-100 bg-white shadow-sm">
+                <div className="flex items-center gap-4">
+                  <button onClick={closeStudentAttView} className="btn btn-circle btn-ghost text-gray-500">
+                    <FaChevronLeft className="text-xl" />
+                  </button>
+                  <div>
+                    <h2 className="text-2xl font-extrabold text-gray-900 flex items-center gap-2">
+                      {viewingStudentAtt.name}{getWeightRemainderSuffix(viewingStudentAtt)} <span className="text-lg font-normal text-gray-400">전체 히스토리 (20주 보기)</span>
+                    </h2>
+                    <p className="text-xs text-gray-400 font-bold mt-1 flex gap-2">
+                      <span>등록일: {viewingStudentAtt.firstDate}</span>
+                      <span className="text-gray-300">|</span>
+                      <span className="text-blue-600">첫 수업일: {studentFullHistory.length > 0 ? studentFullHistory[0].date : '-'}</span>
+                    </p>
+                  </div>
                 </div>
+                <button onClick={closeStudentAttView} className="btn btn-sm bg-gray-900 text-white border-none rounded-xl">
+                  닫기
+                </button>
               </div>
-              <button onClick={closeStudentAttView} className="btn btn-sm bg-gray-900 text-white border-none rounded-xl">
-                닫기
-              </button>
-            </div>
 
-            {/* 본문 */}
-            <div className="flex-1 overflow-y-auto p-4 md:p-8 bg-gray-50">
-              {(() => {
-                // 1. 데이터 준비
-                let startDateStr = viewingStudentAtt.firstDate || formatDateLocal(new Date());
-                if (studentFullHistory.length > 0) startDateStr = studentFullHistory[0].date;
-                const startMonday = getStartOfWeek(startDateStr);
+              {/* 본문 */}
+              <div className="flex-1 overflow-y-auto p-4 md:p-8 bg-gray-50">
+                {(() => {
+                  // 1. 데이터 준비
+                  let startDateStr = viewingStudentAtt.firstDate || formatDateLocal(new Date());
+                  if (studentFullHistory.length > 0) startDateStr = studentFullHistory[0].date;
+                  const startMonday = getStartOfWeek(startDateStr);
 
-                const lastSched = studentFullHistory[studentFullHistory.length - 1];
-                let endDate = new Date();
-                if (lastSched && new Date(lastSched.date) > endDate) endDate = new Date(lastSched.date);
-                endDate.setDate(endDate.getDate() + 28);
+                  const lastSched = studentFullHistory[studentFullHistory.length - 1];
+                  let endDate = new Date();
+                  if (lastSched && new Date(lastSched.date) > endDate) endDate = new Date(lastSched.date);
+                  endDate.setDate(endDate.getDate() + 28);
 
-                // 2. 주차 생성
-                const allWeeks = [];
-                let current = new Date(startMonday);
-                let weekCount = 1;
-                while (current <= endDate) {
-                  const wStart = new Date(current);
-                  const wEnd = new Date(current);
-                  wEnd.setDate(wEnd.getDate() + 6);
-                  allWeeks.push({
-                    id: weekCount,
-                    start: wStart,
-                    end: wEnd,
-                    startStr: formatDateLocal(wStart),
-                    endStr: formatDateLocal(wEnd),
-                    label: `${wStart.getFullYear().toString().slice(2)}.${String(wStart.getMonth() + 1).padStart(2, '0')}.${String(wStart.getDate()).padStart(2, '0')}`
-                  });
-                  current.setDate(current.getDate() + 7);
-                  weekCount++;
-                }
-
-                // 3. 20주 청크
-                const chunkedWeeks = [];
-                for (let i = 0; i < allWeeks.length; i += 20) {
-                  chunkedWeeks.push(allWeeks.slice(i, i + 20));
-                }
-
-                // 4. [로컬 전용] 로테이션 정보 계산 (History 데이터 사용)
-                const getLocalRotationInfo = (targetSchedId) => {
-                  let reqM = 0, reqV = 0;
-                  (viewingStudentAtt.schedule || []).forEach(w => {
-                    reqM += Number(w.master || 0);
-                    reqV += Number(w.vocal || 0) + Number(w.vocal30 || 0);
-                  });
-                  const allCompleted = studentFullHistory.filter(s =>
-                    // [FIX] 보류/미입력 항목도 포함하여 로테이션 순서 예측 (일관성 유지)
-                    (s.status === 'completed' || s.status === 'late' || s.status === 'absent' || s.status === 'pending' || !s.status || s.id === targetSchedId)
-                  );
-                  const target = allCompleted.find(s => s.id === targetSchedId);
-                  if (!target) return { index: -1, label: '' };
-
-                  // [NEW] 저장된 로테이션 정보가 있으면 우선 사용
-                  if (target.rotationLabel) {
-                    let idx = target.rotationIndex;
-                    // 기존 데이터에 index가 없는 경우 라벨에서 추출 시도 (R1 -> 0)
-                    if (idx === undefined || idx === null || idx === -1) {
-                      const match = target.rotationLabel.match(/R(\d+)/);
-                      if (match) idx = parseInt(match[1]) - 1;
-                    }
-                    return { index: idx ?? -1, label: target.rotationLabel };
+                  // 2. 주차 생성
+                  const allWeeks = [];
+                  let current = new Date(startMonday);
+                  let weekCount = 1;
+                  while (current <= endDate) {
+                    const wStart = new Date(current);
+                    const wEnd = new Date(current);
+                    wEnd.setDate(wEnd.getDate() + 6);
+                    allWeeks.push({
+                      id: weekCount,
+                      start: wStart,
+                      end: wEnd,
+                      startStr: formatDateLocal(wStart),
+                      endStr: formatDateLocal(wEnd),
+                      label: `${wStart.getFullYear().toString().slice(2)}.${String(wStart.getMonth() + 1).padStart(2, '0')}.${String(wStart.getDate()).padStart(2, '0')}`
+                    });
+                    current.setDate(current.getDate() + 7);
+                    weekCount++;
                   }
 
-                  const isTargetMaster = (target.gridType === 'master' || !target.gridType);
-                  let limit = 0;
-                  if (isTargetMaster) {
-                    if (reqM === 0) return { index: 0, label: 'R1' };
-                    limit = reqM;
-                  } else {
-                    if (reqV === 0) return { index: 0, label: 'R1' };
-                    limit = reqV;
+                  // 3. 20주 청크
+                  const chunkedWeeks = [];
+                  for (let i = 0; i < allWeeks.length; i += 20) {
+                    chunkedWeeks.push(allWeeks.slice(i, i + 20));
                   }
 
-                  const typeScheds = [];
-                  for (const s of allCompleted) {
-                    const isV = s.gridType === 'vocal';
-                    const isM = s.gridType === 'master' || !s.gridType;
-                    if (isTargetMaster && isM) {
-                      const weight = s.masterType === '30' ? 0.5 : 1;
-                      typeScheds.push({ ...s, _weight: weight });
-                    } else if (!isTargetMaster && isV) {
-                      const weight = s.vocalType === '30' ? 0.5 : 1;
-                      typeScheds.push({ ...s, _weight: weight });
-                    }
-                  }
+                  // 4. [로컬 전용] 로테이션 정보 계산 (History 데이터 사용)
+                  const getLocalRotationInfo = (targetSchedId) => {
+                    let reqM = 0, reqV = 0;
+                    (viewingStudentAtt.schedule || []).forEach(w => {
+                      reqM += Number(w.master || 0);
+                      reqV += Number(w.vocal || 0) + Number(w.vocal30 || 0);
+                    });
+                    const allCompleted = studentFullHistory.filter(s =>
+                      // [FIX] 보류/미입력 항목도 포함하여 로테이션 순서 예측 (일관성 유지)
+                      (s.status === 'completed' || s.status === 'late' || s.status === 'absent' || s.status === 'pending' || !s.status || s.id === targetSchedId)
+                    );
+                    const target = allCompleted.find(s => s.id === targetSchedId);
+                    if (!target) return { index: -1, label: '' };
 
-                  let currentWeightedCount = 0;
-                  let myWeightedIndex = -1;
-                  for (const s of typeScheds) {
-                    if (s.id === targetSchedId) {
-                      myWeightedIndex = currentWeightedCount;
-                      break;
-                    }
-                    currentWeightedCount += s._weight;
-                  }
-
-                  if (myWeightedIndex === -1) return { index: -1, label: '' };
-
-                  const rotationIndex = Math.floor(myWeightedIndex / limit);
-                  const weightRemain = myWeightedIndex % limit;
-                  return { index: rotationIndex, label: `R${rotationIndex + 1}-${Math.floor(weightRemain) + 1}` };
-                };
-
-                // 5. [수정됨] 재등록 버튼 날짜 계산 (로컬 데이터 사용)
-                const calculateLocalStarts = () => {
-                  const s = viewingStudentAtt;
-                  // [NEW] 월정산, 아티스트 학생은 재등록 버튼 노출 제외
-                  if (s.isMonthly || s.isArtist) return new Set();
-
-                  let reqM = 0, reqV = 0;
-                  (s.schedule || []).forEach(w => {
-                    reqM += Number(w.master || 0);
-                    reqV += Number(w.vocal || 0) + Number(w.vocal30 || 0);
-                  });
-                  if (reqM === 0 && reqV === 0) return new Set();
-
-                  // 기준일 설정
-                  let anchorDate = s.firstDate;
-                  if (s.lastDate && s.lastDate > anchorDate) anchorDate = s.lastDate;
-                  if (s.unpaidList && s.unpaidList.length > 0) {
-                    const sortedUnpaid = [...s.unpaidList].sort((a, b) => new Date(b.targetDate) - new Date(a.targetDate));
-                    if (sortedUnpaid[0].targetDate > anchorDate) anchorDate = sortedUnpaid[0].targetDate;
-                  }
-
-                  // [FIX] 시작일 기준 완화 (7일 전까지 포함)
-                  const bufferDate = new Date(s.firstDate);
-                  bufferDate.setDate(bufferDate.getDate() - 7);
-                  const bufferDateStr = formatDateLocal(bufferDate);
-
-                  const validScheds = studentFullHistory.filter(sch =>
-                    sch.date >= bufferDateStr &&
-                    (sch.status === 'completed' || sch.status === 'late' || sch.status === 'absent' || sch.status === 'pending' || !sch.status)
-                  );
-
-                  const mScheds = [];
-                  const vScheds = [];
-
-                  for (const sch of validScheds) {
-                    if (sch.gridType === 'master' || !sch.gridType) {
-                      const weight = sch.masterType === '30' ? 0.5 : 1;
-                      mScheds.push({ ...sch, _weight: weight });
-                    } else if (sch.gridType === 'vocal') {
-                      const weight = sch.vocalType === '30' ? 0.5 : 1;
-                      vScheds.push({ ...sch, _weight: weight });
-                    }
-                  }
-
-                  const starts = new Set();
-                  for (let i = 0; i <= 100; i++) {
-                    let mDate = null, vDate = null;
-                    if (reqM > 0) {
-                      let currentWeightedCount = 0;
-                      let mTargetIdx = -1;
-                      for (let j = 0; j < mScheds.length; j++) {
-                        if (currentWeightedCount >= i * reqM) {
-                          mTargetIdx = j;
-                          break;
-                        }
-                        currentWeightedCount += mScheds[j]._weight;
+                    // [NEW] 저장된 로테이션 정보가 있으면 우선 사용
+                    if (target.rotationLabel) {
+                      let idx = target.rotationIndex;
+                      // 기존 데이터에 index가 없는 경우 라벨에서 추출 시도 (R1 -> 0)
+                      if (idx === undefined || idx === null || idx === -1) {
+                        const match = target.rotationLabel.match(/R(\d+)/);
+                        if (match) idx = parseInt(match[1]) - 1;
                       }
-                      if (mTargetIdx !== -1) mDate = mScheds[mTargetIdx].date;
+                      return { index: idx ?? -1, label: target.rotationLabel };
                     }
-                    if (reqV > 0) {
-                      let currentWeightedCount = 0;
-                      let vTargetIdx = -1;
-                      for (let j = 0; j < vScheds.length; j++) {
-                        if (currentWeightedCount >= i * reqV) {
-                          vTargetIdx = j;
-                          break;
-                        }
-                        currentWeightedCount += vScheds[j]._weight;
+
+                    const isTargetMaster = (target.gridType === 'master' || !target.gridType);
+                    let limit = 0;
+                    if (isTargetMaster) {
+                      if (reqM === 0) return { index: 0, label: 'R1' };
+                      limit = reqM;
+                    } else {
+                      if (reqV === 0) return { index: 0, label: 'R1' };
+                      limit = reqV;
+                    }
+
+                    const typeScheds = [];
+                    for (const s of allCompleted) {
+                      const isV = s.gridType === 'vocal';
+                      const isM = s.gridType === 'master' || !s.gridType;
+                      if (isTargetMaster && isM) {
+                        const weight = s.masterType === '30' ? 0.5 : 1;
+                        typeScheds.push({ ...s, _weight: weight });
+                      } else if (!isTargetMaster && isV) {
+                        const weight = s.vocalType === '30' ? 0.5 : 1;
+                        typeScheds.push({ ...s, _weight: weight });
                       }
-                      if (vTargetIdx !== -1) vDate = vScheds[vTargetIdx].date;
                     }
 
-                    let trigger = null;
-                    if (mDate && vDate) trigger = mDate < vDate ? mDate : vDate;
-                    else if (mDate) trigger = mDate;
-                    else if (vDate) trigger = vDate;
-
-                    if (trigger && trigger > anchorDate) {
-                      starts.add(trigger);
+                    let currentWeightedCount = 0;
+                    let myWeightedIndex = -1;
+                    for (const s of typeScheds) {
+                      if (s.id === targetSchedId) {
+                        myWeightedIndex = currentWeightedCount;
+                        break;
+                      }
+                      currentWeightedCount += s._weight;
                     }
-                  }
-                  return starts;
-                };
 
-                const localRotationStarts = calculateLocalStarts();
+                    if (myWeightedIndex === -1) return { index: -1, label: '' };
 
-                return (
-                  <div className="flex flex-col gap-6 pb-20">
-                    {chunkedWeeks.map((chunk, rowIdx) => (
-                      <div key={rowIdx} className="bg-white p-5 rounded-[2rem] shadow-sm border border-gray-100 overflow-x-auto">
-                        <div className="min-w-max">
-                          {/* 헤더 */}
-                          <div className="flex border-b border-gray-100 pb-3 mb-3">
-                            <div className="w-24 shrink-0 flex items-center justify-center font-extrabold text-gray-300 text-xs border-r border-gray-100 mr-3">
-                              {chunk[0].id}주 ~ {chunk[chunk.length - 1].id}주
-                            </div>
-                            {chunk.map(w => (
-                              <div key={w.id} className="w-16 md:w-20 shrink-0 text-center">
-                                <div className="text-[10px] text-gray-400 font-bold mb-0.5">{w.id}주차</div>
-                                <div className="text-[11px] text-gray-800 font-extrabold">{w.label}</div>
+                    const rotationIndex = Math.floor(myWeightedIndex / limit);
+                    const weightRemain = myWeightedIndex % limit;
+                    return { index: rotationIndex, label: `R${rotationIndex + 1}-${Math.floor(weightRemain) + 1}` };
+                  };
+
+                  // 5. [수정됨] 재등록 버튼 날짜 계산 (로컬 데이터 사용)
+                  const calculateLocalStarts = () => {
+                    const s = viewingStudentAtt;
+                    // [NEW] 월정산, 아티스트 학생은 재등록 버튼 노출 제외
+                    if (s.isMonthly || s.isArtist) return new Set();
+
+                    let reqM = 0, reqV = 0;
+                    (s.schedule || []).forEach(w => {
+                      reqM += Number(w.master || 0);
+                      reqV += Number(w.vocal || 0) + Number(w.vocal30 || 0);
+                    });
+                    if (reqM === 0 && reqV === 0) return new Set();
+
+                    // 기준일 설정
+                    let anchorDate = s.firstDate;
+                    if (s.lastDate && s.lastDate > anchorDate) anchorDate = s.lastDate;
+                    if (s.unpaidList && s.unpaidList.length > 0) {
+                      const sortedUnpaid = [...s.unpaidList].sort((a, b) => new Date(b.targetDate) - new Date(a.targetDate));
+                      if (sortedUnpaid[0].targetDate > anchorDate) anchorDate = sortedUnpaid[0].targetDate;
+                    }
+
+                    // [FIX] 시작일 기준 완화 (7일 전까지 포함)
+                    const bufferDate = new Date(s.firstDate);
+                    bufferDate.setDate(bufferDate.getDate() - 7);
+                    const bufferDateStr = formatDateLocal(bufferDate);
+
+                    const validScheds = studentFullHistory.filter(sch =>
+                      sch.date >= bufferDateStr &&
+                      (sch.status === 'completed' || sch.status === 'late' || sch.status === 'absent' || sch.status === 'pending' || !sch.status)
+                    );
+
+                    const mScheds = [];
+                    const vScheds = [];
+
+                    for (const sch of validScheds) {
+                      if (sch.gridType === 'master' || !sch.gridType) {
+                        const weight = sch.masterType === '30' ? 0.5 : 1;
+                        mScheds.push({ ...sch, _weight: weight });
+                      } else if (sch.gridType === 'vocal') {
+                        const weight = sch.vocalType === '30' ? 0.5 : 1;
+                        vScheds.push({ ...sch, _weight: weight });
+                      }
+                    }
+
+                    const starts = new Set();
+                    for (let i = 0; i <= 100; i++) {
+                      let mDate = null, vDate = null;
+                      if (reqM > 0) {
+                        let currentWeightedCount = 0;
+                        let mTargetIdx = -1;
+                        for (let j = 0; j < mScheds.length; j++) {
+                          if (currentWeightedCount >= i * reqM) {
+                            mTargetIdx = j;
+                            break;
+                          }
+                          currentWeightedCount += mScheds[j]._weight;
+                        }
+                        if (mTargetIdx !== -1) mDate = mScheds[mTargetIdx].date;
+                      }
+                      if (reqV > 0) {
+                        let currentWeightedCount = 0;
+                        let vTargetIdx = -1;
+                        for (let j = 0; j < vScheds.length; j++) {
+                          if (currentWeightedCount >= i * reqV) {
+                            vTargetIdx = j;
+                            break;
+                          }
+                          currentWeightedCount += vScheds[j]._weight;
+                        }
+                        if (vTargetIdx !== -1) vDate = vScheds[vTargetIdx].date;
+                      }
+
+                      let trigger = null;
+                      if (mDate && vDate) trigger = mDate < vDate ? mDate : vDate;
+                      else if (mDate) trigger = mDate;
+                      else if (vDate) trigger = vDate;
+
+                      if (trigger && trigger > anchorDate) {
+                        starts.add(trigger);
+                      }
+                    }
+                    return starts;
+                  };
+
+                  const localRotationStarts = calculateLocalStarts();
+
+                  return (
+                    <div className="flex flex-col gap-6 pb-20">
+                      {chunkedWeeks.map((chunk, rowIdx) => (
+                        <div key={rowIdx} className="bg-white p-5 rounded-[2rem] shadow-sm border border-gray-100 overflow-x-auto">
+                          <div className="min-w-max">
+                            {/* 헤더 */}
+                            <div className="flex border-b border-gray-100 pb-3 mb-3">
+                              <div className="w-24 shrink-0 flex items-center justify-center font-extrabold text-gray-300 text-xs border-r border-gray-100 mr-3">
+                                {chunk[0].id}주 ~ {chunk[chunk.length - 1].id}주
                               </div>
-                            ))}
-                          </div>
-
-                          {/* 내용 */}
-                          <div className="flex items-start">
-                            <div className="w-24 shrink-0 border-r border-gray-100 mr-3 flex items-center justify-center self-stretch">
-                              <span className="text-xs font-bold text-gray-400">History</span>
+                              {chunk.map(w => (
+                                <div key={w.id} className="w-16 md:w-20 shrink-0 text-center">
+                                  <div className="text-[10px] text-gray-400 font-bold mb-0.5">{w.id}주차</div>
+                                  <div className="text-[11px] text-gray-800 font-extrabold">{w.label}</div>
+                                </div>
+                              ))}
                             </div>
 
-                            {chunk.map(w => {
-                              const weekScheds = studentFullHistory.filter(s =>
-                                s.date >= w.startStr && s.date <= w.endStr && !s.memo.includes('보강(')
-                              );
-                              const completedM = weekScheds.filter(s => (s.gridType === 'master' || !s.gridType) && s.category !== '상담');
-                              const completedV = weekScheds.filter(s => s.gridType === 'vocal');
+                            {/* 내용 */}
+                            <div className="flex items-start">
+                              <div className="w-24 shrink-0 border-r border-gray-100 mr-3 flex items-center justify-center self-stretch">
+                                <span className="text-xs font-bold text-gray-400">History</span>
+                              </div>
 
-                              let uiState = null;
-                              let targetUiDate = '';
+                              {chunk.map(w => {
+                                const weekScheds = studentFullHistory.filter(s =>
+                                  s.date >= w.startStr && s.date <= w.endStr && !s.memo.includes('보강(')
+                                );
+                                const completedM = weekScheds.filter(s => (s.gridType === 'master' || !s.gridType) && s.category !== '상담');
+                                const completedV = weekScheds.filter(s => s.gridType === 'vocal');
 
-                              for (let d = new Date(w.start); d <= w.end; d.setDate(d.getDate() + 1)) {
-                                const dStr = formatDateLocal(d);
-                                const isUnpaid = (viewingStudentAtt.unpaidList || []).some(u => u.targetDate === dStr);
-                                if (isUnpaid) { uiState = 'billed'; targetUiDate = dStr; break; }
-                                if (viewingStudentAtt.lastDate === dStr) { uiState = 'paid'; targetUiDate = dStr; break; }
-                                if (localRotationStarts.has(dStr)) { uiState = 'register'; targetUiDate = dStr; break; }
-                              }
+                                let uiState = null;
+                                let targetUiDate = '';
 
-                              return (
-                                <div key={w.id} className="w-16 md:w-20 shrink-0 flex flex-col items-center min-h-[60px] relative pt-2">
-                                  {uiState === 'paid' && <div className="absolute top-[-9px] z-10"><span className="text-[9px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-bold border border-green-200 flex items-center gap-0.5"><FaCheckCircle className="text-[7px]" /> 결제</span></div>}
-                                  {uiState === 'billed' && <div className="absolute top-[-9px] z-10"><span className="text-[9px] bg-red-100 text-red-500 px-1.5 py-0.5 rounded-full font-bold border border-red-200 animate-pulse">청구중</span></div>}
-                                  {uiState === 'register' && (
-                                    <div className="absolute top-[-9px] z-10">
-                                      <button onClick={(e) => { e.stopPropagation(); handleRegisterRotation(viewingStudentAtt, targetUiDate); }} className="text-[9px] bg-blue-600 text-white px-2 py-0.5 rounded-full font-bold shadow-md hover:bg-blue-700 flex items-center gap-1"><FaPlus className="text-[7px]" /> 재등록</button>
-                                    </div>
-                                  )}
+                                for (let d = new Date(w.start); d <= w.end; d.setDate(d.getDate() + 1)) {
+                                  const dStr = formatDateLocal(d);
+                                  const isUnpaid = (viewingStudentAtt.unpaidList || []).some(u => u.targetDate === dStr);
+                                  if (isUnpaid) { uiState = 'billed'; targetUiDate = dStr; break; }
+                                  if (viewingStudentAtt.lastDate === dStr) { uiState = 'paid'; targetUiDate = dStr; break; }
+                                  if (localRotationStarts.has(dStr)) { uiState = 'register'; targetUiDate = dStr; break; }
+                                }
 
-                                  <div className="flex flex-col gap-1.5 w-full items-center mt-2">
-                                    <div className="flex gap-1 justify-center flex-wrap min-h-[24px]">
-                                      {completedM.length > 0 ? completedM.map((s, idx) => {
-                                        const rotationInfo = getLocalRotationInfo(s.id);
-                                        const dateShort = formatMonthDay(s.date);
-                                        const boxClass = getBadgeStyle('master', s.masterType, rotationInfo.index, s.status, 'history');
-                                        let icon = null; let statusColor = "text-gray-400";
-                                        if (s.status === 'completed') { icon = <FaCheck className="text-[9px]" />; statusColor = "text-green-700"; }
-                                        else if (s.status === 'absent') { icon = <FaTimesCircle className="text-[9px]" />; statusColor = "text-red-600"; }
-                                        else if (s.status === 'reschedule' || s.status === 'reschedule_assigned') { icon = <FaClock className="text-[9px]" />; statusColor = "text-yellow-700"; }
+                                return (
+                                  <div key={w.id} className="w-16 md:w-20 shrink-0 flex flex-col items-center min-h-[60px] relative pt-2">
+                                    {uiState === 'paid' && <div className="absolute top-[-9px] z-10"><span className="text-[9px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-bold border border-green-200 flex items-center gap-0.5"><FaCheckCircle className="text-[7px]" /> 결제</span></div>}
+                                    {uiState === 'billed' && <div className="absolute top-[-9px] z-10"><span className="text-[9px] bg-red-100 text-red-500 px-1.5 py-0.5 rounded-full font-bold border border-red-200 animate-pulse">청구중</span></div>}
+                                    {uiState === 'register' && (
+                                      <div className="absolute top-[-9px] z-10">
+                                        <button onClick={(e) => { e.stopPropagation(); handleRegisterRotation(viewingStudentAtt, targetUiDate); }} className="text-[9px] bg-blue-600 text-white px-2 py-0.5 rounded-full font-bold shadow-md hover:bg-blue-700 flex items-center gap-1"><FaPlus className="text-[7px]" /> 재등록</button>
+                                      </div>
+                                    )}
 
-                                        return (<div key={idx} className={`h-7 w-10 rounded-md text-[9px] flex flex-col items-center justify-center border cursor-pointer leading-none gap-0.5 relative overflow-hidden shadow-sm ${boxClass}`}>{rotationInfo.label && <span className="absolute top-0 right-0 bg-black/10 text-[6px] px-0.5 rounded-bl-sm font-extrabold text-gray-700 opacity-50">{rotationInfo.label}</span>}<span className={statusColor}>{icon}</span><span>{dateShort}</span></div>);
-                                      }) : <div className="h-7 w-10"></div>}
-                                    </div>
-                                    <div className="flex gap-1 justify-center flex-wrap min-h-[24px]">
-                                      {completedV.length > 0 ? completedV.map((s, idx) => {
-                                        const rotationInfo = getLocalRotationInfo(s.id);
-                                        const dateShort = formatMonthDay(s.date);
-                                        const boxClass = getBadgeStyle('vocal', s.vocalType, rotationInfo.index, s.status, 'history');
-                                        let icon = null; let statusColor = "text-gray-400";
-                                        if (s.status === 'completed') { icon = <FaCheck className="text-[9px]" />; statusColor = "text-green-600"; }
-                                        else if (s.status === 'absent') { icon = <FaTimesCircle className="text-[9px]" />; statusColor = "text-red-500"; }
-                                        else if (s.status === 'reschedule' || s.status === 'reschedule_assigned') { icon = <FaClock className="text-[9px]" />; statusColor = "text-yellow-600"; }
+                                    <div className="flex flex-col gap-1.5 w-full items-center mt-2">
+                                      <div className="flex gap-1 justify-center flex-wrap min-h-[24px]">
+                                        {completedM.length > 0 ? completedM.map((s, idx) => {
+                                          const rotationInfo = getLocalRotationInfo(s.id);
+                                          const dateShort = formatMonthDay(s.date);
+                                          const boxClass = getBadgeStyle('master', s.masterType, rotationInfo.index, s.status, 'history');
+                                          let icon = null; let statusColor = "text-gray-400";
+                                          if (s.status === 'completed') { icon = <FaCheck className="text-[9px]" />; statusColor = "text-green-700"; }
+                                          else if (s.status === 'absent') { icon = <FaTimesCircle className="text-[9px]" />; statusColor = "text-red-600"; }
+                                          else if (s.status === 'reschedule' || s.status === 'reschedule_assigned') { icon = <FaClock className="text-[9px]" />; statusColor = "text-yellow-700"; }
 
-                                        return (<div key={idx} className={`h-7 w-10 rounded-md text-[9px] flex flex-col items-center justify-center border cursor-pointer leading-none gap-0.5 relative overflow-hidden shadow-sm ${boxClass}`}>{rotationInfo.label && <span className="absolute top-0 right-0 bg-black/10 text-[6px] px-0.5 rounded-bl-sm font-extrabold text-gray-700 opacity-50">{rotationInfo.label}</span>}<span className={statusColor}>{icon}</span><span>{dateShort}</span></div>);
-                                      }) : <div className="h-7 w-10"></div>}
+                                          return (<div key={idx} className={`h-7 w-10 rounded-md text-[9px] flex flex-col items-center justify-center border cursor-pointer leading-none gap-0.5 relative overflow-hidden shadow-sm ${boxClass}`}>{rotationInfo.label && <span className="absolute top-0 right-0 bg-black/10 text-[6px] px-0.5 rounded-bl-sm font-extrabold text-gray-700 opacity-50">{rotationInfo.label}</span>}<span className={statusColor}>{icon}</span><span>{dateShort}</span></div>);
+                                        }) : <div className="h-7 w-10"></div>}
+                                      </div>
+                                      <div className="flex gap-1 justify-center flex-wrap min-h-[24px]">
+                                        {completedV.length > 0 ? completedV.map((s, idx) => {
+                                          const rotationInfo = getLocalRotationInfo(s.id);
+                                          const dateShort = formatMonthDay(s.date);
+                                          const boxClass = getBadgeStyle('vocal', s.vocalType, rotationInfo.index, s.status, 'history');
+                                          let icon = null; let statusColor = "text-gray-400";
+                                          if (s.status === 'completed') { icon = <FaCheck className="text-[9px]" />; statusColor = "text-green-600"; }
+                                          else if (s.status === 'absent') { icon = <FaTimesCircle className="text-[9px]" />; statusColor = "text-red-500"; }
+                                          else if (s.status === 'reschedule' || s.status === 'reschedule_assigned') { icon = <FaClock className="text-[9px]" />; statusColor = "text-yellow-600"; }
+
+                                          return (<div key={idx} className={`h-7 w-10 rounded-md text-[9px] flex flex-col items-center justify-center border cursor-pointer leading-none gap-0.5 relative overflow-hidden shadow-sm ${boxClass}`}>{rotationInfo.label && <span className="absolute top-0 right-0 bg-black/10 text-[6px] px-0.5 rounded-bl-sm font-extrabold text-gray-700 opacity-50">{rotationInfo.label}</span>}<span className={statusColor}>{icon}</span><span>{dateShort}</span></div>);
+                                        }) : <div className="h-7 w-10"></div>}
+                                      </div>
                                     </div>
                                   </div>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                );
-              })()}
-            </div>
-          </div>
-        )}
-
-        {/* 모달들 (스케쥴, 수강생 등록) */}
-        {isScheduleModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/40 backdrop-blur-md p-4">
-
-            {/* [수정됨] gridType이 'master'가 아니면(짱구일정이면) 연한 초록 배경(bg-green-50) 적용 */}
-            <div className={`w-full max-w-sm rounded-2xl shadow-xl p-6 relative transition-colors duration-200 ${scheduleForm.gridType === 'master' ? 'bg-white' : 'bg-green-50 border-2 border-green-100'}`}>
-
-              <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-                {/* 제목 옆에 점으로 색상 힌트 추가 */}
-                <div className={`w-2 h-2 rounded-full ${scheduleForm.gridType === 'master' ? 'bg-orange-500' : 'bg-green-500'}`}></div>
-                {selectedSlot.date} {selectedSlot.time}:00 {scheduleForm.gridType === 'master' ? '쌤일정' : '짱구일정'}
-              </h3>
-
-              <div className="flex gap-4 mb-4">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="radio" name="minute" className="radio radio-sm radio-primary" checked={selectedMinute === '00'} onChange={() => setSelectedMinute('00')} />
-                  <span className="font-bold">00분 (정각)</span>
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input type="radio" name="minute" className="radio radio-sm radio-primary" checked={selectedMinute === '30'} onChange={() => setSelectedMinute('30')} />
-                  <span className="font-bold">30분</span>
-                </label>
-              </div>
-
-              {/* [NEW] Master 30분 진행 체크박스 (Master 그리드일 때만 노출) */}
-              {scheduleForm.gridType === 'master' && (
-                <div className="flex bg-gray-100 p-1 rounded-xl w-fit mb-2">
-                  <button
-                    type="button"
-                    onClick={() => setScheduleForm(prev => ({ ...prev, masterType: '60' }))}
-                    className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${scheduleForm.masterType !== '30' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
-                  >
-                    1시간
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setScheduleForm(prev => ({ ...prev, masterType: '30' }))}
-                    className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${scheduleForm.masterType === '30' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
-                  >
-                    30분
-                  </button>
-                </div>
-              )}
-
-              {/* [NEW] Vocal 30분(반갈죽) 진행 체크박스 (Vocal 그리드일 때 노출) */}
-              {/* V30(독립)과는 다름. 1시간 수업을 반으로 나누는 기능 */}
-              {scheduleForm.gridType !== 'master' && (
-                <div className="flex bg-green-100/50 p-1 rounded-xl w-fit mb-2">
-                  <button
-                    type="button"
-                    onClick={() => setScheduleForm(prev => ({ ...prev, vocalType: '60' }))}
-                    className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${(!scheduleForm.vocalType || scheduleForm.vocalType === '60') ? 'bg-white text-green-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
-                  >
-                    Full
-                  </button>
-                  <button
-                    type="button"
-                    // 'half' 타입으로 설정하여 V30('30')과 구분
-                    onClick={() => setScheduleForm(prev => ({ ...prev, vocalType: 'half' }))}
-                    className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${scheduleForm.vocalType === 'half' ? 'bg-white text-green-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
-                  >
-                    Half
-                  </button>
-                </div>
-              )}
-
-              {/* [수정] Vocal 추가 수업 시 시간 선택 라디오 */}
-              <div className={`tabs tabs-boxed p-1 mb-4 ${scheduleForm.gridType === 'master' ? 'bg-gray-100' : 'bg-green-100/50'}`}>
-                <a className={`tab flex-1 ${scheduleTab === 'lesson' ? 'tab-active bg-white text-black font-bold shadow-sm' : ''}`} onClick={() => handleTabChange('lesson')}>수강생 레슨</a>
-                <a className={`tab flex-1 ${scheduleTab === 'personal' ? 'tab-active bg-white text-black font-bold shadow-sm' : ''}`} onClick={() => handleTabChange('personal')}>개인 일정</a>
-              </div>
-
-              <div className="flex flex-col gap-3">
-                {scheduleTab === 'lesson' ? (
-                  <>
-                    <select className="select select-sm border-gray-200 bg-white"
-                      onChange={(e) => {
-                        const [sId, sName] = e.target.value.split('|');
-                        const isHalfSuffix = sName.includes('(30분)');
-
-                        setScheduleForm(prev => {
-                          const newState = { ...prev, studentId: sId, studentName: sName, category: '레슨' };
-
-                          // [NEW] 반갈죽(30분) 잔여가 있는 학생 선택 시 자동으로 '30분' 모드 전환
-                          // 잔여가 없는 학생 선택 시 '1시간'으로 리셋하여 실수 방지
-                          if (prev.gridType === 'master') {
-                            newState.masterType = isHalfSuffix ? '30' : '60';
-                          } else {
-                            newState.vocalType = isHalfSuffix ? 'half' : '60';
-                          }
-                          return newState;
-                        });
-                      }}>
-                      <option value="">학생 선택</option>
-                      {availableStudents.map(s => <option key={s.id} value={`${s.id}|${s.name}`}>{s.name}</option>)}
-                    </select>
-                  </>
-                ) : (
-                  <>
-                    <select className="select select-sm border-gray-200 bg-white" value={scheduleForm.category} onChange={(e) => setScheduleForm({ ...scheduleForm, category: e.target.value })}>
-                      {scheduleForm.gridType === 'master' ? (
-                        <>
-                          <option value="야구">야구</option>
-                          <option value="야구1:1">야구 1:1</option>
-                          <option value="작곡">작곡</option>
-                          <option value="합주">합주</option>
-                          <option value="미팅">미팅</option>
-                          <option value="병원">병원</option>
-                          <option value="기타">기타</option>
-                        </>
-                      ) : (
-                        <>
-                          <option value="상담">상담</option>
-                          <option value="PT">PT</option>
-                          <option value="피부과">피부과</option>
-                          <option value="병원">병원</option>
-                          <option value="월말정산">월말정산</option>
-                          <option value="기타">기타</option>
-                        </>
-                      )}
-                    </select>
-                    <div className="form-control">
-                      <label className="label cursor-pointer justify-start gap-2">
-                        <input type="checkbox" className="checkbox checkbox-sm checkbox-primary" checked={scheduleForm.isFixed} onChange={(e) => setScheduleForm({ ...scheduleForm, isFixed: e.target.checked })} />
-                        <span className="label-text font-bold text-gray-700">매주 이 시간 고정</span>
-                      </label>
-                    </div>
-                  </>
-                )}
-                <input type="text" placeholder="메모" className="input input-sm border-gray-200 bg-white" value={scheduleForm.memo} onChange={(e) => setScheduleForm({ ...scheduleForm, memo: e.target.value })} />
-
-                {/* [FIX] 보컬 진행 시 시간 선택 (1시간 / 30분) */}
-                {scheduleTab === 'lesson' && scheduleForm.gridType === 'vocal' && (
-                  <div className="flex flex-col gap-2 mt-2 bg-white/50 p-2 rounded-xl border border-gray-100">
-                    <label className="label cursor-pointer justify-start gap-2 pb-0">
-                      <input type="checkbox" className="checkbox checkbox-sm checkbox-primary" checked={scheduleForm.isVocalProgress} onChange={(e) => setScheduleForm({ ...scheduleForm, isVocalProgress: e.target.checked })} />
-                      <span className="label-text font-bold text-gray-700">보컬진행 (추가수업)</span>
-                    </label>
-
-                    {scheduleForm.isVocalProgress && (
-                      <div className="flex flex-col gap-2 mt-1 pt-2 border-t border-blue-50">
-                        <span className="text-[10px] font-bold text-blue-400 ml-1">수업 시간 선택</span>
-                        <div className="flex bg-gray-100 p-1 rounded-xl w-fit">
-                          <button
-                            type="button"
-                            onClick={() => setScheduleForm(prev => ({ ...prev, vocalType: '60' }))}
-                            className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${scheduleForm.vocalType !== '30' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
-                          >
-                            1시간
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setScheduleForm(prev => ({ ...prev, vocalType: '30' }))}
-                            className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${scheduleForm.vocalType === '30' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
-                          >
-                            30분 (0.5회)
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {scheduleTab === 'lesson' && (
-                  <div className="flex flex-col gap-3 mt-2 pt-2 border-t border-gray-200">
-                    <div className="flex flex-col gap-1">
-                      <label className="text-xs font-bold text-gray-400">추가 수업 ({scheduleForm.gridType === 'master' ? 'Master' : 'Vocal'} 학생)</label>
-                      <select className="select select-sm border-gray-200 bg-gray-50"
-                        onChange={(e) => {
-                          if (!e.target.value) return;
-                          const [sid, sname] = e.target.value.split('|');
-                          setScheduleForm({ ...scheduleForm, studentId: sid, studentName: sname, category: '레슨', memo: '추가수업' });
-                        }}
-                        value=""
-                      >
-                        <option value="">학생 선택...</option>
-                        {students.filter(s => {
-                          if (!s.isActive) return false;
-                          const hasClass = s.schedule && s.schedule.some(w => {
-                            if (scheduleForm.gridType === 'master') return Number(w.master || 0) > 0;
-                            return Number(w.vocal || 0) > 0 || Number(w.vocal30 || 0) > 0;
-                          });
-                          return hasClass;
-                        }).sort((a, b) => a.name.localeCompare(b.name)).map(s => (
-                          <option key={s.id} value={`${s.id}|${s.name}`}>{s.name}</option>
-                        ))}
-                      </select>
-                    </div>
-
-                    {(() => {
-                      const makeupList = historySchedules.filter(h => h.status === 'reschedule' || h.status === 'reschedule_assigned').reduce((acc, h) => {
-                        if (h.status === 'reschedule_assigned') return acc;
-                        const s = students.find(st => st.id === h.studentId);
-                        if (!s || !s.isActive || !s.schedule?.some(w => {
-                          if (scheduleForm.gridType === 'master') return Number(w.master || 0) > 0;
-                          return Number(w.vocal || 0) > 0 || Number(w.vocal30 || 0) > 0;
-                        })) return acc;
-                        const expectedMemo = `보강(${h.date})`;
-                        const alreadyAssigned = schedules.some(sch => sch.studentId === h.studentId && sch.memo === expectedMemo);
-                        if (!alreadyAssigned) {
-                          acc.push({ ...h, studentName: s.name });
-                        }
-                        return acc;
-                      }, []);
-
-                      if (makeupList.length === 0) return null;
-
-                      return (
-                        <div className="flex flex-col gap-1">
-                          <label className="text-xs font-bold text-red-400">보강 대상</label>
-                          <select className="select select-sm border-red-100 bg-red-50"
-                            onChange={(e) => {
-                              if (!e.target.value) return;
-                              const item = JSON.parse(e.target.value);
-                              setScheduleForm({
-                                ...scheduleForm,
-                                studentId: item.studentId,
-                                studentName: item.studentName,
-                                category: '레슨',
-                                memo: `보강(${item.date})`
-                              });
-                              setSelectedMakeupId(item.id);
-                            }}
-                            value=""
-                          >
-                            <option value="">보강 학생 선택...</option>
-                            {makeupList.map((h, i) => (
-                              <option key={i} value={JSON.stringify(h)}>
-                                {h.studentName} ({h.date} {h.time} 결석)
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      );
-                    })()}
-                  </div>
-                )}
-
-                {/* 수업 상태 체크 버튼 영역 */}
-                {scheduleForm.studentName && (
-                  <div className="flex flex-col gap-1 mt-3">
-                    <label className="text-xs font-bold text-gray-400">수업 상태 체크 ({scheduleForm.studentName})</label>
-                    <div className="grid grid-cols-3 gap-2">
-                      {(() => {
-                        const targetDateTime = new Date(`${selectedSlot.date}T${selectedSlot.time.padStart(2, '0')}:${selectedMinute}:00`);
-                        const isPast = new Date() > targetDateTime;
-                        const isMakeupAssignment = scheduleForm.memo && scheduleForm.memo.includes('보강');
-
-                        return (
-                          <>
-                            {/* 완료 버튼: 시간이 지나야 활성화 */}
-                            <button
-                              disabled={!isPast}
-                              onClick={() => setScheduleForm(prev => ({ ...prev, status: prev.status === 'completed' ? '' : 'completed' }))}
-                              className={`btn btn-xs h-8 border-none disabled:bg-gray-100 disabled:text-gray-300 disabled:cursor-not-allowed ${scheduleForm.status === 'completed' ? 'bg-green-600 text-white' : 'bg-green-50 text-green-600'}`}
-                            >
-                              {scheduleForm.status === 'completed' && <FaCheckCircle />} 완료
-                            </button>
-
-                            {/* 보강 버튼: 시간 상관없이 항상 활성화 (disabled={!isPast} 제거) */}
-                            {!isMakeupAssignment && (
-                              <button
-                                onClick={() => setScheduleForm(prev => ({ ...prev, status: (prev.status === 'reschedule' || prev.status === 'reschedule_assigned') ? '' : 'reschedule' }))}
-                                className={`btn btn-xs h-8 border-none ${(scheduleForm.status === 'reschedule' || scheduleForm.status === 'reschedule_assigned') ? 'bg-yellow-500 text-white' : 'bg-yellow-50 text-yellow-600'}`}
-                              >
-                                {(scheduleForm.status === 'reschedule' || scheduleForm.status === 'reschedule_assigned') && <FaClock />} 보강
-                              </button>
-                            )}
-
-                            {/* 결석 버튼: 시간이 지나야 활성화 */}
-                            <button
-                              disabled={!isPast}
-                              onClick={() => setScheduleForm(prev => ({ ...prev, status: prev.status === 'absent' ? '' : 'absent' }))}
-                              className={`btn btn-xs h-8 border-none disabled:bg-gray-100 disabled:text-gray-300 disabled:cursor-not-allowed ${scheduleForm.status === 'absent' ? 'bg-red-500 text-white' : 'bg-red-50 text-red-600'}`}
-                            >
-                              {scheduleForm.status === 'absent' && <FaTimesCircle />} 결석
-                            </button>
-                          </>
-                        );
-                      })()}
-                    </div>
-                  </div>
-                )}
-
-                <div className="flex gap-2 mt-4">
-                  {selectedSlot.id && (
-                    <>
-                      <button onClick={handleScheduleDelete} disabled={isWeekLocked || isScheduleLocked} className="btn btn-sm bg-red-500 text-white hover:bg-red-600 flex-1 border-none disabled:bg-gray-200 disabled:text-gray-400">삭제</button>
-                      <button
-                        onClick={() => {
-                          setMovingSchedule({
-                            ...scheduleForm,
-                            id: selectedSlot.id,
-                            status: scheduleForm.status
-                          });
-                          setIsScheduleModalOpen(false);
-                        }}
-                        disabled={isWeekLocked || isScheduleLocked}
-                        className="btn btn-sm bg-orange-400 text-white hover:bg-orange-500 flex-1 border-none disabled:bg-gray-200 disabled:text-gray-400">
-                        이동
-                      </button>
-                    </>
-                  )}
-                  {scheduleForm.isFixed && <button onClick={handleCancelFixedOneTime} disabled={isWeekLocked || isScheduleLocked} className="btn btn-sm bg-green-500 text-white hover:bg-green-600 flex-1 border-none disabled:bg-gray-200 disabled:text-gray-400">취소</button>}
-
-                  {movingSchedule ? (
-                    <div className="flex-[2] flex gap-2">
-                      <button onClick={() => setMovingSchedule(null)} className="btn btn-sm bg-gray-400 text-white flex-1 border-none">이동 취소</button>
-                      <button onClick={handleMoveSchedule} disabled={isWeekLocked || isScheduleLocked} className="btn btn-sm bg-blue-600 text-white flex-[2] border-none disabled:bg-gray-200 disabled:text-gray-400">
-                        이동 완료
-                      </button>
-                    </div>
-                  ) : (
-                    <button onClick={handleScheduleSave} disabled={isWeekLocked || isScheduleLocked} className="btn btn-sm bg-black text-white flex-[2] border-none disabled:bg-gray-200 disabled:text-gray-400">저장</button>
-                  )}
-                </div>
-              </div>
-              <button onClick={() => setIsScheduleModalOpen(false)} className="btn btn-sm btn-circle btn-ghost absolute top-2 right-2">✕</button>
-            </div>
-          </div>
-        )}
-
-        {/* 수강생 등록/수정 모달 (단가 입력 0 제거 로직 적용) */}
-        {isModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto">
-            <div className="relative bg-white w-full max-w-3xl rounded-[2.5rem] shadow-2xl p-8 md:p-10 transform transition-all">
-
-              {/* 헤더 */}
-              <div className="flex justify-between items-center mb-8">
-                <h2 className="text-3xl font-extrabold text-gray-900 tracking-tight">
-                  {editingId ? '수강생 정보 수정' : '신규 수강생 등록'}
-                </h2>
-                <button onClick={closeModal} className="btn btn-sm btn-circle btn-ghost text-gray-400 hover:bg-gray-100">✕</button>
-              </div>
-
-              <div className="space-y-6">
-
-                {/* 1. 이름 / 연락처 / 상태 (1열 배치) */}
-                <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
-                  <div className="md:col-span-4">
-                    <label className="text-xs font-bold text-gray-500 mb-1.5 ml-2 block">이름</label>
-                    <input
-                      type="text"
-                      name="name"
-                      className="input w-full bg-gray-50 border-transparent focus:bg-white focus:ring-2 focus:ring-black/5 rounded-2xl font-bold text-lg text-gray-900 h-12 px-5"
-                      placeholder="이름"
-                      value={formData.name}
-                      onChange={handleChange}
-                    />
-                  </div>
-                  <div className="md:col-span-4">
-                    <label className="text-xs font-bold text-gray-500 mb-1.5 ml-2 block">연락처</label>
-                    <input
-                      type="text"
-                      name="phone"
-                      className="input w-full bg-gray-50 border-transparent focus:bg-white focus:ring-2 focus:ring-black/5 rounded-2xl font-bold text-lg text-gray-900 h-12 px-5"
-                      placeholder="010-0000-0000"
-                      value={formData.phone}
-                      onChange={handlePhoneChange}
-                      maxLength="13"
-                    />
-                  </div>
-                  <div className="md:col-span-4 flex gap-2">
-                    <label className={`cursor-pointer flex-1 flex items-center justify-center gap-1.5 h-12 rounded-2xl border-2 transition-all ${formData.isMonthly ? 'bg-blue-50 border-blue-100 text-blue-700' : 'bg-white border-gray-100 text-gray-400 hover:border-gray-200'}`}>
-                      <input type="checkbox" className="checkbox checkbox-xs checkbox-primary rounded-md" checked={formData.isMonthly} onChange={(e) => setFormData({ ...formData, isMonthly: e.target.checked })} />
-                      <span className="text-xs font-bold">월정산</span>
-                    </label>
-                    <label className={`cursor-pointer flex-1 flex items-center justify-center gap-1.5 h-12 rounded-2xl border-2 transition-all ${formData.isArtist ? 'bg-purple-50 border-purple-100 text-purple-700' : 'bg-white border-gray-100 text-gray-400 hover:border-gray-200'}`}>
-                      <input type="checkbox" className="checkbox checkbox-xs checkbox-secondary rounded-md" checked={formData.isArtist} onChange={(e) => setFormData({ ...formData, isArtist: e.target.checked })} />
-                      <span className="text-xs font-bold">아티스트</span>
-                    </label>
-                  </div>
-                </div>
-
-                {/* 2. 최초등록일 / 회차 */}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <div>
-                    <label className="text-xs font-bold text-gray-500 mb-1.5 ml-2 block">최초 등록일 <span className="text-[10px] font-normal text-blue-400 ml-1">(수정 가능)</span></label>
-                    <input
-                      type="date"
-                      name="firstDate"
-                      className="input w-full bg-gray-50 border-transparent focus:bg-white focus:ring-2 focus:ring-black/5 rounded-2xl font-bold text-lg text-gray-900 h-12 px-5"
-                      value={formData.firstDate}
-                      onChange={handleChange}
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs font-bold text-gray-500 mb-1.5 ml-2 block">등록 회차</label>
-                    <div className="relative">
-                      <input
-                        type="number"
-                        name="count"
-                        className="input w-full bg-gray-50 border-transparent focus:bg-white focus:ring-2 focus:ring-black/5 rounded-2xl font-bold text-lg text-gray-900 h-12 px-5"
-                        value={formData.count}
-                        onChange={handleChange}
-                      />
-                      <span className="absolute right-5 top-1/2 -translate-y-1/2 text-sm font-bold text-gray-400">회차</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 3. 수업 회차 설정 (표 형태) */}
-                <div>
-                  <div className="flex items-center gap-4 mb-2 mt-2 px-1">
-                    <h3 className="text-sm font-bold text-gray-900 ml-1">주차별 수업 설정</h3>
-                    <div className="h-[1px] flex-1 bg-gray-100"></div>
-                  </div>
-
-                  <div className="bg-gray-50 p-5 rounded-[2rem] border border-gray-100">
-                    {/* 테이블 헤더 */}
-                    <div className="grid grid-cols-7 gap-3 mb-2 text-center">
-                      <div className="col-span-1 text-[10px] font-extrabold text-gray-400 uppercase">Week</div>
-                      <div className="col-span-2 text-[10px] font-extrabold text-orange-400 uppercase">Master</div>
-                      <div className="col-span-2 text-[10px] font-extrabold text-blue-400 uppercase">Vocal</div>
-                      <div className="col-span-2 text-[10px] font-extrabold text-cyan-400 uppercase">Vocal(30)</div>
-                    </div>
-
-                    {/* 테이블 바디 */}
-                    <div className="space-y-2">
-                      {formData.schedule.map((week, idx) => (
-                        <div key={idx} className="grid grid-cols-7 gap-3 items-center">
-                          <div className="col-span-1 flex justify-center">
-                            <span className="flex items-center justify-center w-7 h-7 rounded-lg bg-white border border-gray-200 text-xs font-bold text-gray-500">
-                              {idx + 1}
-                            </span>
-                          </div>
-                          <div className="col-span-2">
-                            <input
-                              type="number"
-                              placeholder="-"
-                              className="input input-sm w-full text-center bg-white border-transparent focus:border-orange-400 focus:ring-2 focus:ring-orange-100 rounded-xl font-bold text-gray-800 shadow-sm h-9"
-                              value={week.master}
-                              onChange={(e) => handleScheduleChange(idx, 'master', e.target.value)}
-                            />
-                          </div>
-                          <div className="col-span-2">
-                            <input
-                              type="number"
-                              placeholder="-"
-                              className="input input-sm w-full text-center bg-white border-transparent focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-xl font-bold text-gray-800 shadow-sm h-9"
-                              value={week.vocal}
-                              onChange={(e) => handleScheduleChange(idx, 'vocal', e.target.value)}
-                            />
-                          </div>
-                          <div className="col-span-2">
-                            <input
-                              type="number"
-                              placeholder="-"
-                              className="input input-sm w-full text-center bg-white border-transparent focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100 rounded-xl font-bold text-gray-800 shadow-sm h-9"
-                              value={week.vocal30}
-                              onChange={(e) => handleScheduleChange(idx, 'vocal30', e.target.value)}
-                            />
+                                );
+                              })}
+                            </div>
                           </div>
                         </div>
                       ))}
                     </div>
-                  </div>
-                </div>
-
-                {/* 4. 마스터 / 보컬 단가 (0 비활성화 처리) */}
-                <div className="grid grid-cols-2 gap-6">
-                  <div>
-                    <label className="text-xs font-bold text-gray-400 mb-1.5 ml-2 block">Master 회당 단가</label>
-                    <div className="relative">
-                      <input
-                        type="text"
-                        className="input w-full bg-gray-50 border-none rounded-2xl font-bold text-gray-800 pr-8 text-right h-12 focus:bg-white focus:ring-2 focus:ring-orange-100"
-                        placeholder="0"
-                        /* [수정] 값이 0이면 빈 문자열로 처리하여 입력 시 0이 사라지게 함 */
-                        value={Number(formData.rates.master) === 0 ? '' : Number(formData.rates.master).toLocaleString()}
-                        onChange={(e) => handleRateChange('master', e.target.value)}
-                      />
-                      <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs text-gray-400 font-bold">원</span>
-                    </div>
-                  </div>
-                  <div>
-                    <label className="text-xs font-bold text-gray-400 mb-1.5 ml-2 block">Vocal 회당 단가</label>
-                    <div className="relative">
-                      <input
-                        type="text"
-                        className="input w-full bg-gray-50 border-none rounded-2xl font-bold text-gray-800 pr-8 text-right h-12 focus:bg-white focus:ring-2 focus:ring-blue-100"
-                        placeholder="0"
-                        /* [수정] 값이 0이면 빈 문자열로 처리 */
-                        value={Number(formData.rates.vocal) === 0 ? '' : Number(formData.rates.vocal).toLocaleString()}
-                        onChange={(e) => handleRateChange('vocal', e.target.value)}
-                      />
-                      <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs text-gray-400 font-bold">원</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* 5. 메모 */}
-                <div>
-                  <label className="text-xs font-bold text-gray-500 mb-1.5 ml-2 block">메모</label>
-                  <input
-                    type="text"
-                    name="memo"
-                    className="input w-full bg-gray-50 border-transparent focus:bg-white focus:ring-2 focus:ring-black/5 rounded-2xl font-medium text-gray-800 h-12 px-5"
-                    placeholder="특이사항 입력"
-                    value={formData.memo}
-                    onChange={handleChange}
-                  />
-                </div>
-              </div>
-
-              {/* 6. 버튼 */}
-              <div className="mt-8 flex gap-4">
-                <button onClick={closeModal} className="btn btn-lg h-14 min-h-[3.5rem] flex-1 bg-white border-2 border-gray-100 text-gray-500 hover:bg-gray-50 hover:border-gray-300 rounded-2xl font-bold text-base shadow-sm transition-all">
-                  취소
-                </button>
-                <button onClick={handleSubmit} className="btn btn-lg h-14 min-h-[3.5rem] flex-[2] bg-gray-900 border-none text-white hover:bg-black hover:scale-[1.01] active:scale-[0.99] rounded-2xl font-bold text-base shadow-xl shadow-gray-300 transition-all">
-                  {editingId ? '저장하기' : '등록하기'}
-                </button>
+                  );
+                })()}
               </div>
             </div>
-          </div>
-        )}
+          )
+        }
+
+        {/* 모달들 (스케쥴, 수강생 등록) */}
+        {
+          isScheduleModalOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/40 backdrop-blur-md p-4">
+
+              {/* [수정됨] gridType이 'master'가 아니면(짱구일정이면) 연한 초록 배경(bg-green-50) 적용 */}
+              <div className={`w-full max-w-sm rounded-2xl shadow-xl p-6 relative transition-colors duration-200 ${scheduleForm.gridType === 'master' ? 'bg-white' : 'bg-green-50 border-2 border-green-100'}`}>
+
+                <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
+                  {/* 제목 옆에 점으로 색상 힌트 추가 */}
+                  <div className={`w-2 h-2 rounded-full ${scheduleForm.gridType === 'master' ? 'bg-orange-500' : 'bg-green-500'}`}></div>
+                  {selectedSlot.date} {selectedSlot.time}:00 {scheduleForm.gridType === 'master' ? '쌤일정' : '짱구일정'}
+                </h3>
+
+                <div className="flex gap-4 mb-4">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="radio" name="minute" className="radio radio-sm radio-primary" checked={selectedMinute === '00'} onChange={() => setSelectedMinute('00')} />
+                    <span className="font-bold">00분 (정각)</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input type="radio" name="minute" className="radio radio-sm radio-primary" checked={selectedMinute === '30'} onChange={() => setSelectedMinute('30')} />
+                    <span className="font-bold">30분</span>
+                  </label>
+                </div>
+
+                {/* [NEW] Master 30분 진행 체크박스 (Master 그리드일 때만 노출) */}
+                {scheduleForm.gridType === 'master' && (
+                  <div className="flex bg-orange-100 p-1 rounded-xl w-fit mb-2">
+                    <button
+                      type="button"
+                      onClick={() => setScheduleForm(prev => ({ ...prev, masterType: '60' }))}
+                      className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${(!scheduleForm.masterType || scheduleForm.masterType === '60') ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                    >
+                      Full
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setScheduleForm(prev => ({ ...prev, masterType: '30' }))}
+                      className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${scheduleForm.masterType === '30' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                    >
+                      Half
+                    </button>
+                  </div>
+                )}
+
+                {/* [NEW] Vocal 30분(반갈죽) 진행 체크박스 (Vocal 그리드일 때 노출) */}
+                {/* V30(독립)과는 다름. 1시간 수업을 반으로 나누는 기능 */}
+                {scheduleForm.gridType !== 'master' && (
+                  <div className="flex bg-green-100/50 p-1 rounded-xl w-fit mb-2">
+                    <button
+                      type="button"
+                      onClick={() => setScheduleForm(prev => ({ ...prev, vocalType: '60' }))}
+                      className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${(!scheduleForm.vocalType || scheduleForm.vocalType === '60') ? 'bg-white text-green-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                    >
+                      Full
+                    </button>
+                    <button
+                      type="button"
+                      // 'half' 타입으로 설정하여 V30('30')과 구분
+                      onClick={() => setScheduleForm(prev => ({ ...prev, vocalType: 'half' }))}
+                      className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${scheduleForm.vocalType === 'half' ? 'bg-white text-green-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                    >
+                      Half
+                    </button>
+                  </div>
+                )}
+
+                {/* [수정] Vocal 추가 수업 시 시간 선택 라디오 */}
+                <div className={`tabs tabs-boxed p-1 mb-4 ${scheduleForm.gridType === 'master' ? 'bg-gray-100' : 'bg-green-100/50'}`}>
+                  <a className={`tab flex-1 ${scheduleTab === 'lesson' ? 'tab-active bg-white text-black font-bold shadow-sm' : ''}`} onClick={() => handleTabChange('lesson')}>수강생 레슨</a>
+                  <a className={`tab flex-1 ${scheduleTab === 'personal' ? 'tab-active bg-white text-black font-bold shadow-sm' : ''}`} onClick={() => handleTabChange('personal')}>개인 일정</a>
+                </div>
+
+                <div className="flex flex-col gap-3">
+                  {scheduleTab === 'lesson' ? (
+                    <>
+                      <select className="select select-sm border-gray-200 bg-white"
+                        onChange={(e) => {
+                          const [sId, sName] = e.target.value.split('|');
+                          const isHalfSuffix = sName.includes('(30분)');
+
+                          setScheduleForm(prev => {
+                            const newState = { ...prev, studentId: sId, studentName: sName, category: '레슨' };
+
+                            // [FIX] 반갈죽(30분) 잔여가 있는 학생 선택 시에만 'Half'로 자동 전환
+                            // 일반 학생 선택 시에는 기존 선택(사용자가 Half를 눌렀을 수 있음)을 유지 (강제 Full 리셋 방지)
+                            if (isHalfSuffix) {
+                              if (prev.gridType === 'master') {
+                                newState.masterType = '30';
+                              } else {
+                                newState.vocalType = 'half';
+                              }
+                            }
+                            return newState;
+                          });
+                        }}>
+                        <option value="">학생 선택</option>
+                        {availableStudents.map(s => <option key={s.id} value={`${s.id}|${s.name}`}>{s.name}</option>)}
+                      </select>
+                    </>
+                  ) : (
+                    <>
+                      <select className="select select-sm border-gray-200 bg-white" value={scheduleForm.category} onChange={(e) => setScheduleForm({ ...scheduleForm, category: e.target.value })}>
+                        {scheduleForm.gridType === 'master' ? (
+                          <>
+                            <option value="야구">야구</option>
+                            <option value="야구1:1">야구 1:1</option>
+                            <option value="작곡">작곡</option>
+                            <option value="합주">합주</option>
+                            <option value="미팅">미팅</option>
+                            <option value="병원">병원</option>
+                            <option value="기타">기타</option>
+                          </>
+                        ) : (
+                          <>
+                            <option value="상담">상담</option>
+                            <option value="PT">PT</option>
+                            <option value="피부과">피부과</option>
+                            <option value="병원">병원</option>
+                            <option value="월말정산">월말정산</option>
+                            <option value="기타">기타</option>
+                          </>
+                        )}
+                      </select>
+                      <div className="form-control">
+                        <label className="label cursor-pointer justify-start gap-2">
+                          <input type="checkbox" className="checkbox checkbox-sm checkbox-primary" checked={scheduleForm.isFixed} onChange={(e) => setScheduleForm({ ...scheduleForm, isFixed: e.target.checked })} />
+                          <span className="label-text font-bold text-gray-700">매주 이 시간 고정</span>
+                        </label>
+                      </div>
+                    </>
+                  )}
+                  <input type="text" placeholder="메모" className="input input-sm border-gray-200 bg-white" value={scheduleForm.memo} onChange={(e) => setScheduleForm({ ...scheduleForm, memo: e.target.value })} />
+
+                  {/* [FIX] 보컬 진행 시 시간 선택 (1시간 / 30분) */}
+                  {scheduleTab === 'lesson' && scheduleForm.gridType === 'vocal' && (
+                    <div className="flex flex-col gap-2 mt-2 bg-white/50 p-2 rounded-xl border border-gray-100">
+                      <label className="label cursor-pointer justify-start gap-2 pb-0">
+                        <input type="checkbox" className="checkbox checkbox-sm checkbox-primary" checked={scheduleForm.isVocalProgress} onChange={(e) => setScheduleForm({ ...scheduleForm, isVocalProgress: e.target.checked })} />
+                        <span className="label-text font-bold text-gray-700">보컬진행 (추가수업)</span>
+                      </label>
+
+                      {scheduleForm.isVocalProgress && (
+                        <div className="flex flex-col gap-2 mt-1 pt-2 border-t border-blue-50">
+                          <span className="text-[10px] font-bold text-blue-400 ml-1">수업 시간 선택</span>
+                          <div className="flex bg-gray-100 p-1 rounded-xl w-fit">
+                            <button
+                              type="button"
+                              onClick={() => setScheduleForm(prev => ({ ...prev, vocalType: '60' }))}
+                              className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${scheduleForm.vocalType !== '30' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                            >
+                              1시간
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setScheduleForm(prev => ({ ...prev, vocalType: '30' }))}
+                              className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${scheduleForm.vocalType === '30' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                            >
+                              30분 (0.5회)
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {scheduleTab === 'lesson' && (
+                    <div className="flex flex-col gap-3 mt-2 pt-2 border-t border-gray-200">
+                      <div className="flex flex-col gap-1">
+                        <label className="text-xs font-bold text-gray-400">추가 수업 ({scheduleForm.gridType === 'master' ? 'Master' : 'Vocal'} 학생)</label>
+                        <select className="select select-sm border-gray-200 bg-gray-50"
+                          onChange={(e) => {
+                            if (!e.target.value) return;
+                            const [sid, sname] = e.target.value.split('|');
+                            setScheduleForm({ ...scheduleForm, studentId: sid, studentName: sname, category: '레슨', memo: '추가수업' });
+                          }}
+                          value=""
+                        >
+                          <option value="">학생 선택...</option>
+                          {students.filter(s => {
+                            if (!s.isActive) return false;
+                            const hasClass = s.schedule && s.schedule.some(w => {
+                              if (scheduleForm.gridType === 'master') return Number(w.master || 0) > 0;
+                              return Number(w.vocal || 0) > 0 || Number(w.vocal30 || 0) > 0;
+                            });
+                            return hasClass;
+                          }).sort((a, b) => a.name.localeCompare(b.name)).map(s => (
+                            <option key={s.id} value={`${s.id}|${s.name}`}>{s.name}</option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {(() => {
+                        const makeupList = historySchedules.filter(h => h.status === 'reschedule' || h.status === 'reschedule_assigned').reduce((acc, h) => {
+                          if (h.status === 'reschedule_assigned') return acc;
+                          const s = students.find(st => st.id === h.studentId);
+                          if (!s || !s.isActive || !s.schedule?.some(w => {
+                            if (scheduleForm.gridType === 'master') return Number(w.master || 0) > 0;
+                            return Number(w.vocal || 0) > 0 || Number(w.vocal30 || 0) > 0;
+                          })) return acc;
+                          const expectedMemo = `보강(${h.date})`;
+                          const alreadyAssigned = schedules.some(sch => sch.studentId === h.studentId && sch.memo === expectedMemo);
+                          if (!alreadyAssigned) {
+                            acc.push({ ...h, studentName: s.name });
+                          }
+                          return acc;
+                        }, []);
+
+                        if (makeupList.length === 0) return null;
+
+                        return (
+                          <div className="flex flex-col gap-1">
+                            <label className="text-xs font-bold text-red-400">보강 대상</label>
+                            <select className="select select-sm border-red-100 bg-red-50"
+                              onChange={(e) => {
+                                if (!e.target.value) return;
+                                const item = JSON.parse(e.target.value);
+                                setScheduleForm({
+                                  ...scheduleForm,
+                                  studentId: item.studentId,
+                                  studentName: item.studentName,
+                                  category: '레슨',
+                                  memo: `보강(${item.date})`
+                                });
+                                setSelectedMakeupId(item.id);
+                              }}
+                              value=""
+                            >
+                              <option value="">보강 학생 선택...</option>
+                              {makeupList.map((h, i) => (
+                                <option key={i} value={JSON.stringify(h)}>
+                                  {h.studentName} ({h.date} {h.time} 결석)
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+
+                  {/* 수업 상태 체크 버튼 영역 */}
+                  {scheduleForm.studentName && (
+                    <div className="flex flex-col gap-1 mt-3">
+                      <label className="text-xs font-bold text-gray-400">수업 상태 체크 ({scheduleForm.studentName})</label>
+                      <div className="grid grid-cols-3 gap-2">
+                        {(() => {
+                          const targetDateTime = new Date(`${selectedSlot.date}T${selectedSlot.time.padStart(2, '0')}:${selectedMinute}:00`);
+                          const isPast = new Date() > targetDateTime;
+                          const isMakeupAssignment = scheduleForm.memo && scheduleForm.memo.includes('보강');
+
+                          return (
+                            <>
+                              {/* 완료 버튼: 시간이 지나야 활성화 */}
+                              <button
+                                disabled={!isPast}
+                                onClick={() => setScheduleForm(prev => ({ ...prev, status: prev.status === 'completed' ? '' : 'completed' }))}
+                                className={`btn btn-xs h-8 border-none disabled:bg-gray-100 disabled:text-gray-300 disabled:cursor-not-allowed ${scheduleForm.status === 'completed' ? 'bg-green-600 text-white' : 'bg-green-50 text-green-600'}`}
+                              >
+                                {scheduleForm.status === 'completed' && <FaCheckCircle />} 완료
+                              </button>
+
+                              {/* 보강 버튼: 시간 상관없이 항상 활성화 (disabled={!isPast} 제거) */}
+                              {!isMakeupAssignment && (
+                                <button
+                                  onClick={() => setScheduleForm(prev => ({ ...prev, status: (prev.status === 'reschedule' || prev.status === 'reschedule_assigned') ? '' : 'reschedule' }))}
+                                  className={`btn btn-xs h-8 border-none ${(scheduleForm.status === 'reschedule' || scheduleForm.status === 'reschedule_assigned') ? 'bg-yellow-500 text-white' : 'bg-yellow-50 text-yellow-600'}`}
+                                >
+                                  {(scheduleForm.status === 'reschedule' || scheduleForm.status === 'reschedule_assigned') && <FaClock />} 보강
+                                </button>
+                              )}
+
+                              {/* 결석 버튼: 시간이 지나야 활성화 */}
+                              <button
+                                disabled={!isPast}
+                                onClick={() => setScheduleForm(prev => ({ ...prev, status: prev.status === 'absent' ? '' : 'absent' }))}
+                                className={`btn btn-xs h-8 border-none disabled:bg-gray-100 disabled:text-gray-300 disabled:cursor-not-allowed ${scheduleForm.status === 'absent' ? 'bg-red-500 text-white' : 'bg-red-50 text-red-600'}`}
+                              >
+                                {scheduleForm.status === 'absent' && <FaTimesCircle />} 결석
+                              </button>
+                            </>
+                          );
+                        })()}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex gap-2 mt-4">
+                    {selectedSlot.id && (
+                      <>
+                        <button onClick={handleScheduleDelete} disabled={isWeekLocked || isScheduleLocked} className="btn btn-sm bg-red-500 text-white hover:bg-red-600 flex-1 border-none disabled:bg-gray-200 disabled:text-gray-400">삭제</button>
+                        <button
+                          onClick={() => {
+                            setMovingSchedule({
+                              ...scheduleForm,
+                              id: selectedSlot.id,
+                              status: scheduleForm.status
+                            });
+                            setIsScheduleModalOpen(false);
+                          }}
+                          disabled={isWeekLocked || isScheduleLocked}
+                          className="btn btn-sm bg-orange-400 text-white hover:bg-orange-500 flex-1 border-none disabled:bg-gray-200 disabled:text-gray-400">
+                          이동
+                        </button>
+                      </>
+                    )}
+                    {scheduleForm.isFixed && <button onClick={handleCancelFixedOneTime} disabled={isWeekLocked || isScheduleLocked} className="btn btn-sm bg-green-500 text-white hover:bg-green-600 flex-1 border-none disabled:bg-gray-200 disabled:text-gray-400">취소</button>}
+
+                    {movingSchedule ? (
+                      <div className="flex-[2] flex gap-2">
+                        <button onClick={() => setMovingSchedule(null)} className="btn btn-sm bg-gray-400 text-white flex-1 border-none">이동 취소</button>
+                        <button onClick={handleMoveSchedule} disabled={isWeekLocked || isScheduleLocked} className="btn btn-sm bg-blue-600 text-white flex-[2] border-none disabled:bg-gray-200 disabled:text-gray-400">
+                          이동 완료
+                        </button>
+                      </div>
+                    ) : (
+                      <button onClick={handleScheduleSave} disabled={isWeekLocked || isScheduleLocked} className="btn btn-sm bg-black text-white flex-[2] border-none disabled:bg-gray-200 disabled:text-gray-400">저장</button>
+                    )}
+                  </div>
+                </div>
+                <button onClick={() => setIsScheduleModalOpen(false)} className="btn btn-sm btn-circle btn-ghost absolute top-2 right-2">✕</button>
+              </div>
+            </div>
+          )
+        }
+
+        {/* 수강생 등록/수정 모달 (단가 입력 0 제거 로직 적용) */}
+        {
+          isModalOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto">
+              <div className="relative bg-white w-full max-w-3xl rounded-[2.5rem] shadow-2xl p-8 md:p-10 transform transition-all">
+
+                {/* 헤더 */}
+                <div className="flex justify-between items-center mb-8">
+                  <h2 className="text-3xl font-extrabold text-gray-900 tracking-tight">
+                    {editingId ? '수강생 정보 수정' : '신규 수강생 등록'}
+                  </h2>
+                  <button onClick={closeModal} className="btn btn-sm btn-circle btn-ghost text-gray-400 hover:bg-gray-100">✕</button>
+                </div>
+
+                <div className="space-y-6">
+
+                  {/* 1. 이름 / 연락처 / 상태 (1열 배치) */}
+                  <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
+                    <div className="md:col-span-4">
+                      <label className="text-xs font-bold text-gray-500 mb-1.5 ml-2 block">이름</label>
+                      <input
+                        type="text"
+                        name="name"
+                        className="input w-full bg-gray-50 border-transparent focus:bg-white focus:ring-2 focus:ring-black/5 rounded-2xl font-bold text-lg text-gray-900 h-12 px-5"
+                        placeholder="이름"
+                        value={formData.name}
+                        onChange={handleChange}
+                      />
+                    </div>
+                    <div className="md:col-span-4">
+                      <label className="text-xs font-bold text-gray-500 mb-1.5 ml-2 block">연락처</label>
+                      <input
+                        type="text"
+                        name="phone"
+                        className="input w-full bg-gray-50 border-transparent focus:bg-white focus:ring-2 focus:ring-black/5 rounded-2xl font-bold text-lg text-gray-900 h-12 px-5"
+                        placeholder="010-0000-0000"
+                        value={formData.phone}
+                        onChange={handlePhoneChange}
+                        maxLength="13"
+                      />
+                    </div>
+                    <div className="md:col-span-4 flex gap-2">
+                      <label className={`cursor-pointer flex-1 flex items-center justify-center gap-1.5 h-12 rounded-2xl border-2 transition-all ${formData.isMonthly ? 'bg-blue-50 border-blue-100 text-blue-700' : 'bg-white border-gray-100 text-gray-400 hover:border-gray-200'}`}>
+                        <input type="checkbox" className="checkbox checkbox-xs checkbox-primary rounded-md" checked={formData.isMonthly} onChange={(e) => setFormData({ ...formData, isMonthly: e.target.checked })} />
+                        <span className="text-xs font-bold">월정산</span>
+                      </label>
+                      <label className={`cursor-pointer flex-1 flex items-center justify-center gap-1.5 h-12 rounded-2xl border-2 transition-all ${formData.isArtist ? 'bg-purple-50 border-purple-100 text-purple-700' : 'bg-white border-gray-100 text-gray-400 hover:border-gray-200'}`}>
+                        <input type="checkbox" className="checkbox checkbox-xs checkbox-secondary rounded-md" checked={formData.isArtist} onChange={(e) => setFormData({ ...formData, isArtist: e.target.checked })} />
+                        <span className="text-xs font-bold">아티스트</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* 2. 최초등록일 / 회차 */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <label className="text-xs font-bold text-gray-500 mb-1.5 ml-2 block">최초 등록일 <span className="text-[10px] font-normal text-blue-400 ml-1">(수정 가능)</span></label>
+                      <input
+                        type="date"
+                        name="firstDate"
+                        className="input w-full bg-gray-50 border-transparent focus:bg-white focus:ring-2 focus:ring-black/5 rounded-2xl font-bold text-lg text-gray-900 h-12 px-5"
+                        value={formData.firstDate}
+                        onChange={handleChange}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-xs font-bold text-gray-500 mb-1.5 ml-2 block">등록 회차</label>
+                      <div className="relative">
+                        <input
+                          type="number"
+                          name="count"
+                          className="input w-full bg-gray-50 border-transparent focus:bg-white focus:ring-2 focus:ring-black/5 rounded-2xl font-bold text-lg text-gray-900 h-12 px-5"
+                          value={formData.count}
+                          onChange={handleChange}
+                        />
+                        <span className="absolute right-5 top-1/2 -translate-y-1/2 text-sm font-bold text-gray-400">회차</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 3. 수업 회차 설정 (표 형태) */}
+                  <div>
+                    <div className="flex items-center gap-4 mb-2 mt-2 px-1">
+                      <h3 className="text-sm font-bold text-gray-900 ml-1">주차별 수업 설정</h3>
+                      <div className="h-[1px] flex-1 bg-gray-100"></div>
+                    </div>
+
+                    <div className="bg-gray-50 p-5 rounded-[2rem] border border-gray-100">
+                      {/* 테이블 헤더 */}
+                      <div className="grid grid-cols-7 gap-3 mb-2 text-center">
+                        <div className="col-span-1 text-[10px] font-extrabold text-gray-400 uppercase">Week</div>
+                        <div className="col-span-2 text-[10px] font-extrabold text-orange-400 uppercase">Master</div>
+                        <div className="col-span-2 text-[10px] font-extrabold text-blue-400 uppercase">Vocal</div>
+                        <div className="col-span-2 text-[10px] font-extrabold text-cyan-400 uppercase">Vocal(30)</div>
+                      </div>
+
+                      {/* 테이블 바디 */}
+                      <div className="space-y-2">
+                        {formData.schedule.map((week, idx) => (
+                          <div key={idx} className="grid grid-cols-7 gap-3 items-center">
+                            <div className="col-span-1 flex justify-center">
+                              <span className="flex items-center justify-center w-7 h-7 rounded-lg bg-white border border-gray-200 text-xs font-bold text-gray-500">
+                                {idx + 1}
+                              </span>
+                            </div>
+                            <div className="col-span-2">
+                              <input
+                                type="number"
+                                placeholder="-"
+                                className="input input-sm w-full text-center bg-white border-transparent focus:border-orange-400 focus:ring-2 focus:ring-orange-100 rounded-xl font-bold text-gray-800 shadow-sm h-9"
+                                value={week.master}
+                                onChange={(e) => handleScheduleChange(idx, 'master', e.target.value)}
+                              />
+                            </div>
+                            <div className="col-span-2">
+                              <input
+                                type="number"
+                                placeholder="-"
+                                className="input input-sm w-full text-center bg-white border-transparent focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-xl font-bold text-gray-800 shadow-sm h-9"
+                                value={week.vocal}
+                                onChange={(e) => handleScheduleChange(idx, 'vocal', e.target.value)}
+                              />
+                            </div>
+                            <div className="col-span-2">
+                              <input
+                                type="number"
+                                placeholder="-"
+                                className="input input-sm w-full text-center bg-white border-transparent focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100 rounded-xl font-bold text-gray-800 shadow-sm h-9"
+                                value={week.vocal30}
+                                onChange={(e) => handleScheduleChange(idx, 'vocal30', e.target.value)}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 4. 마스터 / 보컬 단가 (0 비활성화 처리) */}
+                  <div className="grid grid-cols-2 gap-6">
+                    <div>
+                      <label className="text-xs font-bold text-gray-400 mb-1.5 ml-2 block">Master 회당 단가</label>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          className="input w-full bg-gray-50 border-none rounded-2xl font-bold text-gray-800 pr-8 text-right h-12 focus:bg-white focus:ring-2 focus:ring-orange-100"
+                          placeholder="0"
+                          /* [수정] 값이 0이면 빈 문자열로 처리하여 입력 시 0이 사라지게 함 */
+                          value={Number(formData.rates.master) === 0 ? '' : Number(formData.rates.master).toLocaleString()}
+                          onChange={(e) => handleRateChange('master', e.target.value)}
+                        />
+                        <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs text-gray-400 font-bold">원</span>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-xs font-bold text-gray-400 mb-1.5 ml-2 block">Vocal 회당 단가</label>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          className="input w-full bg-gray-50 border-none rounded-2xl font-bold text-gray-800 pr-8 text-right h-12 focus:bg-white focus:ring-2 focus:ring-blue-100"
+                          placeholder="0"
+                          /* [수정] 값이 0이면 빈 문자열로 처리 */
+                          value={Number(formData.rates.vocal) === 0 ? '' : Number(formData.rates.vocal).toLocaleString()}
+                          onChange={(e) => handleRateChange('vocal', e.target.value)}
+                        />
+                        <span className="absolute right-4 top-1/2 -translate-y-1/2 text-xs text-gray-400 font-bold">원</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 5. 메모 */}
+                  <div>
+                    <label className="text-xs font-bold text-gray-500 mb-1.5 ml-2 block">메모</label>
+                    <input
+                      type="text"
+                      name="memo"
+                      className="input w-full bg-gray-50 border-transparent focus:bg-white focus:ring-2 focus:ring-black/5 rounded-2xl font-medium text-gray-800 h-12 px-5"
+                      placeholder="특이사항 입력"
+                      value={formData.memo}
+                      onChange={handleChange}
+                    />
+                  </div>
+                </div>
+
+                {/* 6. 버튼 */}
+                <div className="mt-8 flex gap-4">
+                  <button onClick={closeModal} className="btn btn-lg h-14 min-h-[3.5rem] flex-1 bg-white border-2 border-gray-100 text-gray-500 hover:bg-gray-50 hover:border-gray-300 rounded-2xl font-bold text-base shadow-sm transition-all">
+                    취소
+                  </button>
+                  <button onClick={handleSubmit} className="btn btn-lg h-14 min-h-[3.5rem] flex-[2] bg-gray-900 border-none text-white hover:bg-black hover:scale-[1.01] active:scale-[0.99] rounded-2xl font-bold text-base shadow-xl shadow-gray-300 transition-all">
+                    {editingId ? '저장하기' : '등록하기'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )
+        }
 
         {/* 이미지 미리보기 모달 (모바일 개선) */}
         {/* 이미지 미리보기 모달 (모바일 개선 + 삭제 기능) */}
-        {previewImage && (
-          <div className="fixed inset-0 z-[9999] bg-black/95 flex justify-center items-center p-4 touch-none" onClick={() => setPreviewImage(null)}>
-            <div className="relative max-w-4xl w-full flex justify-center items-center" onClick={e => e.stopPropagation()}>
-              <img src={previewImage.url || previewImage} alt="영수증 미리보기" className="max-w-full max-h-[85vh] rounded-lg shadow-2xl object-contain" />
+        {
+          previewImage && (
+            <div className="fixed inset-0 z-[9999] bg-black/95 flex justify-center items-center p-4 touch-none" onClick={() => setPreviewImage(null)}>
+              <div className="relative max-w-4xl w-full flex justify-center items-center" onClick={e => e.stopPropagation()}>
+                <img src={previewImage.url || previewImage} alt="영수증 미리보기" className="max-w-full max-h-[85vh] rounded-lg shadow-2xl object-contain" />
 
-              <button
-                onClick={() => setPreviewImage(null)}
-                className="absolute top-2 right-2 md:top-4 md:right-4 btn btn-circle btn-sm bg-black/50 text-white border-2 border-white/20 hover:bg-black hover:border-white shadow-lg z-50">
-                <FaTimesCircle className="text-xl" />
-              </button>
-
-              {previewImage.sid && (
                 <button
-                  onClick={handleDeleteRetroactivePhoto}
-                  className="absolute bottom-4 right-4 btn btn-error btn-sm text-white shadow-lg z-50 font-bold"
-                >
-                  <FaTrash className="mr-1" /> 삭제
+                  onClick={() => setPreviewImage(null)}
+                  className="absolute top-2 right-2 md:top-4 md:right-4 btn btn-circle btn-sm bg-black/50 text-white border-2 border-white/20 hover:bg-black hover:border-white shadow-lg z-50">
+                  <FaTimesCircle className="text-xl" />
                 </button>
-              )}
-            </div>
-          </div>
-        )}
 
-      </div>
-    </div>
+                {previewImage.sid && (
+                  <button
+                    onClick={handleDeleteRetroactivePhoto}
+                    className="absolute bottom-4 right-4 btn btn-error btn-sm text-white shadow-lg z-50 font-bold"
+                  >
+                    <FaTrash className="mr-1" /> 삭제
+                  </button>
+                )}
+              </div>
+            </div>
+          )
+        }
+
+      </div >
+    </div >
   );
 }
 
