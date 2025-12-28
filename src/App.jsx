@@ -1,4 +1,4 @@
-import { useState, useEffect, Fragment, useMemo } from 'react';
+﻿import { useState, useEffect, Fragment, useMemo } from 'react';
 import {
   FaPlus, FaSearch, FaSignOutAlt, FaEdit, FaTrash,
   FaChevronLeft, FaChevronRight, FaUserSlash, FaUserCheck,
@@ -75,61 +75,78 @@ function App() {
 
   // [VISUALIZATION] 로테이션 색상 정의 (M은 진하게, V는 연하게)
   const ROTATION_COLORS = [
-    { v: 'bg-blue-50 border-blue-200', m: 'bg-blue-200 border-blue-300', v_hex: '#eff6ff', m_hex: '#bfdbfe' },    // 1. 파랑 (Blue 50 / 200)
-    { v: 'bg-orange-50 border-orange-200', m: 'bg-orange-200 border-orange-300', v_hex: '#fff7ed', m_hex: '#fed7aa' }, // 2. 주황 (Orange 50 / 200)
-    { v: 'bg-green-50 border-green-200', m: 'bg-green-200 border-green-300', v_hex: '#f0fdf4', m_hex: '#bbf7d0' },  // 3. 초록 (Green 50 / 200)
-    { v: 'bg-purple-50 border-purple-200', m: 'bg-purple-200 border-purple-300', v_hex: '#faf5ff', m_hex: '#e9d5ff' }, // 4. 보라 (Purple 50 / 200)
-    { v: 'bg-pink-50 border-pink-200', m: 'bg-pink-200 border-pink-300', v_hex: '#fdf2f8', m_hex: '#fbcfe8' },    // 5. 핑크 (Pink 50 / 200)
-    { v: 'bg-yellow-50 border-yellow-200', m: 'bg-yellow-200 border-yellow-300', v_hex: '#fefce8', m_hex: '#fef08a' }, // 6. 노랑 (Yellow 50 / 200)
-    { v: 'bg-teal-50 border-teal-200', m: 'bg-teal-200 border-teal-300', v_hex: '#f0fdfa', m_hex: '#99f6e4' },    // 7. 청록 (Teal 50 / 200)
-    { v: 'bg-indigo-50 border-indigo-200', m: 'bg-indigo-200 border-indigo-300', v_hex: '#eef2ff', m_hex: '#c7d2fe' }, // 8. 남색 (Indigo 50 / 200)
-    { v: 'bg-red-50 border-red-200', m: 'bg-red-200 border-red-300', v_hex: '#fef2f2', m_hex: '#fecaca' },      // 9. 빨강 (Red 50 / 200)
-    { v: 'bg-lime-50 border-lime-200', m: 'bg-lime-200 border-lime-300', v_hex: '#f7fee7', m_hex: '#d9f99d' }     // 10. 라임 (Lime 50 / 200)
+    { v: 'bg-blue-50 border-blue-200', m: 'bg-blue-200 border-blue-300', v_hex: '#eff6ff', m_hex: '#bfdbfe', two_tone: 'bg-[linear-gradient(135deg,#bfdbfe_50%,#eff6ff_50%)]' },    // 1. 파랑
+    { v: 'bg-orange-50 border-orange-200', m: 'bg-orange-200 border-orange-300', v_hex: '#fff7ed', m_hex: '#fed7aa', two_tone: 'bg-[linear-gradient(135deg,#fed7aa_50%,#fff7ed_50%)]' }, // 2. 주황
+    { v: 'bg-green-50 border-green-200', m: 'bg-green-200 border-green-300', v_hex: '#f0fdf4', m_hex: '#bbf7d0', two_tone: 'bg-[linear-gradient(135deg,#bbf7d0_50%,#f0fdf4_50%)]' },  // 3. 초록
+    { v: 'bg-purple-50 border-purple-200', m: 'bg-purple-200 border-purple-300', v_hex: '#faf5ff', m_hex: '#e9d5ff', two_tone: 'bg-[linear-gradient(135deg,#e9d5ff_50%,#faf5ff_50%)]' }, // 4. 보라
+    { v: 'bg-pink-50 border-pink-200', m: 'bg-pink-200 border-pink-300', v_hex: '#fdf2f8', m_hex: '#fbcfe8', two_tone: 'bg-[linear-gradient(135deg,#fbcfe8_50%,#fdf2f8_50%)]' },    // 5. 핑크
+    { v: 'bg-yellow-50 border-yellow-200', m: 'bg-yellow-200 border-yellow-300', v_hex: '#fefce8', m_hex: '#fef08a', two_tone: 'bg-[linear-gradient(135deg,#fef08a_50%,#fefce8_50%)]' }, // 6. 노랑
+    { v: 'bg-teal-50 border-teal-200', m: 'bg-teal-200 border-teal-300', v_hex: '#f0fdfa', m_hex: '#99f6e4', two_tone: 'bg-[linear-gradient(135deg,#99f6e4_50%,#f0fdfa_50%)]' },    // 7. 청록
+    { v: 'bg-indigo-50 border-indigo-200', m: 'bg-indigo-200 border-indigo-300', v_hex: '#eef2ff', m_hex: '#c7d2fe', two_tone: 'bg-[linear-gradient(135deg,#c7d2fe_50%,#eef2ff_50%)]' }, // 8. 남색
+    { v: 'bg-red-50 border-red-200', m: 'bg-red-200 border-red-300', v_hex: '#fef2f2', m_hex: '#fecaca', two_tone: 'bg-[linear-gradient(135deg,#fecaca_50%,#fef2f2_50%)]' },      // 9. 빨강
+    { v: 'bg-lime-50 border-lime-200', m: 'bg-lime-200 border-lime-300', v_hex: '#f7fee7', m_hex: '#d9f99d', two_tone: 'bg-[linear-gradient(135deg,#d9f99d_50%,#f7fee7_50%)]' }     // 10. 라임
   ];
 
   const getBadgeStyle = (gridType, classType, rotationIndex, status, context = 'calendar') => {
     const isVocal = gridType === 'vocal';
-    const is30 = String(classType) === '30'; // 숫자/문자열 모두 대응
+    const is30 = String(classType) === '30';
+    const isHalf = String(classType) === 'half'; // [NEW] Vocal Half Check
     const isSpecialStatus = status && status !== 'completed' && status !== 'late' && status !== 'absent' && status !== 'pending';
 
-    // 1. [History 전용] 배정만 된 경우 연한 그레이 2톤
-    if (context === 'history' && is30 && (status === 'pending' || !status)) {
-      return "bg-[linear-gradient(135deg,#e5e7eb_50%,#f9fafb_50%)] border-gray-300 text-gray-400 font-bold";
+    const isSplitClass = (gridType === 'master' && is30) || (gridType === 'vocal' && isHalf);
+
+    // 1. [History 전용] 배정만 된 경우(Pending) 또는 상태 없음 -> 연한 그레이 2톤 (확실한 2톤 적용)
+    // Master 30 또는 Vocal Half (반갈죽)인 경우 적용
+    if (context === 'history' && isSplitClass && (status === 'pending' || !status)) {
+      return "bg-[linear-gradient(135deg,#e5e7eb_50%,#f9fafb_50%)] border-gray-300 text-gray-400 font-bold opacity-80";
     }
 
-    // 2. [공통] 로테이션 정보가 있으면 최우선 적용 (단, 특수 상태 제외)
-    // History context에서는 완료된 30분 수업도 이 로직을 타서 로테이션 컬러가 나와야 함.
-    if (rotationIndex !== undefined && rotationIndex !== null && rotationIndex !== -1 && !isSpecialStatus) {
+    // 2. [공통] 로테이션 정보가 있으면 최우선 적용 (특수 상태 제외)
+    // History context에서는 'completed', 'late', 'absent' 상태의 수업도 여기서 처리
+    const shouldApplyRotationColor =
+      (rotationIndex !== undefined && rotationIndex !== null && rotationIndex !== -1 && !isSpecialStatus) &&
+      (context === 'history' || (status !== 'completed' && status !== 'late' && status !== 'absent'));
+
+    if (shouldApplyRotationColor) {
       const idx = Math.max(0, parseInt(rotationIndex)) % ROTATION_COLORS.length;
       const colors = ROTATION_COLORS[idx];
 
       if (colors) {
-        if (is30) {
+        // [수정] Split Class(Master 30, Vocal Half)는 2톤 스타일 적용
+        if (isSplitClass) {
           const borderClass = colors.m.split(' ').find(c => c.startsWith('border-')) || (isVocal ? 'border-blue-400' : 'border-orange-400');
-          // [최종 개선] 흰색 선 대신 아주 연한 블랙 라인(10%)을 경계로 사용하여 밝은 테마에서도 대각선이 확실히 보이도록 수정
-          return `bg-[linear-gradient(135deg,${colors.m_hex}_49.5%,rgba(0,0,0,0.1)_49.5%,rgba(0,0,0,0.1)_50.5%,${colors.v_hex}_50.5%)] ${borderClass} border-[1.5px] font-bold text-gray-800`;
+          const gradientClass = colors.two_tone || `bg-[linear-gradient(135deg,${colors.m_hex}_50%,${colors.v_hex}_50%)]`;
+          return `${gradientClass} ${borderClass} border-[1.5px] font-bold text-gray-800`;
         }
         return `${isVocal ? colors.v : colors.m} font-bold text-gray-800`;
       }
     }
 
-    // 3. [Calendar 전용] 완료/결석/지각 상태의 30분 수업 처리 (그레이/블랙 2톤)
-    if (context === 'calendar' && is30 && (status === 'completed' || status === 'late' || status === 'absent')) {
-      if (isVocal) {
-        // 보컬 완료 30분: 연한 그레이 대각선
-        return "bg-[linear-gradient(135deg,#9ca3af_50%,#f3f4f6_50%)] border-gray-400 text-gray-800 font-bold";
-      } else {
-        // 마스터 완료 30분: 다크 그레이/블랙 대각선
+    // 3. [Calendar 전용] 완료/결석/지각 상태의 Split 수업 처리 (그레이/블랙 2톤)
+    if (isSplitClass && (status === 'completed' || status === 'late' || status === 'absent')) {
+      if (gridType === 'master') {
+        if (context === 'history') {
+          return "bg-[linear-gradient(135deg,#fed7aa_50%,#fff7ed_50%)] border-orange-300 text-orange-900 font-bold";
+        }
         return "bg-[linear-gradient(135deg,#030712_50%,#374151_50%)] border-black text-white font-bold";
+      }
+      if (gridType === 'vocal') {
+        // Vocal Half 완료 시 (투톤 블루 or 그레이?)
+        // Calendar에서는 회색계열이 나을 수 있음
+        return "bg-[linear-gradient(135deg,#9ca3af_50%,#f3f4f6_50%)] border-gray-400 text-gray-800 font-bold";
       }
     }
 
-    // Default styles (No rotation or special status or safety fallback)
+    // Default styles
     if (isVocal) {
-      if (is30) return "bg-[linear-gradient(135deg,#bfdbfe_50%,#eff6ff_50%)] border-blue-300 text-blue-900 font-bold";
+      // Vocal Half -> 투톤 블루
+      if (isHalf) return "bg-[linear-gradient(135deg,#60a5fa_50%,#dbeafe_50%)] border-blue-600 text-blue-950 font-bold";
+      // V30 & V60 -> Solid Blue
       return "bg-blue-100 text-blue-700 border-blue-300";
     } else {
+      // Master 30 -> 2톤 오렌지
       if (is30) return "bg-[linear-gradient(135deg,#fed7aa_50%,#fff7ed_50%)] border-orange-300 text-orange-900 font-bold";
+      // Master 60 -> Solid Orange
       return "bg-orange-200 text-orange-950 border-orange-400 font-black";
     }
   };
@@ -801,7 +818,8 @@ function App() {
   const handleSettlementMemoSave = async () => { const ym = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`; await setDoc(doc(db, "settlement_memos", ym), { text: settlementMemo }, { merge: true }); alert("저장됨"); };
 
   // [수정] 등록 모달 학생 리스트 생성 함수 (고정 스케쥴 규칙에 의한 '유령 차단' 방지)
-  // [수정] 스케쥴 등록 모달의 학생 리스트 생성 함수 (고정 스케쥴 오버라이드 체크 추가)
+  // [수정] 등록 모달 학생 리스트 생성 함수 (30분 잔여량 표시 로직 추가)
+  // [수정] 등록 모달 학생 리스트 생성 함수 (30분 잔여량 표시 로직 추가 - 주차 무관 노출)
   const generateAvailableStudents = (selectedDateStr, editingItemName = null, gridType = 'master') => {
     const weekStart = getStartOfWeek(selectedDateStr);
     const weekEnd = new Date(weekStart);
@@ -809,86 +827,164 @@ function App() {
     const weekStartStr = formatDateLocal(weekStart);
     const weekEndStr = formatDateLocal(weekEnd);
 
-    const bookedNames = new Set();
+    // [Refactor] 예약 횟수(count)와 예약 가치(value)를 모두 계산
+    // Master: M30=0.5 value. Vocal: V30=1 count.
+    const bookedUsage = {}; // { studentId: { count: 0, value: 0 } }
 
-    // 1. 일반 스케쥴(실제 등록된 수업) 체크 -> 중복이면 숨김
+    const addUsage = (sid, mType, vType, gType) => {
+      if (!bookedUsage[sid]) bookedUsage[sid] = { count: 0, value: 0 };
+      bookedUsage[sid].count += 1;
+
+      let val = 1;
+      if (gType === 'master') {
+        if (mType === '30') val = 0.5;
+      } else {
+        // [New] Vocal Half Split -> 0.5 value
+        if (vType === 'half') val = 0.5;
+        else val = 1; // V30(Legacy) or V60 -> 1.0 value
+      }
+      bookedUsage[sid].value += val;
+    };
+
+    // 1. 일반 스케쥴
     schedules.forEach(s => {
       const sType = s.gridType || 'master';
       if (sType !== gridType) return;
+      if (editingItemName && s.studentName === editingItemName) return;
 
       const isSpecialClass = s.memo && (s.memo.includes('보강') || s.memo.includes('추가'));
-      if (!isSpecialClass && s.date >= weekStartStr && s.date <= weekEndStr && s.studentName) {
-        bookedNames.add(s.studentName);
+      if (!isSpecialClass && s.date >= weekStartStr && s.date <= weekEndStr && s.studentId) {
+        addUsage(s.studentId, s.masterType, s.vocalType, sType);
       }
     });
 
-    // 2. 고정 스케쥴(Fixed) 체크 (단, 다른 수업으로 덮어씌워진 경우는 무시)
+    // 2. 고정 스케쥴
     fixedSchedules.forEach(s => {
       const sType = s.gridType || 'master';
-
-      // 타입이 다르거나, 아직 시작 안 한 고정 스케쥴은 무시
       if (sType !== gridType) return;
-      if (!s.studentName) return;
+      if (!s.studentId) return;
       if (s.fixedStartDate && s.fixedStartDate > weekEndStr) return;
 
-      // [핵심 로직] 이 고정 스케쥴이 이번 주 정확히 며칠인지 계산
-      // weekStart는 월요일. s.dayOfWeek는 0(일)~6(토).
-      // 월(1)->0, 화(2)->1, ... 일(0)->6 인덱스로 변환
       const dayIndex = (s.dayOfWeek === 0) ? 6 : s.dayOfWeek - 1;
-
       const targetDate = new Date(weekStart);
       targetDate.setDate(weekStart.getDate() + dayIndex);
       const targetDateStr = formatDateLocal(targetDate);
 
-      // [핵심 로직] 해당 날짜/시간에 '일반 스케쥴'이 이미 존재하는지 확인 (오버라이드 여부)
-      // 예: 수요일 8시에 고정M이 있어도, 실제 스케쥴에 V가 등록되어 있다면 고정M은 무시해야 함
-      const isOverridden = schedules.some(sch =>
-        sch.date === targetDateStr &&
-        sch.time === s.time
-      );
+      const isOverridden = schedules.some(sch => sch.date === targetDateStr && sch.time === s.time);
+      const isCancelled = scheduleCancellations.some(c => c.date === targetDateStr && c.time === s.time && c.studentId === s.studentId);
 
-      // [NEW] 취소 내역 확인 (날짜 + 시간 + 학생ID)
-      const isCancelled = scheduleCancellations.some(c =>
-        c.date === targetDateStr &&
-        c.time === s.time &&
-        c.studentId === s.studentId
-      );
-
-      // 덮어씌워지지 않고 살아있는 고정 스케쥴만 '예약됨'으로 처리
       if (!isOverridden && !isCancelled) {
-        bookedNames.add(s.studentName);
+        addUsage(s.studentId, s.masterType, s.vocalType, sType);
       }
     });
 
-    if (editingItemName) bookedNames.delete(editingItemName);
-
     const options = [];
     students.filter(s => s.isActive).forEach(student => {
-      // [수정 코드] selectedDateStr 대신 weekStartStr(월요일)을 넣으세요!
-      // 이렇게 하면 유령 스케줄과 똑같은 기준으로 주차를 계산하게 됩니다.
-      const weekStartStr = formatDateLocal(weekStart);
-      const rotationWeek = getRotationWeek(student.firstDate, weekStartStr);
-      const weekConfig = student.schedule && student.schedule[rotationWeek - 1];
+      const currentRotationWeek = getRotationWeek(student.firstDate, weekStartStr);
+      const weekConfig = student.schedule && student.schedule[currentRotationWeek - 1];
+
       if (weekConfig) {
-        let count = 0;
+        const usage = bookedUsage[student.id] || { count: 0, value: 0 };
+        // Value 기반 차감 공통 로직 (Master & Vocal)
+        // Master: Quota=master. Vocal: Quota=vocal+vocal30.
+        let totalQuota = 0;
         if (gridType === 'master') {
-          count = Number(weekConfig.master || 0);
+          totalQuota = Number(weekConfig.master || 0);
         } else {
-          count = Number(weekConfig.vocal || 0) + Number(weekConfig.vocal30 || 0);
-          if (count > 0 && count < 1) count = 1;
-          count = Math.floor(count);
+          // Vocal
+          const vCount = Number(weekConfig.vocal || 0);
+          const v30Count = Number(weekConfig.vocal30 || 0);
+          totalQuota = Math.floor(vCount + v30Count);
         }
 
-        for (let i = 1; i <= count; i++) {
-          const displayName = count > 1 ? `${student.name}(${i})` : student.name;
+        // [Fix] 부동소수점 오차 방지를 위해 반올림 처리
+        const remainingValue = Math.round((totalQuota - usage.value) * 10) / 10;
 
-          // 예약된 이름이 아닐 때만 리스트에 추가 (숨김 기능 유지)
-          if (!bookedNames.has(displayName)) {
-            options.push({ id: student.id, name: displayName, originalName: student.name });
+        // 1) 온전한 1시간 슬롯: 남은 쿼터가 있을 때만 생성
+        const fullSlots = Math.floor(remainingValue);
+
+        // 2) 0.5 짜투리: 쿼터와 상관없이, '사용량'이 0.5단위로 끝나면 짝을 맞추기 위해 무조건 노출
+        // (사용자가 할당량을 초과해서 추가 수업을 잡는 경우 고려)
+        const usageDecimal = Math.round((usage.value % 1) * 10) / 10;
+        const hasHalf = usageDecimal === 0.5;
+
+        for (let i = 1; i <= fullSlots; i++) {
+          const displayName = totalQuota > 1 ? `${student.name}(${usage.count + i})` : student.name;
+          options.push({ id: student.id, name: displayName, originalName: student.name });
+        }
+
+        if (hasHalf) {
+          const halfName = `${student.name} (30분)`;
+          if (!options.some(o => o.name === halfName)) {
+            options.push({ id: student.id, name: halfName, originalName: student.name });
+          }
+        }
+      }
+
+      // 2) [Refactor] 로테이션 사이클 전체 잔여량 계산 (Global Remainder)
+      // Master & Vocal 공통 적용 (단, Vocal 0.5 지원 위해)
+      if (student.firstDate) {
+        const diffDays = Math.floor((new Date(weekStart) - new Date(student.firstDate)) / (86400000));
+        const safeDiff = Math.max(0, diffDays);
+        const cycleIndex = Math.floor(Math.floor(safeDiff / 7) / 4);
+
+        const cycleStartDate = new Date(student.firstDate);
+        cycleStartDate.setDate(cycleStartDate.getDate() + (cycleIndex * 4 * 7));
+
+        const cycleEndDate = new Date(cycleStartDate);
+        cycleEndDate.setDate(cycleEndDate.getDate() + 27);
+
+        const cycleStartStr = formatDateLocal(cycleStartDate);
+        const cycleEndStr = formatDateLocal(cycleEndDate);
+
+        // 전체 쿼터 계산
+        let cycleQuota = 0;
+        (student.schedule || []).forEach(w => {
+          if (gridType === 'master') {
+            cycleQuota += Number(w.master || 0);
+          } else {
+            cycleQuota += Number(w.vocal || 0) + Number(w.vocal30 || 0);
+          }
+        });
+
+        // 전체 사용량 계산
+        let cycleUsage = 0;
+        const allRelevantSchedules = [...historySchedules, ...schedules].filter(s =>
+          s.studentId === student.id && (s.gridType || 'master') === gridType &&
+          s.date >= cycleStartStr && s.date <= cycleEndStr
+        );
+
+        allRelevantSchedules.forEach(s => {
+          const isSpecial = s.memo && (s.memo.includes('보강') || s.memo.includes('추가'));
+          if (!isSpecial) {
+            let u = 1;
+            if (gridType === 'master') {
+              if (s.masterType === '30') u = 0.5;
+            } else {
+              // Vocal
+              if (s.vocalType === 'half') u = 0.5;
+              // V30 (Legacy '30') is 1.0. V60 is 1.0.
+            }
+            cycleUsage += u;
+          }
+        });
+
+        const remaining = Math.round((cycleQuota - cycleUsage) * 10) / 10;
+
+        // [New Logic] Global에서도 사용량의 .5 여부를 확인하여 노출 (오버부킹 대응)
+        const globalUsageDecimal = Math.round((cycleUsage % 1) * 10) / 10;
+        const globalHasHalf = globalUsageDecimal === 0.5;
+
+        // 0.5 짜투리가 남았으면 노출 (쿼터 잔여가 있거나, 아니면 사용량이 .5로 끝나서 짝이 안맞을 때)
+        if (globalHasHalf || (remaining > 0 && remaining % 1 === 0.5)) {
+          const halfName = `${student.name} (30분)`;
+          if (!options.some(o => o.name === halfName)) {
+            options.push({ id: student.id, name: halfName, originalName: student.name });
           }
         }
       }
     });
+
     return options.sort((a, b) => a.name.localeCompare(b.name));
   };
 
@@ -1100,10 +1196,34 @@ function App() {
       }
     }
 
+    // [NEW] V30 자동 감지 로직 (UI 토글 없음 해결)
+    let finalVocalType = scheduleForm.vocalType;
+    // 'vocal' 스케줄이고, 수강생이 선택되어 있으면 학생 정보를 조회하여 V30 여부 판단
+    if ((finalGridType === 'vocal') && scheduleForm.studentId) {
+      // 1. students 배열에서 정보 찾기 (handleScheduleSave 내 접근 가능 가정)
+      const targetStudent = students.find(s => s.id === scheduleForm.studentId);
+      if (targetStudent && targetStudent.firstDate) {
+        // 2. 현재 주차의 config 가져오기
+        const weekStartStr = formatDateLocal(getStartOfWeek(selectedSlot.date || scheduleDate)); // formatDateLocal 등 helper 필요
+        const currentRotationWeek = getRotationWeek(targetStudent.firstDate, weekStartStr);
+        const weekConfig = targetStudent.schedule && targetStudent.schedule[currentRotationWeek - 1];
+
+        // 3. vocal30 할당량 확인 (vocal30 > 0 && vocal == 0 이면 30분으로 강제)
+        if (weekConfig) {
+          const v30 = Number(weekConfig.vocal30 || 0);
+          const v60 = Number(weekConfig.vocal || 0);
+          if (v30 > 0 && v60 === 0) {
+            finalVocalType = '30';
+          }
+        }
+      }
+    }
+
     // 2. 스케쥴 저장
     const data = {
       time: timeToSave,
       ...scheduleForm,
+      vocalType: finalVocalType, // [NEW] Use inferred vocal type
       gridType: finalGridType,
       date: scheduleForm.isFixed ? 'FIXED' : selectedSlot.date,
       dayOfWeek: scheduleForm.isFixed ? selectedSlot.dayOfWeek : null,
@@ -1149,7 +1269,7 @@ function App() {
             date: selectedSlot.date,
             time: timeToSave,
             gridType: finalGridType,
-            vocalType: scheduleForm.vocalType,
+            vocalType: finalVocalType, // [NEW] Use inferred vocal type
             masterType: scheduleForm.masterType
           };
           const combined = [...allScheds, virtualCurrent]
@@ -1172,7 +1292,8 @@ function App() {
             limit = reqV || 1;
             for (const s of combined) {
               if (s.gridType === 'vocal') {
-                const weight = s.vocalType === '30' ? 0.5 : 1;
+                // [수정] V30도 출석부/배지 로직에서는 온전한 1회 수업으로 처리 (사용자 요청)
+                const weight = 1;
                 typeScheds.push({ ...s, _weight: weight });
               }
             }
@@ -2115,14 +2236,26 @@ function App() {
                                 const targetDateTime = new Date(`${item.date}T${itemHour.padStart(2, '0')}:${itemMinute}:00`);
                                 const isPast = new Date() > targetDateTime;
 
+                                // [NEW] Class Type 식별 (vocalType or masterType)
+                                const classType = isVocal ? item.vocalType : item.masterType;
+                                const strType = String(classType);
+                                // [NEW] Split Class 여부 (Master 30 or Vocal Half) -> 배지 스타일 적용 대상
+                                // Vocal 30(단독)도 배지 스타일을 쓰지만 Solid. 여기서는 "2톤/배지 로직이 필요한 특수" 케이스 판단용으로 쓰임?
+                                // 원래 코드 로직: is30m이면 getBadgeStyle 사용.
+                                // 이제 Vocal Half도 getBadgeStyle을 사용해야 함.
+                                // 하지만 Standard Class(60m)는 getBadgeStyle을 안 쓰고 hardcoded color를 썼음 (Completed의 경우).
+                                // Fixed logic: Special handling for 30/Half.
+                                const isSplitOr30 = strType === '30' || strType === 'half';
+
                                 if (item.isGhost) {
                                   statusStyle = 'bg-gray-100 text-gray-400 border-dashed border-gray-200 opacity-60';
                                 }
                                 else if (item.status === 'completed') {
                                   // 완료: 쌤(어두운 회색), 짱구(중간 회색) - 농도 상향
-                                  const is30m = isVocal ? item.vocalType === '30' : item.masterType === '30';
-                                  if (is30m) {
-                                    const badgeClass = getBadgeStyle(isVocal ? 'vocal' : 'master', '30', -1, item.status);
+                                  if (isSplitOr30) {
+                                    // 30m(단독) or Half(반갈죽) -> BadgeStyle 호출 (Two-Tone or Badge Color)
+                                    // Vocal 30 -> Solid Badge. Vocal Half -> Two-Tone. Master 30 -> Two-Tone.
+                                    const badgeClass = getBadgeStyle(isVocal ? 'vocal' : 'master', strType, -1, item.status);
                                     statusStyle = `${badgeClass} border-solid`;
                                   } else {
                                     statusStyle = isVocal
@@ -2155,10 +2288,10 @@ function App() {
                                       : 'bg-emerald-200 text-emerald-950 border-emerald-400';
                                   }
                                   else if (item.category === '레슨') {
-                                    const is30m = isVocal ? item.vocalType === '30' : item.masterType === '30';
                                     const itemStudent = students.find(s => s.id === item.studentId);
                                     const rotationInfo = getScheduleRotationInfo(itemStudent, item.id);
-                                    const badgeClass = getBadgeStyle(isVocal ? 'vocal' : 'master', is30m ? '30' : '60', rotationInfo.index, item.status);
+                                    // [FIX] Pass classType directly to getBadgeStyle
+                                    const badgeClass = getBadgeStyle(isVocal ? 'vocal' : 'master', strType, rotationInfo.index, item.status);
 
                                     statusStyle = `${badgeClass} border-solid font-black`;
                                   }
@@ -2190,6 +2323,8 @@ function App() {
                                         <>
                                           {item.studentName || item.category}
                                           {item.isVocalProgress && <span className={`${item.vocalType === '30' ? 'text-green-600' : 'text-pink-600'} ml-1 font-extrabold`}>V</span>}
+                                          {/* [NEW] V30 수업 아이콘 표시 */}
+                                          {isVocal && String(item.vocalType) === '30' && <FaClock className="text-blue-600 ml-1 inline text-[10px]" />}
                                           {!item.isGhost && item.memo && (
                                             item.memo === "추가수업"
                                               ? <FaPlus className="text-gray-600 ml-1 inline text-[10px]" />
@@ -2707,7 +2842,7 @@ function App() {
                                   const isM = (sched.gridType === 'master' || !sched.gridType) && sched.category !== '상담';
                                   const isV = sched.gridType === 'vocal';
                                   const classT = isV ? sched.vocalType : sched.masterType;
-                                  const bStyle = getBadgeStyle(isV ? 'vocal' : 'master', classT, rotationInfo.index, sched.status);
+                                  const bStyle = getBadgeStyle(isV ? 'vocal' : 'master', classT, rotationInfo.index, sched.status, 'attendance');
                                   boxClass = `${bStyle} border-solid`;
                                   // ----------------------------------------
 
@@ -3586,7 +3721,7 @@ function App() {
 
               {/* [NEW] Master 30분 진행 체크박스 (Master 그리드일 때만 노출) */}
               {scheduleForm.gridType === 'master' && (
-                <div className="flex bg-gray-100 p-1 rounded-xl w-fit">
+                <div className="flex bg-gray-100 p-1 rounded-xl w-fit mb-2">
                   <button
                     type="button"
                     onClick={() => setScheduleForm(prev => ({ ...prev, masterType: '60' }))}
@@ -3604,6 +3739,28 @@ function App() {
                 </div>
               )}
 
+              {/* [NEW] Vocal 30분(반갈죽) 진행 체크박스 (Vocal 그리드일 때 노출) */}
+              {/* V30(독립)과는 다름. 1시간 수업을 반으로 나누는 기능 */}
+              {scheduleForm.gridType !== 'master' && (
+                <div className="flex bg-green-100/50 p-1 rounded-xl w-fit mb-2">
+                  <button
+                    type="button"
+                    onClick={() => setScheduleForm(prev => ({ ...prev, vocalType: '60' }))}
+                    className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${(!scheduleForm.vocalType || scheduleForm.vocalType === '60') ? 'bg-white text-green-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                  >
+                    Full
+                  </button>
+                  <button
+                    type="button"
+                    // 'half' 타입으로 설정하여 V30('30')과 구분
+                    onClick={() => setScheduleForm(prev => ({ ...prev, vocalType: 'half' }))}
+                    className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${scheduleForm.vocalType === 'half' ? 'bg-white text-green-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                  >
+                    Half
+                  </button>
+                </div>
+              )}
+
               {/* [수정] Vocal 추가 수업 시 시간 선택 라디오 */}
               <div className={`tabs tabs-boxed p-1 mb-4 ${scheduleForm.gridType === 'master' ? 'bg-gray-100' : 'bg-green-100/50'}`}>
                 <a className={`tab flex-1 ${scheduleTab === 'lesson' ? 'tab-active bg-white text-black font-bold shadow-sm' : ''}`} onClick={() => handleTabChange('lesson')}>수강생 레슨</a>
@@ -3616,7 +3773,20 @@ function App() {
                     <select className="select select-sm border-gray-200 bg-white"
                       onChange={(e) => {
                         const [sId, sName] = e.target.value.split('|');
-                        setScheduleForm({ ...scheduleForm, studentId: sId, studentName: sName, category: '레슨' });
+                        const isHalfSuffix = sName.includes('(30분)');
+
+                        setScheduleForm(prev => {
+                          const newState = { ...prev, studentId: sId, studentName: sName, category: '레슨' };
+
+                          // [NEW] 반갈죽(30분) 잔여가 있는 학생 선택 시 자동으로 '30분' 모드 전환
+                          // 잔여가 없는 학생 선택 시 '1시간'으로 리셋하여 실수 방지
+                          if (prev.gridType === 'master') {
+                            newState.masterType = isHalfSuffix ? '30' : '60';
+                          } else {
+                            newState.vocalType = isHalfSuffix ? 'half' : '60';
+                          }
+                          return newState;
+                        });
                       }}>
                       <option value="">학생 선택</option>
                       {availableStudents.map(s => <option key={s.id} value={`${s.id}|${s.name}`}>{s.name}</option>)}
