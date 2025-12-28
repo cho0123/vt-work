@@ -3140,6 +3140,15 @@ function App() {
                                     const bStyle = getBadgeStyle(isV ? 'vocal' : 'master', classT, rotationInfo.index, sched.status, 'attendance');
                                     boxClass = `${bStyle} border-solid`;
                                   }
+
+                                  // [FIX] 결제/청구 관련 날짜 슬롯 강조 (링 효과)
+                                  if (sched.date === targetUiDate) {
+                                    if (uiState === 'paid') {
+                                      boxClass += " ring-2 ring-green-500 ring-offset-1 z-10";
+                                    } else if (uiState === 'billed') {
+                                      boxClass += " ring-2 ring-red-400 ring-offset-1 z-10 animate-pulse";
+                                    }
+                                  }
                                   // ----------------------------------------
 
                                   // 상태별 아이콘 및 텍스트 색상 처리 (기존 로직 유지)
@@ -3194,14 +3203,26 @@ function App() {
                                   </div>
                                 );
                               };
+
+
+                              // [FIX] 셀 스타일링 동적 적용 (결제/청구 상태 강조)
+                              const isPaidState = uiState === 'paid';
+                              const isBilledState = uiState === 'billed';
+                              const cellBaseClass = "border-r p-1 align-top min-h-[60px] relative transition-all";
+                              const cellStateClass = isPaidState
+                                ? "border-green-200 border-b-[4px] border-b-green-500 bg-green-50/50"
+                                : isBilledState
+                                  ? "border-red-200 border-b-[4px] border-b-red-400 bg-red-50/30"
+                                  : "border-gray-50 border-b-[2px] border-b-gray-300";
+
                               return (
-                                <td key={i} className="border-r border-gray-50 p-1 align-top min-h-[60px] border-b-[2px] border-gray-300 relative">
+                                <td key={i} className={`${cellBaseClass} ${cellStateClass}`}>
 
                                   {/* [FIX] 상태에 따른 UI 렌더링 (결제완료 > 청구중 > 재등록버튼) */}
                                   {uiState === 'paid' && (
                                     <div className="absolute top-0 right-0 left-0 -mt-3 flex justify-center z-10">
                                       <span className="text-[9px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-bold border border-green-200 flex items-center gap-0.5">
-                                        <FaCheckCircle className="text-[7px]" /> 결제완료
+                                        <FaCheckCircle className="text-[7px]" /> {targetUiDate.substring(5).replace('-', '.')} 결제완료
                                       </span>
                                     </div>
                                   )}
@@ -3209,7 +3230,7 @@ function App() {
                                   {uiState === 'billed' && (
                                     <div className="absolute top-0 right-0 left-0 -mt-3 flex justify-center z-10">
                                       <span className="text-[9px] bg-red-100 text-red-500 px-1.5 py-0.5 rounded-full font-bold border border-red-200 animate-pulse">
-                                        청구중
+                                        {targetUiDate.substring(5).replace('-', '.')} 청구중
                                       </span>
                                     </div>
                                   )}
