@@ -97,6 +97,8 @@ function App() {
 
     // 1. [History 전용] 배정만 된 경우(Pending) 또는 상태 없음 -> 연한 그레이
     // 미래의 수업(아직 미진행)은 회색으로 표시되어야 함
+    // 1. [History 전용] 배정만 된 경우(Pending) 또는 상태 없음 -> 연한 그레이
+    // 미래의 수업(아직 미진행)은 회색으로 표시되어야 함
     if (context === 'history' && (status === 'pending' || !status)) {
       if (isSplitClass) {
         return "bg-[linear-gradient(135deg,#e5e7eb_50%,#f9fafb_50%)] border-gray-300 text-gray-400 font-bold opacity-80 shadow-none";
@@ -3035,7 +3037,7 @@ function App() {
                                   s.studentId === student.id &&
                                   s.date >= w.startStr &&
                                   s.date <= w.endStr &&
-                                  !s.memo.includes('보강(') &&
+                                  (!s.memo.includes('보강(') || s.status === 'completed') &&
                                   // [핵심 추가] 월별 보기 모드일 때만 날짜 엄격 검증
                                   (attViewMode === 'month'
                                     ? (sDate.getMonth() === attMonth.getMonth() && sDate.getFullYear() === attMonth.getFullYear())
@@ -3148,6 +3150,16 @@ function App() {
                                     } else if (uiState === 'billed') {
                                       boxClass += " ring-2 ring-red-400 ring-offset-1 z-10 animate-pulse";
                                     }
+                                  }
+
+                                  // [NEW] 완료된 보강 수업인 경우 (강제 스타일 적용)
+                                  // [NEW] 완료된 보강 수업인 경우 (강제 스타일 적용)
+                                  if (sched.status === 'completed' && sched.memo && sched.memo.includes('보강')) {
+                                    // 정규식 제거가 불안정할 수 있으므로 !important 클래스로 덮어쓰기 전략 사용
+                                    // boxClass 초기화가 잘 안 될 수 있으므로, 기존 속성을 덮어쓰도록 강제
+                                    boxClass += " !bg-white !border-dashed !border-yellow-500 !border-[2px] !text-yellow-700 !font-bold";
+                                    // 아이콘도 노란색으로 변경 (Reschedule 색상)
+                                    statusColor = " !text-yellow-700";
                                   }
                                   // ----------------------------------------
 
@@ -3987,8 +3999,28 @@ function App() {
 
                               {chunk.map(w => {
                                 const weekScheds = studentFullHistory.filter(s =>
-                                  s.date >= w.startStr && s.date <= w.endStr && !s.memo.includes('보강(')
+                                  s.date >= w.startStr && s.date <= w.endStr
                                 );
+
+                                // [SMART LINK] 이미 보강이 완료된 수업인지 확인하여 원본 날짜의 상태를 보정
+                                // 전체 히스토리에서 "보강" 관련 메모가 있고 완료된 수업을 찾아 원본 날짜 추출
+                                const makeupSourceDates = new Set();
+                                studentFullHistory.forEach(historyItem => {
+                                  if (historyItem.status === 'completed' && historyItem.memo && historyItem.memo.includes('보강')) {
+                                    // 날짜 형식 유연하게 매칭 (2025-12-27, 2025. 12. 27, 띄어쓰기 포함 허용)
+                                    // \d{4} : 연도
+                                    // [-./] : 구분자
+                                    // \s* : 공백 허용
+                                    const match = historyItem.memo.match(/(\d{4})\s*[-./]\s*(\d{2})\s*[-./]\s*(\d{2})/);
+                                    if (match) {
+                                      // 포맷 정규화 (YYYY-MM-DD)
+                                      const normalizedDate = `${match[1]}-${match[2]}-${match[3]}`;
+                                      makeupSourceDates.add(normalizedDate);
+                                      console.log('[DEBUG] SmartLink Found:', normalizedDate, 'from', historyItem.memo);
+                                    }
+                                  }
+                                });
+
                                 const completedM = weekScheds.filter(s => (s.gridType === 'master' || !s.gridType) && s.category !== '상담');
                                 const completedV = weekScheds.filter(s => s.gridType === 'vocal');
 
@@ -4016,13 +4048,60 @@ function App() {
                                     <div className="flex flex-col gap-1.5 w-full items-center mt-2">
                                       <div className="flex gap-1 justify-center flex-wrap min-h-[24px]">
                                         {completedM.length > 0 ? completedM.map((s, idx) => {
+                                          if (s.date === '2025-12-27' || s.date === '2025-12-29') {
+                                            console.log('DEBUG History Loop:', s.date, s.status, s.memo, s);
+                                          }
                                           const rotationInfo = getLocalRotationInfo(s.id);
                                           const dateShort = formatMonthDay(s.date);
-                                          const boxClass = getBadgeStyle('master', s.masterType, rotationInfo.index, s.status, 'history');
+
+                                          // [FIX] Smart Link Logic
+                                          // 1. 이미 다른 날짜에 보강 완료된 경우
+                                          // 2. 과거 날짜인데 Pending(또는 상태없음)인 경우 -> 이것도 Reschedule(Yellow)로 처리하여 회색 탈피
+                                          // 3. 미래 날짜 -> 그대로 두어 회색 유지
+                                          const isMakeupCompletedElsewhere = makeupSourceDates.has(s.date);
+                                          const todayStr = formatDateLocal(new Date());
+                                          const isPastPending = (!s.status || s.status === 'pending') && s.date < todayStr;
+
+                                          // 보강 완료된 날짜이거나, 과거의 Pending이면 'reschedule' 상태로 시각화
+                                          const showAsReschedule = isMakeupCompletedElsewhere || isPastPending || (s.status === 'pending' && s.memo && s.memo.includes('보강'));
+                                          const effectiveStatus = showAsReschedule ? 'reschedule' : s.status;
+
+                                          let boxClass = getBadgeStyle('master', s.masterType, rotationInfo.index, effectiveStatus, 'history');
                                           let icon = null; let statusColor = "text-gray-400";
-                                          if (s.status === 'completed') { icon = <FaCheck className="text-[9px]" />; statusColor = "text-green-700"; }
-                                          else if (s.status === 'absent') { icon = <FaTimesCircle className="text-[9px]" />; statusColor = "text-red-600"; }
-                                          else if (s.status === 'reschedule' || s.status === 'reschedule_assigned') { icon = <FaClock className="text-[9px]" />; statusColor = "text-yellow-700"; }
+
+                                          if (effectiveStatus === 'completed') { icon = <FaCheck className="text-[9px]" />; statusColor = "text-green-700"; }
+                                          else if (effectiveStatus === 'absent') { icon = <FaTimesCircle className="text-[9px]" />; statusColor = "text-red-600"; }
+                                          else if (effectiveStatus === 'reschedule') { icon = <FaClock className="text-[9px]" />; statusColor = "text-yellow-700"; }
+
+                                          // [NEW] 보강 배정됨(reschedule_assigned) 또는 보강 수업(pending)인 경우 회색 점선 처리
+                                          const isPendingMakeup = (s.memo && s.memo.includes('보강') && (!s.status || s.status === 'pending'));
+                                          // [NEW] 완료된 보강 수업인 경우 (초록색 점선)
+                                          const isCompletedMakeup = (s.status === 'completed' && s.memo && s.memo.includes('보강'));
+                                          // [FIX] Smart Link가 적용된 경우(effectiveStatus === 'reschedule')에는 assigned(회색) 덮어쓰기 방지
+                                          // [FIX] Smart Link가 적용된 경우(effectiveStatus === 'reschedule')에는 assigned(회색) 덮어쓰기 방지
+                                          const isAssigned = s.status === 'reschedule_assigned' && effectiveStatus !== 'reschedule';
+
+                                          if (isCompletedMakeup) {
+                                            boxClass = boxClass.replace(/border-[a-z]+-\d+/g, '').replace('border-solid', '');
+                                            // [FIX] 보강 완료 시 초록 점선 -> 노란 점선으로 변경 (아이콘 색상과 통일)
+                                            boxClass += " border-dashed border-yellow-500 border-[2px]";
+                                          }
+
+                                          /*
+                                          if (isPendingMakeup) {
+                                            // 배정된 보강 (미래/Pending) -> 회색 점선
+                                            boxClass = "bg-gray-100 border-dashed border-gray-300 text-gray-400 font-bold opacity-80 shadow-none";
+                                            icon = <FaClock className="text-[9px]" />;
+                                            statusColor = "text-gray-400";
+                                          }
+                                          */
+
+                                          if (isAssigned) {
+                                            // 보강 크레딧 (아직 일정 미배정) -> 회색 실선 (구분됨)
+                                            boxClass = "bg-gray-100 border-solid border-gray-300 text-gray-400 font-bold opacity-80 shadow-none";
+                                            icon = <FaClock className="text-[9px]" />;
+                                            statusColor = "text-gray-400";
+                                          }
 
                                           return (<div key={idx} className={`h-7 w-10 rounded-md text-[9px] flex flex-col items-center justify-center border cursor-pointer leading-none gap-0.5 relative overflow-hidden shadow-sm ${boxClass}`}>{rotationInfo.label && <span className="absolute top-0 right-0 bg-black/10 text-[6px] px-0.5 rounded-bl-sm font-extrabold text-gray-700 opacity-50">{rotationInfo.label}</span>}<span className={statusColor}>{icon}</span><span>{dateShort}</span></div>);
                                         }) : <div className="h-7 w-10"></div>}
@@ -4031,11 +4110,28 @@ function App() {
                                         {completedV.length > 0 ? completedV.map((s, idx) => {
                                           const rotationInfo = getLocalRotationInfo(s.id);
                                           const dateShort = formatMonthDay(s.date);
-                                          const boxClass = getBadgeStyle('vocal', s.vocalType, rotationInfo.index, s.status, 'history');
+
+                                          // [FIX] Smart Link Logic (Vocal 동일 적용)
+                                          const isMakeupCompletedElsewhere = makeupSourceDates.has(s.date);
+                                          const todayStr = formatDateLocal(new Date());
+                                          const isPastPending = (!s.status || s.status === 'pending') && s.date < todayStr;
+
+                                          const showAsReschedule = isMakeupCompletedElsewhere || isPastPending || (s.status === 'pending' && s.memo && s.memo.includes('보강'));
+                                          const effectiveStatus = showAsReschedule ? 'reschedule' : s.status;
+
+                                          let boxClass = getBadgeStyle('vocal', s.vocalType, rotationInfo.index, effectiveStatus, 'history');
                                           let icon = null; let statusColor = "text-gray-400";
-                                          if (s.status === 'completed') { icon = <FaCheck className="text-[9px]" />; statusColor = "text-green-600"; }
-                                          else if (s.status === 'absent') { icon = <FaTimesCircle className="text-[9px]" />; statusColor = "text-red-500"; }
-                                          else if (s.status === 'reschedule' || s.status === 'reschedule_assigned') { icon = <FaClock className="text-[9px]" />; statusColor = "text-yellow-600"; }
+
+                                          if (effectiveStatus === 'completed') { icon = <FaCheck className="text-[9px]" />; statusColor = "text-green-600"; }
+                                          else if (effectiveStatus === 'absent') { icon = <FaTimesCircle className="text-[9px]" />; statusColor = "text-red-500"; }
+                                          else if (effectiveStatus === 'reschedule' || effectiveStatus === 'reschedule_assigned') { icon = <FaClock className="text-[9px]" />; statusColor = "text-yellow-600"; }
+
+                                          // [NEW] 완료된 보강 수업 처리
+                                          if (s.status === 'completed' && s.memo && s.memo.includes('보강')) {
+                                            boxClass = boxClass.replace(/border-[a-z]+-\d+/g, '').replace('border-solid', '');
+                                            // [FIX] 보강 완료 시 초록 점선 -> 노란 점선으로 변경 (아이콘 색상과 통일)
+                                            boxClass += " border-dashed border-yellow-500 border-[2px]";
+                                          }
 
                                           return (<div key={idx} className={`h-7 w-10 rounded-md text-[9px] flex flex-col items-center justify-center border cursor-pointer leading-none gap-0.5 relative overflow-hidden shadow-sm ${boxClass}`}>{rotationInfo.label && <span className="absolute top-0 right-0 bg-black/10 text-[6px] px-0.5 rounded-bl-sm font-extrabold text-gray-700 opacity-50">{rotationInfo.label}</span>}<span className={statusColor}>{icon}</span><span>{dateShort}</span></div>);
                                         }) : <div className="h-7 w-10"></div>}
