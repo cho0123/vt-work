@@ -110,11 +110,11 @@ function App() {
 
 
 
-    // 2. [공통] 로테이션 정보가 있으면 최우선 적용 (특수 상태 제외)
-    // History context에서는 'completed', 'late', 'absent' 상태의 수업도 여기서 처리
+    // 2. [공통] 로테이션 정보가 있으면 최우선 적용 (단, 출석부/전체기록 컨텍스트에서만 적용)
+    // [FIX] 캘린더(스케줄) 화면에서는 로테이션 색상을 쓰지 않고 오렌지/블루 기본색을 유지해야 함
     const shouldApplyRotationColor =
       (rotationIndex !== undefined && rotationIndex !== null && rotationIndex !== -1 && !isSpecialStatus) &&
-      (ctx === 'history' || (status !== 'completed' && status !== 'absent'));
+      (ctx === 'history' || ctx === 'dashboard');
 
     if (shouldApplyRotationColor) {
       const idx = Math.max(0, parseInt(rotationIndex)) % ROTATION_COLORS.length;
@@ -2818,17 +2818,17 @@ function App() {
               </div>
 
               {/* 메인 그리드 */}
-              <div className="bg-white rounded-[2rem] shadow-sm border border-gray-100 p-6 flex-1 overflow-auto min-h-0">
+              <div className="bg-white rounded-[2rem] shadow-sm border border-gray-100 px-6 pb-6 pt-0 flex-1 overflow-auto min-h-0 relative">
                 <table className="table w-full border-separate border-spacing-y-4">
                   <thead className="sticky top-0 bg-white z-20 shadow-sm">
-                    <tr className="text-center text-gray-500 text-xs font-bold border-b-2 border-gray-100">
-                      <th className="sticky left-0 bg-white z-30 min-w-[150px] border-r border-gray-100 pl-6 text-left py-4">이름</th>
+                    <tr className="text-center text-gray-500 text-xs font-bold">
+                      <th className="sticky left-0 bg-white z-30 min-w-[150px] border-r border-gray-100 pl-6 text-left py-3">이름</th>
                       {/* [추가됨] 출석부 컬럼 */}
 
 
                       {attViewMode === '12weeks' ? (
                         get12Weeks(attBaseDate).map((w, i) => (
-                          <th key={i} className="min-w-[80px] border-r border-gray-50 last:border-none py-4 bg-white">
+                          <th key={i} className="min-w-[80px] border-r border-gray-50 last:border-none py-3 bg-white">
                             <div className="flex flex-col items-center">
                               <span className="text-[10px] text-gray-400 mb-1">{w.weekNum}주차</span>
                               <span className="text-xs text-gray-800 font-bold">{w.label}</span>
@@ -2837,7 +2837,7 @@ function App() {
                         ))
                       ) : (
                         getMonthWeeksForView(attMonth).map((w, i) => (
-                          <th key={i} className="min-w-[80px] border-r border-gray-50 last:border-none py-4 bg-white">
+                          <th key={i} className="min-w-[80px] border-r border-gray-50 last:border-none py-3 bg-white">
                             <div className="flex flex-col items-center">
                               <span className="text-[10px] text-gray-400 mb-1">{w.weekNum}주차</span>
                               <span className="text-xs text-gray-800 font-bold">{w.rangeLabel}</span>
@@ -3213,7 +3213,7 @@ function App() {
                                     }
                                   } else {
                                     // 그 외(과거거나 완료된) 일정은 기존 로테이션 스타일 적용
-                                    const bStyle = getBadgeStyle(isV ? 'vocal' : 'master', classT, rotationInfo.index, sched.status, 'history');
+                                    const bStyle = getBadgeStyle(isV ? 'vocal' : 'master', classT, rotationInfo.index, sched.status, 'dashboard');
                                     boxClass = `${bStyle} border-solid`;
                                   }
 
@@ -3364,13 +3364,7 @@ function App() {
                 </table>
               </div>
 
-              <div className="flex justify-end gap-6 text-xs font-bold text-gray-500 px-6 py-2 bg-gray-50 rounded-full mx-4 mb-2">
-                <span className="text-gray-400">범례:</span>
-                <div className="flex items-center gap-1"><div className="w-4 h-4 rounded bg-green-200 border border-green-300"></div> M출석</div>
-                <div className="flex items-center gap-1"><div className="w-4 h-4 rounded bg-green-50 border border-green-200"></div> V출석</div>
-                <div className="flex items-center gap-1"><div className="w-4 h-4 rounded bg-yellow-200 border border-yellow-300"></div> 보강완료</div>
-                <div className="flex items-center gap-1"><div className="w-4 h-4 rounded bg-red-200 border border-red-300"></div> 결석</div>
-              </div>
+
             </div>
           )}
 
