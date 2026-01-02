@@ -128,20 +128,7 @@ function App() {
       }
     }
 
-    // 3. [Calendar 전용] 완료/결석/지각 상태의 Split 수업 처리 (그레이/블랙 2톤)
-    if (isSplitClass && (status === 'completed' || status === 'late' || status === 'absent')) {
-      if (gridType === 'master') {
-        if (context === 'history') {
-          return "bg-[linear-gradient(135deg,#fed7aa_50%,#fff7ed_50%)] border-orange-300 text-orange-900 font-bold";
-        }
-        return "bg-[linear-gradient(135deg,#030712_50%,#374151_50%)] border-black text-white font-bold";
-      }
-      if (gridType === 'vocal') {
-        // Vocal Half 완료 시 (투톤 블루 or 그레이?)
-        // Calendar에서는 회색계열이 나을 수 있음
-        return "bg-[linear-gradient(135deg,#9ca3af_50%,#f3f4f6_50%)] border-gray-400 text-gray-800 font-bold";
-      }
-    }
+
 
     // Default styles
     if (isVocal) {
@@ -575,6 +562,64 @@ function App() {
   const currentMonthNetProfit = useMemo(() => {
     return currentMonthTotalRevenue - currentMonthTotalExpense;
   }, [currentMonthTotalRevenue, currentMonthTotalExpense]);
+
+  // [NEW] Master/Vocal 매출 상세 분석
+  const currentMonthRevenueBreakdown = useMemo(() => {
+    let accMaster = 0;
+    let accVocal = 0;
+
+    const processItem = (item) => {
+      // 숫자만 추출 (문자열일 경우 대비)
+      const amount = Number(String(item.amount || 0).replace(/[^0-9]/g, ''));
+      if (amount === 0) return;
+
+      const student = students.find(s => s.id === item.studentId);
+      if (!student) {
+        accMaster += amount; // 학생 정보 없으면 기본 Master로 집계
+        return;
+      }
+
+      // 학생의 수강료 비율 계산
+      let tm = 0, tv = 0, tv30 = 0;
+      if (student.schedule && Array.isArray(student.schedule)) {
+        student.schedule.forEach(w => {
+          tm += Number(w.master || 0);
+          tv += Number(w.vocal || 0);
+          tv30 += Number(w.vocal30 || 0);
+        });
+      }
+
+      const rateM = Number(student.rates?.master || 0);
+      const rateV = Number(student.rates?.vocal || 0);
+
+      const expectedMaster = tm * rateM;
+      const expectedVocal = (tv * rateV) + (tv30 * (rateV * 0.5));
+      const totalExpected = expectedMaster + expectedVocal;
+
+      if (totalExpected > 0) {
+        // 비율대로 분배
+        const ratioM = expectedMaster / totalExpected;
+        const ratioV = expectedVocal / totalExpected;
+        accMaster += amount * ratioM;
+        accVocal += amount * ratioV;
+      } else {
+        // 예상 금액이 0인 경우 (스케줄 미설정 등), 단가 설정에 따라 분배
+        if (rateM > 0 && rateV === 0) {
+          accMaster += amount;
+        } else if (rateM === 0 && rateV > 0) {
+          accVocal += amount;
+        } else {
+          // 둘 다 있거나 둘 다 없으면... 그냥 Master로 (또는 5:5?) -> Master Default
+          accMaster += amount;
+        }
+      }
+    };
+
+    settlementIncome.forEach(processItem);
+    settlementUnpaid.forEach(processItem);
+
+    return { master: Math.round(accMaster), vocal: Math.round(accVocal) };
+  }, [settlementIncome, settlementUnpaid, students]);
 
 
   useEffect(() => {
@@ -3440,6 +3485,17 @@ function App() {
                   <div className="text-xl font-extrabold text-gray-800 tracking-tight">
                     {formatCurrency(currentMonthTotalRevenue)}원
                   </div>
+                  {/* [NEW] 상세 내역 표시 */}
+                  <div className="flex gap-2 mt-2 text-[10px] font-bold text-gray-400 bg-gray-50 rounded-lg px-2 py-1">
+                    <span className="flex items-center gap-1">
+                      <div className="w-1.5 h-1.5 rounded-full bg-orange-400"></div>
+                      M: {formatCurrency(currentMonthRevenueBreakdown.master)}
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <div className="w-1.5 h-1.5 rounded-full bg-blue-400"></div>
+                      V: {formatCurrency(currentMonthRevenueBreakdown.vocal)}
+                    </span>
+                  </div>
                 </div>
 
                 {/* 2. 총 지출 */}
@@ -3489,12 +3545,12 @@ function App() {
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
                 {/* 1. 수익 내역 */}
-                <div className="bg-white rounded-[2.5rem] shadow-sm border border-gray-100 overflow-hidden flex flex-col h-[600px]">
+                <div className="bg-white rounded-[2.5rem] shadow-sm border border-gray-100 overflow-hidden flex flex-col">
                   <div className="p-6 border-b border-gray-100 flex justify-between items-center">
                     <h3 className="text-lg font-bold text-gray-800">수익 내역</h3>
                     <span className="text-xs font-bold text-green-600 bg-green-50 px-2 py-1 rounded-lg">입금완료</span>
                   </div>
-                  <div className="flex-1 overflow-y-auto p-4">
+                  <div className="p-4">
                     <table className="table table-sm w-full">
                       <thead>
                         <tr className="text-gray-400">
@@ -3533,7 +3589,7 @@ function App() {
                   {/* 미수금 예정 리스트 */}
                   <div className="border-t border-gray-100 bg-gray-50 p-4">
                     <h4 className="text-xs font-bold text-gray-500 mb-2">미수금 예정 리스트</h4>
-                    <div className="h-32 overflow-y-auto">
+                    <div className="">
                       <table className="table table-xs w-full">
                         <tbody>
                           {settlementUnpaid.map((item, i) => (
