@@ -74,32 +74,32 @@ function App() {
   const [loginPw, setLoginPw] = useState('');
 
   // [VISUALIZATION] 로테이션 색상 정의 (M은 진하게, V는 연하게)
+  // [VISUALIZATION] 로테이션 색상 정의 (M은 진하게, V는 연하게-투명도 60%)
   const ROTATION_COLORS = [
-    { v: 'bg-blue-50 border-blue-200', m: 'bg-blue-200 border-blue-300', v_hex: '#eff6ff', m_hex: '#bfdbfe', two_tone: 'bg-[linear-gradient(135deg,#bfdbfe_50%,#eff6ff_50%)]' },    // 1. 파랑
-    { v: 'bg-orange-50 border-orange-200', m: 'bg-orange-200 border-orange-300', v_hex: '#fff7ed', m_hex: '#fed7aa', two_tone: 'bg-[linear-gradient(135deg,#fed7aa_50%,#fff7ed_50%)]' }, // 2. 주황
-    { v: 'bg-green-50 border-green-200', m: 'bg-green-200 border-green-300', v_hex: '#f0fdf4', m_hex: '#bbf7d0', two_tone: 'bg-[linear-gradient(135deg,#bbf7d0_50%,#f0fdf4_50%)]' },  // 3. 초록
-    { v: 'bg-purple-50 border-purple-200', m: 'bg-purple-200 border-purple-300', v_hex: '#faf5ff', m_hex: '#e9d5ff', two_tone: 'bg-[linear-gradient(135deg,#e9d5ff_50%,#faf5ff_50%)]' }, // 4. 보라
-    { v: 'bg-pink-50 border-pink-200', m: 'bg-pink-200 border-pink-300', v_hex: '#fdf2f8', m_hex: '#fbcfe8', two_tone: 'bg-[linear-gradient(135deg,#fbcfe8_50%,#fdf2f8_50%)]' },    // 5. 핑크
-    { v: 'bg-yellow-50 border-yellow-200', m: 'bg-yellow-200 border-yellow-300', v_hex: '#fefce8', m_hex: '#fef08a', two_tone: 'bg-[linear-gradient(135deg,#fef08a_50%,#fefce8_50%)]' }, // 6. 노랑
-    { v: 'bg-teal-50 border-teal-200', m: 'bg-teal-200 border-teal-300', v_hex: '#f0fdfa', m_hex: '#99f6e4', two_tone: 'bg-[linear-gradient(135deg,#99f6e4_50%,#f0fdfa_50%)]' },    // 7. 청록
-    { v: 'bg-indigo-50 border-indigo-200', m: 'bg-indigo-200 border-indigo-300', v_hex: '#eef2ff', m_hex: '#c7d2fe', two_tone: 'bg-[linear-gradient(135deg,#c7d2fe_50%,#eef2ff_50%)]' }, // 8. 남색
-    { v: 'bg-red-50 border-red-200', m: 'bg-red-200 border-red-300', v_hex: '#fef2f2', m_hex: '#fecaca', two_tone: 'bg-[linear-gradient(135deg,#fecaca_50%,#fef2f2_50%)]' },      // 9. 빨강
-    { v: 'bg-lime-50 border-lime-200', m: 'bg-lime-200 border-lime-300', v_hex: '#f7fee7', m_hex: '#d9f99d', two_tone: 'bg-[linear-gradient(135deg,#d9f99d_50%,#f7fee7_50%)]' }     // 10. 라임
+    { v: 'bg-blue-50 border-blue-200', m: 'bg-blue-200 border-blue-300', v_hex: '#eff6ff', m_hex: '#bfdbfe', two_tone: 'bg-[linear-gradient(135deg,#bfdbfe_50%,#eff6ff_50%)]', two_tone_vocal: 'bg-[linear-gradient(135deg,#bfdbfe99_50%,#eff6ff99_50%)]' },
+    { v: 'bg-orange-50 border-orange-200', m: 'bg-orange-200 border-orange-300', v_hex: '#fff7ed', m_hex: '#fed7aa', two_tone: 'bg-[linear-gradient(135deg,#fed7aa_50%,#fff7ed_50%)]', two_tone_vocal: 'bg-[linear-gradient(135deg,#fed7aa99_50%,#fff7ed99_50%)]' },
+    { v: 'bg-green-50 border-green-200', m: 'bg-green-200 border-green-300', v_hex: '#f0fdf4', m_hex: '#bbf7d0', two_tone: 'bg-[linear-gradient(135deg,#bbf7d0_50%,#f0fdf4_50%)]', two_tone_vocal: 'bg-[linear-gradient(135deg,#bbf7d099_50%,#f0fdf499_50%)]' },
+    { v: 'bg-purple-50 border-purple-200', m: 'bg-purple-200 border-purple-300', v_hex: '#faf5ff', m_hex: '#e9d5ff', two_tone: 'bg-[linear-gradient(135deg,#e9d5ff_50%,#faf5ff_50%)]', two_tone_vocal: 'bg-[linear-gradient(135deg,#e9d5ff99_50%,#faf5ff99_50%)]' },
+    { v: 'bg-pink-50 border-pink-200', m: 'bg-pink-200 border-pink-300', v_hex: '#fdf2f8', m_hex: '#fbcfe8', two_tone: 'bg-[linear-gradient(135deg,#fbcfe8_50%,#fdf2f8_50%)]', two_tone_vocal: 'bg-[linear-gradient(135deg,#fbcfe899_50%,#fdf2f899_50%)]' },
+    { v: 'bg-yellow-50 border-yellow-200', m: 'bg-yellow-200 border-yellow-300', v_hex: '#fefce8', m_hex: '#fef08a', two_tone: 'bg-[linear-gradient(135deg,#fef08a_50%,#fefce8_50%)]', two_tone_vocal: 'bg-[linear-gradient(135deg,#fef08a99_50%,#fefce899_50%)]' },
+    { v: 'bg-teal-50 border-teal-200', m: 'bg-teal-200 border-teal-300', v_hex: '#f0fdfa', m_hex: '#99f6e4', two_tone: 'bg-[linear-gradient(135deg,#99f6e4_50%,#f0fdfa_50%)]', two_tone_vocal: 'bg-[linear-gradient(135deg,#99f6e499_50%,#f0fdfa99_50%)]' },
+    { v: 'bg-indigo-50 border-indigo-200', m: 'bg-indigo-200 border-indigo-300', v_hex: '#eef2ff', m_hex: '#c7d2fe', two_tone: 'bg-[linear-gradient(135deg,#c7d2fe_50%,#eef2ff_50%)]', two_tone_vocal: 'bg-[linear-gradient(135deg,#c7d2fe99_50%,#eef2ff99_50%)]' },
+    { v: 'bg-red-50 border-red-200', m: 'bg-red-200 border-red-300', v_hex: '#fef2f2', m_hex: '#fecaca', two_tone: 'bg-[linear-gradient(135deg,#fecaca_50%,#fef2f2_50%)]', two_tone_vocal: 'bg-[linear-gradient(135deg,#fecaca99_50%,#fef2f299_50%)]' },
+    { v: 'bg-lime-50 border-lime-200', m: 'bg-lime-200 border-lime-300', v_hex: '#f7fee7', m_hex: '#d9f99d', two_tone: 'bg-[linear-gradient(135deg,#d9f99d_50%,#f7fee7_50%)]', two_tone_vocal: 'bg-[linear-gradient(135deg,#d9f99d99_50%,#f7fee799_50%)]' }
   ];
 
-  const getBadgeStyle = (gridType, classType, rotationIndex, status, context = 'calendar') => {
+  const getBadgeStyle = (gridType, classType, rotationIndex, status, ctx = 'calendar') => {
+
     const isVocal = gridType === 'vocal';
     const is30 = String(classType) === '30';
-    const isHalf = String(classType) === 'half'; // [NEW] Vocal Half Check
-    const isSpecialStatus = status && status !== 'completed' && status !== 'late' && status !== 'absent' && status !== 'pending';
+    const isHalf = String(classType) === 'half';
+    // [MOD] reschedule을 Special Status에서 제외하여 로테이션 배경색 적용 허용
+    const isSpecialStatus = status && status !== 'completed' && status !== 'absent' && status !== 'pending' && status !== 'reschedule' && status !== 'reschedule_assigned';
 
     const isSplitClass = (gridType === 'master' && is30) || (gridType === 'vocal' && isHalf);
 
     // 1. [History 전용] 배정만 된 경우(Pending) 또는 상태 없음 -> 연한 그레이
-    // 미래의 수업(아직 미진행)은 회색으로 표시되어야 함
-    // 1. [History 전용] 배정만 된 경우(Pending) 또는 상태 없음 -> 연한 그레이
-    // 미래의 수업(아직 미진행)은 회색으로 표시되어야 함
-    if (context === 'history' && (status === 'pending' || !status)) {
+    if (ctx === 'history' && (status === 'pending' || !status)) {
       if (isSplitClass) {
         return "bg-[linear-gradient(135deg,#e5e7eb_50%,#f9fafb_50%)] border-gray-300 text-gray-400 font-bold opacity-80 shadow-none";
       } else {
@@ -107,37 +107,66 @@ function App() {
       }
     }
 
+
+
+
     // 2. [공통] 로테이션 정보가 있으면 최우선 적용 (특수 상태 제외)
     // History context에서는 'completed', 'late', 'absent' 상태의 수업도 여기서 처리
     const shouldApplyRotationColor =
       (rotationIndex !== undefined && rotationIndex !== null && rotationIndex !== -1 && !isSpecialStatus) &&
-      (context === 'history' || (status !== 'completed' && status !== 'late' && status !== 'absent'));
+      (ctx === 'history' || (status !== 'completed' && status !== 'absent'));
 
     if (shouldApplyRotationColor) {
       const idx = Math.max(0, parseInt(rotationIndex)) % ROTATION_COLORS.length;
       const colors = ROTATION_COLORS[idx];
 
       if (colors) {
-        // [수정] Split Class(Master 30, Vocal Half)는 2톤 스타일 적용
+        let baseClass = "";
         if (isSplitClass) {
           const borderClass = colors.m.split(' ').find(c => c.startsWith('border-')) || (isVocal ? 'border-blue-400' : 'border-orange-400');
-          const gradientClass = colors.two_tone || `bg-[linear-gradient(135deg,${colors.m_hex}_50%,${colors.v_hex}_50%)]`;
-          return `${gradientClass} ${borderClass} border-[1.5px] font-bold text-gray-800`;
+          const gradientClass = (isVocal ? colors.two_tone_vocal : colors.two_tone) || '';
+          const distinctClass = isVocal ? 'ring-1 ring-white/50' : '';
+          baseClass = `${gradientClass} ${borderClass} border-[1.5px] font-bold text-gray-800 ${distinctClass}`;
+        } else {
+          baseClass = `${isVocal ? colors.v : colors.m} font-bold text-gray-800`;
         }
-        return `${isVocal ? colors.v : colors.m} font-bold text-gray-800`;
+
+        // [NEW] 보강 예정인 경우 테두리 점선 + 노란색 텍스트 강제 적용 (THIN 1px로 강제 변경 - 빨간 원 부분)
+        if (status === 'reschedule' || status === 'reschedule_assigned') {
+          return baseClass.replace(/border-\[?[a-z0-9.]+\]?/g, '').replace(/border-[a-z]+-\d+/g, '').replace('border-solid', '') + " border-yellow-500 border-dashed border-[1px] !text-yellow-700";
+        }
+        return baseClass;
       }
     }
 
+    // 2.5 [Fallback for Reschedule] 로테이션 정보가 없는 경우에도 보강 예정 스타일 적용 (1px 점선)
+    if (status === 'reschedule' || status === 'reschedule_assigned') {
+      const fallbackBg = isVocal ? "bg-blue-100" : "bg-orange-100";
+      return `${fallbackBg} border-dashed border-yellow-500 border-[1px] !text-yellow-700 font-bold`;
+    }
 
+    // 3. [Calendar 전용] 완료/결석/지각 상태의 Split 수업 처리
+    // Vocal: History context에서는 Blue 2-tone, Calendar에서는 Gray 2-tone
+    if (isSplitClass && (status === 'completed' || status === 'absent')) {
+      if (gridType === 'master') {
+        if (ctx === 'history') {
+          return "bg-[linear-gradient(135deg,#fed7aa_50%,#fff7ed_50%)] border-orange-300 text-orange-900 font-bold";
+        }
+        return "bg-[linear-gradient(135deg,#030712_50%,#374151_50%)] border-black text-white font-bold";
+      }
+      if (gridType === 'vocal') {
+        if (ctx === 'history') {
+          return "bg-[linear-gradient(135deg,#60a5fa_50%,#dbeafe_50%)] border-blue-600 text-blue-950 font-bold";
+        }
+        return "bg-[linear-gradient(135deg,#9ca3af_50%,#f3f4f6_50%)] border-gray-400 text-gray-800 font-bold";
+      }
+    }
 
     // Default styles
     if (isVocal) {
-      // Vocal Half -> 투톤 블루
       if (isHalf) return "bg-[linear-gradient(135deg,#60a5fa_50%,#dbeafe_50%)] border-blue-600 text-blue-950 font-bold";
-      // V30 & V60 -> Solid Blue
       return "bg-blue-100 text-blue-700 border-blue-300";
     } else {
-      // Master 30 -> 2톤 오렌지
       if (is30) return "bg-[linear-gradient(135deg,#fed7aa_50%,#fff7ed_50%)] border-orange-300 text-orange-900 font-bold";
       // Master 60 -> Solid Orange
       return "bg-orange-200 text-orange-950 border-orange-400 font-black";
@@ -1522,7 +1551,7 @@ function App() {
             collection(db, "schedules"),
             where("studentId", "==", student.id),
             where("date", ">=", bufferDateStr),
-            where("status", "in", ["completed", "late", "absent"])
+            where("status", "in", ["completed", "absent"])
           );
           const querySnap = await getDocs(q);
           const allScheds = querySnap.docs
@@ -2099,7 +2128,7 @@ function App() {
       .filter(s =>
         s.studentId === student.id &&
         s.date >= bufferDateStr &&
-        (s.status === 'completed' || s.status === 'late' || s.status === 'absent' || s.status === 'pending' || !s.status)
+        (s.status === 'completed' || s.status === 'absent')
       )
       .sort((a, b) => new Date((a.date || '') + 'T' + (a.time || '00:00')) - new Date((b.date || '') + 'T' + (b.time || '00:00')));
 
@@ -2107,10 +2136,10 @@ function App() {
     const vScheds = [];
 
     for (const s of allScheds) {
-      if (s.gridType === 'master' || !s.gridType) {
+      if (s.gridType === 'master' || (!s.gridType && !s.vocalType)) {
         const weight = s.masterType === '30' ? 0.5 : 1;
         mScheds.push({ ...s, _weight: weight });
-      } else if (s.gridType === 'vocal') {
+      } else if (s.gridType === 'vocal' || (!s.gridType && s.vocalType)) {
         const weight = s.vocalType === '30' ? 0.5 : 1;
         vScheds.push({ ...s, _weight: weight });
       }
@@ -2187,7 +2216,7 @@ function App() {
       .filter(s =>
         s.studentId === student.id &&
         s.date >= bufferDateStr &&
-        (s.status === 'completed' || s.status === 'late' || s.status === 'absent')
+        (s.status === 'completed' || s.status === 'absent' || s.id === targetSchedId)
       )
       .sort((a, b) => new Date((a.date || '') + 'T' + (a.time || '00:00')) - new Date((b.date || '') + 'T' + (b.time || '00:00')));
 
@@ -2199,7 +2228,7 @@ function App() {
       return { index: target.rotationIndex ?? -1, label: target.rotationLabel };
     }
 
-    const isTargetMaster = (target.gridType === 'master' || !target.gridType);
+    const isTargetMaster = (target.gridType === 'master' || (!target.gridType && !target.vocalType));
 
     let typeScheds = [];
     let limit = 0;
@@ -2209,7 +2238,7 @@ function App() {
       if (reqM === 0) return { index: 0, label: 'R1' };
       limit = reqM;
       for (const s of allScheds) {
-        if (s.gridType === 'master' || !s.gridType) {
+        if (s.gridType === 'master' || (!s.gridType && !s.vocalType)) {
           const weight = s.masterType === '30' ? 0.5 : 1;
           typeScheds.push({ ...s, _weight: weight });
         }
@@ -2218,7 +2247,7 @@ function App() {
       if (reqV === 0) return { index: 0, label: 'R1' };
       limit = reqV;
       for (const s of allScheds) {
-        if (s.gridType === 'vocal') {
+        if (s.gridType === 'vocal' || (!s.gridType && s.vocalType)) {
           const weight = s.vocalType === '30' ? 0.5 : 1;
           typeScheds.push({ ...s, _weight: weight });
         }
@@ -3082,7 +3111,7 @@ function App() {
                                   s.studentId === student.id &&
                                   s.date >= w.startStr &&
                                   s.date <= w.endStr &&
-                                  (!s.memo.includes('보강(') || s.status === 'completed') &&
+                                  (!s.memo.includes('보강(') || s.status === 'completed' || s.status === 'reschedule' || s.status === 'reschedule_assigned') &&
                                   // [핵심 추가] 월별 보기 모드일 때만 날짜 엄격 검증
                                   (attViewMode === 'month'
                                     ? (sDate.getMonth() === attMonth.getMonth() && sDate.getFullYear() === attMonth.getFullYear())
@@ -3101,11 +3130,11 @@ function App() {
                               const vTotal = vCountBasic + extraVCount;
 
                               const completedM = weekSchedules
-                                .filter(s => (s.gridType === 'master' || !s.gridType) && s.category !== '상담')
+                                .filter(s => (s.gridType === 'master' || (!s.gridType && !s.vocalType)) && s.category !== '상담')
                                 .sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time));
 
                               const completedV = weekSchedules
-                                .filter(s => s.gridType === 'vocal')
+                                .filter(s => s.gridType === 'vocal' || (!s.gridType && s.vocalType))
                                 .sort((a, b) => new Date(a.date + 'T' + a.time) - new Date(b.date + 'T' + b.time));
 
 
@@ -3161,8 +3190,8 @@ function App() {
 
                                   // --- [VISUALIZATION] 로테이션 배경색 적용 (진하기 구분) ---
                                   // (전략: 기존 boxClass 결정 로직 대체)
-                                  const isM = (sched.gridType === 'master' || !sched.gridType) && sched.category !== '상담';
-                                  const isV = sched.gridType === 'vocal';
+                                  const isM = (sched.gridType === 'master' || (!sched.gridType && !sched.vocalType)) && sched.category !== '상담';
+                                  const isV = sched.gridType === 'vocal' || (!sched.gridType && sched.vocalType);
                                   const classT = isV ? sched.vocalType : sched.masterType;
 
                                   // [NEW] 미래/보류 일정 비활성 처리
@@ -3184,7 +3213,7 @@ function App() {
                                     }
                                   } else {
                                     // 그 외(과거거나 완료된) 일정은 기존 로테이션 스타일 적용
-                                    const bStyle = getBadgeStyle(isV ? 'vocal' : 'master', classT, rotationInfo.index, sched.status, 'attendance');
+                                    const bStyle = getBadgeStyle(isV ? 'vocal' : 'master', classT, rotationInfo.index, sched.status, 'history');
                                     boxClass = `${bStyle} border-solid`;
                                   }
 
@@ -3201,8 +3230,8 @@ function App() {
                                   // [NEW] 완료된 보강 수업인 경우 (강제 스타일 적용)
                                   if (sched.status === 'completed' && sched.memo && sched.memo.includes('보강')) {
                                     // 정규식 제거가 불안정할 수 있으므로 !important 클래스로 덮어쓰기 전략 사용
-                                    // boxClass 초기화가 잘 안 될 수 있으므로, 기존 속성을 덮어쓰도록 강제
-                                    boxClass += " !bg-white !border-dashed !border-yellow-500 !border-[2px] !text-yellow-700 !font-bold";
+                                    // [FIX] 배경색은 로테이션 색상을 그대로 사용하기 위해 !bg-white 제거
+                                    boxClass += " !border-dashed !border-yellow-500 !border-[2px] !text-yellow-700 !font-bold";
                                     // 아이콘도 노란색으로 변경 (Reschedule 색상)
                                     statusColor = " !text-yellow-700";
                                   }
@@ -3217,11 +3246,11 @@ function App() {
                                     statusColor = "text-red-500";
                                     boxClass += " text-red-600";
                                   } else if (sched.status === 'reschedule' || sched.status === 'reschedule_assigned') {
-                                    content = "보강";
+                                    content = dateShort;
                                     icon = <FaClock className="text-[9px]" />;
                                     statusColor = "text-yellow-600";
-                                    boxClass = "bg-yellow-50 border-dashed border-yellow-300 text-yellow-600";
-                                  } else if (sched.status === 'late') {
+                                    // [MOD] 중앙화된 getBadgeStyle 사용 (통일된 스타일 적용)
+                                    boxClass = getBadgeStyle(isV ? 'vocal' : 'master', classT, rotationInfo.index, sched.status, 'history');
                                     icon = <FaClock className="text-[9px]" />;
                                     statusColor = "text-yellow-600";
                                   }
@@ -3886,8 +3915,7 @@ function App() {
                       reqV += Number(w.vocal || 0) + Number(w.vocal30 || 0);
                     });
                     const allCompleted = studentFullHistory.filter(s =>
-                      // [FIX] 보류/미입력 항목도 포함하여 로테이션 순서 예측 (일관성 유지)
-                      (s.status === 'completed' || s.status === 'late' || s.status === 'absent' || s.status === 'pending' || !s.status || s.id === targetSchedId)
+                      (s.status === 'completed' || s.status === 'absent' || s.id === targetSchedId)
                     );
                     const target = allCompleted.find(s => s.id === targetSchedId);
                     if (!target) return { index: -1, label: '' };
@@ -3915,8 +3943,8 @@ function App() {
 
                     const typeScheds = [];
                     for (const s of allCompleted) {
-                      const isV = s.gridType === 'vocal';
-                      const isM = s.gridType === 'master' || !s.gridType;
+                      const isV = s.gridType === 'vocal' || (!s.gridType && s.vocalType);
+                      const isM = (s.gridType === 'master' || (!s.gridType && !s.vocalType)) && s.category !== '상담';
                       if (isTargetMaster && isM) {
                         const weight = s.masterType === '30' ? 0.5 : 1;
                         typeScheds.push({ ...s, _weight: weight });
@@ -3971,7 +3999,7 @@ function App() {
 
                     const validScheds = studentFullHistory.filter(sch =>
                       sch.date >= bufferDateStr &&
-                      (sch.status === 'completed' || sch.status === 'late' || sch.status === 'absent' || sch.status === 'pending' || !sch.status)
+                      (sch.status === 'completed' || sch.status === 'absent' || sch.status === 'pending' || !sch.status)
                     );
 
                     const mScheds = [];
@@ -4077,8 +4105,8 @@ function App() {
                                   }
                                 });
 
-                                const completedM = weekScheds.filter(s => (s.gridType === 'master' || !s.gridType) && s.category !== '상담');
-                                const completedV = weekScheds.filter(s => s.gridType === 'vocal');
+                                const completedM = weekScheds.filter(s => (s.gridType === 'master' || (!s.gridType && !s.vocalType)) && s.category !== '상담');
+                                const completedV = weekScheds.filter(s => s.gridType === 'vocal' || (!s.gridType && s.vocalType));
 
                                 let uiState = null;
                                 let targetUiDate = '';
@@ -4104,9 +4132,6 @@ function App() {
                                     <div className="flex flex-col gap-1.5 w-full items-center mt-2">
                                       <div className="flex gap-1 justify-center flex-wrap min-h-[24px]">
                                         {completedM.length > 0 ? completedM.map((s, idx) => {
-                                          if (s.date === '2025-12-27' || s.date === '2025-12-29') {
-                                            console.log('DEBUG History Loop:', s.date, s.status, s.memo, s);
-                                          }
                                           const rotationInfo = getLocalRotationInfo(s.id);
                                           const dateShort = formatMonthDay(s.date);
 
@@ -4123,6 +4148,8 @@ function App() {
                                           const effectiveStatus = showAsReschedule ? 'reschedule' : s.status;
 
                                           let boxClass = getBadgeStyle('master', s.masterType, rotationInfo.index, effectiveStatus, 'history');
+
+
                                           let icon = null; let statusColor = "text-gray-400";
 
                                           if (effectiveStatus === 'completed') { icon = <FaCheck className="text-[9px]" />; statusColor = "text-green-700"; }
@@ -4138,9 +4165,9 @@ function App() {
                                           const isAssigned = s.status === 'reschedule_assigned' && effectiveStatus !== 'reschedule';
 
                                           if (isCompletedMakeup) {
-                                            boxClass = boxClass.replace(/border-[a-z]+-\d+/g, '').replace('border-solid', '');
+                                            boxClass = boxClass.replace(/border-\[?[a-z0-9.]+\]?/g, '').replace(/border-[a-z]+-\d+/g, '').replace('border-solid', '');
                                             // [FIX] 보강 완료 시 초록 점선 -> 노란 점선으로 변경 (아이콘 색상과 통일)
-                                            boxClass += " border-dashed border-yellow-500 border-[2px]";
+                                            boxClass += " border-dashed border-yellow-500 border-[2px] !font-bold";
                                           }
 
                                           /*
@@ -4184,9 +4211,9 @@ function App() {
 
                                           // [NEW] 완료된 보강 수업 처리
                                           if (s.status === 'completed' && s.memo && s.memo.includes('보강')) {
-                                            boxClass = boxClass.replace(/border-[a-z]+-\d+/g, '').replace('border-solid', '');
+                                            boxClass = boxClass.replace(/border-\[?[a-z0-9.]+\]?/g, '').replace(/border-[a-z]+-\d+/g, '').replace('border-solid', '');
                                             // [FIX] 보강 완료 시 초록 점선 -> 노란 점선으로 변경 (아이콘 색상과 통일)
-                                            boxClass += " border-dashed border-yellow-500 border-[2px]";
+                                            boxClass += " border-dashed border-yellow-500 border-[2px] !font-bold";
                                           }
 
                                           return (<div key={idx} className={`h-7 w-10 rounded-md text-[9px] flex flex-col items-center justify-center border cursor-pointer leading-none gap-0.5 relative overflow-hidden shadow-sm ${boxClass}`}>{rotationInfo.label && <span className="absolute top-0 right-0 bg-black/10 text-[6px] px-0.5 rounded-bl-sm font-extrabold text-gray-700 opacity-50">{rotationInfo.label}</span>}<span className={statusColor}>{icon}</span><span>{dateShort}</span></div>);
