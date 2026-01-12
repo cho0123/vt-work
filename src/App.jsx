@@ -1029,8 +1029,8 @@ function App() {
         if (mType === '30') val = 0.5;
       } else {
         // [New] Vocal Half Split -> 0.5 value
-        if (vType === 'half') val = 0.5;
-        else val = 1; // V30(Legacy) or V60 -> 1.0 value
+        if (vType === 'half' || vType === '30') val = 0.5;
+        else val = 1; // V60 -> 1.0 value
       }
       bookedUsage[sid].value += val;
     };
@@ -1151,8 +1151,8 @@ function App() {
               if (s.masterType === '30') u = 0.5;
             } else {
               // Vocal
-              if (s.vocalType === 'half') u = 0.5;
-              // V30 (Legacy '30') is 1.0. V60 is 1.0.
+              if (s.vocalType === 'half' || s.vocalType === '30') u = 0.5;
+              // V60 is 1.0.
             }
             cycleUsage += u;
           }
@@ -2140,7 +2140,7 @@ function App() {
         const weight = s.masterType === '30' ? 0.5 : 1;
         mScheds.push({ ...s, _weight: weight });
       } else if (s.gridType === 'vocal' || (!s.gridType && s.vocalType)) {
-        const weight = s.vocalType === '30' ? 0.5 : 1;
+        const weight = (s.vocalType === '30' || s.vocalType === 'half') ? 0.5 : 1;
         vScheds.push({ ...s, _weight: weight });
       }
     }
@@ -2248,7 +2248,7 @@ function App() {
       limit = reqV;
       for (const s of allScheds) {
         if (s.gridType === 'vocal' || (!s.gridType && s.vocalType)) {
-          const weight = s.vocalType === '30' ? 0.5 : 1;
+          const weight = (s.vocalType === '30' || s.vocalType === 'half') ? 0.5 : 1;
           typeScheds.push({ ...s, _weight: weight });
         }
       }
@@ -3925,7 +3925,7 @@ function App() {
                       return { index: idx ?? -1, label: target.rotationLabel };
                     }
 
-                    const isTargetMaster = (target.gridType === 'master' || !target.gridType);
+                    const isTargetMaster = (target.gridType === 'master' || (!target.gridType && !target.vocalType));
                     let limit = 0;
                     if (isTargetMaster) {
                       if (reqM === 0) return { index: 0, label: 'R1' };
@@ -3943,7 +3943,7 @@ function App() {
                         const weight = s.masterType === '30' ? 0.5 : 1;
                         typeScheds.push({ ...s, _weight: weight });
                       } else if (!isTargetMaster && isV) {
-                        const weight = s.vocalType === '30' ? 0.5 : 1;
+                        const weight = (s.vocalType === '30' || s.vocalType === 'half') ? 0.5 : 1;
                         typeScheds.push({ ...s, _weight: weight });
                       }
                     }
@@ -4004,7 +4004,7 @@ function App() {
                         const weight = sch.masterType === '30' ? 0.5 : 1;
                         mScheds.push({ ...sch, _weight: weight });
                       } else if (sch.gridType === 'vocal') {
-                        const weight = sch.vocalType === '30' ? 0.5 : 1;
+                        const weight = (sch.vocalType === '30' || sch.vocalType === 'half') ? 0.5 : 1;
                         vScheds.push({ ...sch, _weight: weight });
                       }
                     }
