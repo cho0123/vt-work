@@ -96,7 +96,7 @@ function App() {
     // [MOD] reschedule을 Special Status에서 제외하여 로테이션 배경색 적용 허용
     const isSpecialStatus = status && status !== 'completed' && status !== 'absent' && status !== 'pending' && status !== 'reschedule' && status !== 'reschedule_assigned';
 
-    const isSplitClass = (gridType === 'master' && is30) || (gridType === 'vocal' && isHalf);
+    const isSplitClass = (gridType === 'master' && is30) || (gridType === 'vocal' && (isHalf || is30));
 
     // 1. [History 전용] 배정만 된 경우(Pending) 또는 상태 없음 -> 연한 그레이
     if (ctx === 'history' && (status === 'pending' || !status)) {
