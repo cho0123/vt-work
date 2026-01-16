@@ -96,7 +96,8 @@ function App() {
     // [MOD] reschedule을 Special Status에서 제외하여 로테이션 배경색 적용 허용
     const isSpecialStatus = status && status !== 'completed' && status !== 'absent' && status !== 'pending' && status !== 'reschedule' && status !== 'reschedule_assigned';
 
-    const isSplitClass = (gridType === 'master' && is30) || (gridType === 'vocal' && (isHalf || is30));
+    // [FIX] 보컬 30분(vocalType='30')은 온전한 1개 수업이므로 Split 처리하지 않음 (half만 Split)
+    const isSplitClass = (gridType === 'master' && is30) || (gridType === 'vocal' && isHalf);
 
     // 1. [History 전용] 배정만 된 경우(Pending) 또는 상태 없음 -> 연한 그레이
     if (ctx === 'history' && (status === 'pending' || !status)) {
@@ -160,6 +161,15 @@ function App() {
         }
         return "bg-[linear-gradient(135deg,#9ca3af_50%,#f3f4f6_50%)] border-gray-400 text-gray-800 font-bold";
       }
+
+    }
+
+    // [FIX] Vocal 30분(Solid) 수업 완료 시 회색 처리 (Calendar 전용)
+    // History에서는 그냥 파란색 유지 (or as per design), Calendar에서는 완료 느낌(회색) 필요
+    if (gridType === 'vocal' && is30 && (status === 'completed' || status === 'absent')) {
+      if (ctx !== 'history') {
+        return "bg-gray-200 border-gray-400 text-gray-700 font-bold";
+      }
     }
 
     // Default styles
@@ -195,7 +205,8 @@ function App() {
 
     relevantScheds.forEach(s => {
       if (s.gridType === 'master' || !s.gridType) mWeight += (s.masterType === '30' ? 0.5 : 1);
-      else if (s.gridType === 'vocal') vWeight += (s.vocalType === '30' ? 0.5 : 1);
+      // [FIX] vocalType '30'은 1로 계산, 'half'만 0.5로 계산
+      else if (s.gridType === 'vocal') vWeight += (s.vocalType === 'half' ? 0.5 : 1);
     });
 
     if (mWeight % 1 !== 0 || vWeight % 1 !== 0) return " (30분)";
@@ -1029,8 +1040,9 @@ function App() {
         if (mType === '30') val = 0.5;
       } else {
         // [New] Vocal Half Split -> 0.5 value
-        if (vType === 'half' || vType === '30') val = 0.5;
-        else val = 1; // V60 -> 1.0 value
+        // [FIX] vocalType '30'은 1로 계산, 'half'만 0.5로 계산
+        if (vType === 'half') val = 0.5;
+        else val = 1; // V60, V30 -> 1.0 value
       }
       bookedUsage[sid].value += val;
     };
@@ -1151,8 +1163,9 @@ function App() {
               if (s.masterType === '30') u = 0.5;
             } else {
               // Vocal
-              if (s.vocalType === 'half' || s.vocalType === '30') u = 0.5;
-              // V60 is 1.0.
+              // [FIX] vocalType '30'은 1로 계산, 'half'만 0.5로 계산
+              if (s.vocalType === 'half') u = 0.5;
+              // V60, V30 is 1.0.
             }
             cycleUsage += u;
           }
@@ -2140,7 +2153,8 @@ function App() {
         const weight = s.masterType === '30' ? 0.5 : 1;
         mScheds.push({ ...s, _weight: weight });
       } else if (s.gridType === 'vocal' || (!s.gridType && s.vocalType)) {
-        const weight = (s.vocalType === '30' || s.vocalType === 'half') ? 0.5 : 1;
+        // [FIX] vocalType '30'은 1로 계산, 'half'만 0.5로 계산
+        const weight = (s.vocalType === 'half') ? 0.5 : 1;
         vScheds.push({ ...s, _weight: weight });
       }
     }
@@ -2248,7 +2262,8 @@ function App() {
       limit = reqV;
       for (const s of allScheds) {
         if (s.gridType === 'vocal' || (!s.gridType && s.vocalType)) {
-          const weight = (s.vocalType === '30' || s.vocalType === 'half') ? 0.5 : 1;
+          // [FIX] vocalType '30'은 1로 계산, 'half'만 0.5로 계산
+          const weight = (s.vocalType === 'half') ? 0.5 : 1;
           typeScheds.push({ ...s, _weight: weight });
         }
       }
@@ -3124,7 +3139,8 @@ function App() {
                                 .reduce((acc, s) => acc + (s.masterType === '30' ? 0.5 : 1), 0);
                               const extraVCount = weekSchedules
                                 .filter(s => s.gridType === 'vocal' && s.memo && s.memo.includes('추가'))
-                                .reduce((acc, s) => acc + (s.vocalType === '30' ? 0.5 : 1), 0);
+                                // [FIX] vocalType '30'은 1로 계산, 'half'만 0.5로 계산
+                                .reduce((acc, s) => acc + (s.vocalType === 'half' ? 0.5 : 1), 0);
 
                               const mTotal = mCountBasic + extraMCount;
                               const vTotal = vCountBasic + extraVCount;
@@ -3943,7 +3959,8 @@ function App() {
                         const weight = s.masterType === '30' ? 0.5 : 1;
                         typeScheds.push({ ...s, _weight: weight });
                       } else if (!isTargetMaster && isV) {
-                        const weight = (s.vocalType === '30' || s.vocalType === 'half') ? 0.5 : 1;
+                        // [FIX] vocalType '30'은 1로 계산, 'half'만 0.5로 계산
+                        const weight = (s.vocalType === 'half') ? 0.5 : 1;
                         typeScheds.push({ ...s, _weight: weight });
                       }
                     }
@@ -4004,7 +4021,8 @@ function App() {
                         const weight = sch.masterType === '30' ? 0.5 : 1;
                         mScheds.push({ ...sch, _weight: weight });
                       } else if (sch.gridType === 'vocal') {
-                        const weight = (sch.vocalType === '30' || sch.vocalType === 'half') ? 0.5 : 1;
+                        // [FIX] vocalType '30'은 1로 계산, 'half'만 0.5로 계산
+                        const weight = (sch.vocalType === 'half') ? 0.5 : 1;
                         vScheds.push({ ...sch, _weight: weight });
                       }
                     }
@@ -4131,14 +4149,11 @@ function App() {
 
                                           // [FIX] Smart Link Logic
                                           // 1. 이미 다른 날짜에 보강 완료된 경우
-                                          // 2. 과거 날짜인데 Pending(또는 상태없음)인 경우 -> 이것도 Reschedule(Yellow)로 처리하여 회색 탈피
-                                          // 3. 미래 날짜 -> 그대로 두어 회색 유지
+                                          // 2. 미래 날짜 -> 그대로 두어 회색 유지
                                           const isMakeupCompletedElsewhere = makeupSourceDates.has(s.date);
-                                          const todayStr = formatDateLocal(new Date());
-                                          const isPastPending = (!s.status || s.status === 'pending') && s.date < todayStr;
 
-                                          // 보강 완료된 날짜이거나, 과거의 Pending이면 'reschedule' 상태로 시각화
-                                          const showAsReschedule = isMakeupCompletedElsewhere || isPastPending || (s.status === 'pending' && s.memo && s.memo.includes('보강'));
+                                          // 보강 완료된 날짜이거나, 보강 메모가 있는 Pending이면 'reschedule' 상태로 시각화
+                                          const showAsReschedule = isMakeupCompletedElsewhere || (s.status === 'pending' && s.memo && s.memo.includes('보강'));
                                           const effectiveStatus = showAsReschedule ? 'reschedule' : s.status;
 
                                           let boxClass = getBadgeStyle('master', s.masterType, rotationInfo.index, effectiveStatus, 'history');
@@ -4190,10 +4205,8 @@ function App() {
 
                                           // [FIX] Smart Link Logic (Vocal 동일 적용)
                                           const isMakeupCompletedElsewhere = makeupSourceDates.has(s.date);
-                                          const todayStr = formatDateLocal(new Date());
-                                          const isPastPending = (!s.status || s.status === 'pending') && s.date < todayStr;
 
-                                          const showAsReschedule = isMakeupCompletedElsewhere || isPastPending || (s.status === 'pending' && s.memo && s.memo.includes('보강'));
+                                          const showAsReschedule = isMakeupCompletedElsewhere || (s.status === 'pending' && s.memo && s.memo.includes('보강'));
                                           const effectiveStatus = showAsReschedule ? 'reschedule' : s.status;
 
                                           let boxClass = getBadgeStyle('vocal', s.vocalType, rotationInfo.index, effectiveStatus, 'history');
@@ -4387,7 +4400,7 @@ function App() {
                               onClick={() => setScheduleForm(prev => ({ ...prev, vocalType: '30' }))}
                               className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${scheduleForm.vocalType === '30' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
                             >
-                              30분 (0.5회)
+                              30분 (1회)
                             </button>
                           </div>
                         </div>
