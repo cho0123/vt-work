@@ -850,10 +850,15 @@ function App() {
   // --- [Helpers] ---
   const getRotationWeek = (firstDate, targetDate) => {
     if (!firstDate) return 1;
-    const start = new Date(firstDate);
+    // [FIX] 주차 계산을 월요일 기준(달력 주차)으로 고정
+    const start = getStartOfWeek(new Date(firstDate));
     const current = new Date(targetDate);
+    // 시간 성분 제거 (getStartOfWeek에서 이미 처리되지만, targetDate 안전장치)
+    current.setHours(0, 0, 0, 0);
+
     const diffTime = current.getTime() - start.getTime();
     const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+
     if (diffDays < 0) return 1;
     return (Math.floor(diffDays / 7) % 4) + 1;
   };
@@ -1102,6 +1107,7 @@ function App() {
         const remainingValue = Math.round((totalQuota - usage.value) * 10) / 10;
 
         // 1) 온전한 1시간 슬롯: 남은 쿼터가 있을 때만 생성
+        // 1) 온전한 1시간 슬롯: 남은 쿼터가 있을 때만 생성
         const fullSlots = Math.floor(remainingValue);
 
         // 2) 0.5 짜투리: 쿼터와 상관없이, '사용량'이 0.5단위로 끝나면 짝을 맞추기 위해 무조건 노출
@@ -1110,11 +1116,13 @@ function App() {
         const hasHalf = usageDecimal === 0.5;
 
         for (let i = 1; i <= fullSlots; i++) {
-          const displayName = totalQuota > 1 ? `${student.name}(${usage.count + i})` : student.name;
+          // [Revert] Total 표시 제거
+          const displayName = totalQuota > 1 ? `${student.name} (${usage.count + i})` : student.name;
           options.push({ id: student.id, name: displayName, originalName: student.name });
         }
 
-        if (hasHalf) {
+        // [FIX] Total Quota가 0인 경우(이월 학생)는 Week Logic에서 짝맞추기 강요하지 않음 (Global Logic에서 처리)
+        if (hasHalf && totalQuota > 0) {
           const halfName = `${student.name} (30분)`;
           if (!options.some(o => o.name === halfName)) {
             options.push({ id: student.id, name: halfName, originalName: student.name });
@@ -1125,11 +1133,14 @@ function App() {
       // 2) [Refactor] 로테이션 사이클 전체 잔여량 계산 (Global Remainder)
       // Master & Vocal 공통 적용 (단, Vocal 0.5 지원 위해)
       if (student.firstDate) {
-        const diffDays = Math.floor((new Date(weekStart) - new Date(student.firstDate)) / (86400000));
+        // [FIX] 사이클 계산 기준을 '등록일이 속한 주의 월요일'로 통일 (달력 주차와 일치시키기 위함)
+        const effectiveFirstDate = getStartOfWeek(student.firstDate);
+
+        const diffDays = Math.floor((new Date(weekStart) - new Date(effectiveFirstDate)) / (86400000));
         const safeDiff = Math.max(0, diffDays);
         const cycleIndex = Math.floor(Math.floor(safeDiff / 7) / 4);
 
-        const cycleStartDate = new Date(student.firstDate);
+        const cycleStartDate = new Date(effectiveFirstDate);
         cycleStartDate.setDate(cycleStartDate.getDate() + (cycleIndex * 4 * 7));
 
         const cycleEndDate = new Date(cycleStartDate);
@@ -1179,6 +1190,7 @@ function App() {
 
         // 0.5 짜투리가 남았으면 노출 (쿼터 잔여가 있거나, 아니면 사용량이 .5로 끝나서 짝이 안맞을 때)
         if (globalHasHalf || (remaining > 0 && remaining % 1 === 0.5)) {
+          // [Revert] Total 표시 제거
           const halfName = `${student.name} (30분)`;
           if (!options.some(o => o.name === halfName)) {
             options.push({ id: student.id, name: halfName, originalName: student.name });
@@ -4321,7 +4333,8 @@ function App() {
                       <select className="select select-sm border-gray-200 bg-white"
                         onChange={(e) => {
                           const [sId, sName] = e.target.value.split('|');
-                          const isHalfSuffix = sName.includes('(30분)');
+                          // [FIX] Checking for '(30분' to assume half type (works with or without total quota suffix)
+                          const isHalfSuffix = sName.includes('(30분');
 
                           setScheduleForm(prev => {
                             const newState = { ...prev, studentId: sId, studentName: sName, category: '레슨' };
