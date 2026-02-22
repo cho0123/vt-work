@@ -1001,6 +1001,7 @@ function App() {
           ghosts.push({
             id: `ghost-${student.id}-${gridType}`,
             isGhost: true,
+            isFixed: true,
             studentId: student.id,
             studentName: student.name,
             time: lastRecord.time,
@@ -1384,7 +1385,7 @@ function App() {
       const defaultCategory = scheduleForm.gridType === 'master' ? '야구' : '상담';
       setScheduleForm(prev => ({ ...prev, category: defaultCategory, studentId: '', studentName: '', status: '' }));
     } else {
-      setScheduleForm(prev => ({ ...prev, category: '레슨', isFixed: false, status: '' }));
+      setScheduleForm(prev => ({ ...prev, category: '레슨', status: '' }));
     }
   };
 
@@ -1879,8 +1880,31 @@ function App() {
       });
       setIsScheduleModalOpen(false);
     } catch (e) {
-      console.error(e);
+      console.error("Cancel Error:", e);
       alert("취소 처리 중 오류가 발생했습니다.");
+    }
+  };
+
+  // [NEW] 고정 스케줄 '멈춤' (종료일 설정) 핸들러
+  const handleStopFixedSchedule = async () => {
+    if (!selectedSlot.id) return;
+
+    // 클릭한 날짜의 하루 전날을 종료일로 설정하여 오늘부터 안 보이게 함
+    const selectedDate = new Date(selectedSlot.date);
+    selectedDate.setDate(selectedDate.getDate() - 1);
+    const stopDateStr = formatDateLocal(selectedDate);
+
+    if (!window.confirm(`이 고정 스케쥴을 ${selectedSlot.date}부터 중단하시겠습니까?\n(${stopDateStr}일자 기록까지만 보존되고 이후로는 사라집니다.)`)) return;
+
+    try {
+      await updateDoc(doc(db, "schedules", selectedSlot.id), {
+        fixedEndDate: stopDateStr
+      });
+      alert("해당 고정 스케쥴이 성공적으로 중단되었습니다.");
+      setIsScheduleModalOpen(false);
+    } catch (e) {
+      console.error("고정 스케쥴 중단 에러:", e);
+      alert("중단 처리 중 오류가 발생했습니다.");
     }
   };
   const handleToggleWeekLock = async () => {
@@ -2555,6 +2579,7 @@ function App() {
                                 s.time === matchStr &&
                                 (s.gridType || 'master') === gType &&
                                 (!s.fixedStartDate || s.fixedStartDate <= dateStr) &&
+                                (!s.fixedEndDate || s.fixedEndDate >= dateStr) &&
                                 // [NEW] 취소 내역 확인 (날짜 + 시간 + 학생ID)
                                 !scheduleCancellations.some(c => c.date === dateStr && c.time === matchStr && c.studentId === s.studentId)
                               );
@@ -4265,7 +4290,7 @@ function App() {
                 <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
                   {/* 제목 옆에 점으로 색상 힌트 추가 */}
                   <div className={`w-2 h-2 rounded-full ${scheduleForm.gridType === 'master' ? 'bg-orange-500' : 'bg-green-500'}`}></div>
-                  {selectedSlot.date} {selectedSlot.time}:00 {scheduleForm.gridType === 'master' ? '쌤일정' : '짱구일정'}
+                  [V] {selectedSlot.date} {selectedSlot.time}:{selectedMinute} {scheduleForm.gridType === 'master' ? '쌤일정' : '짱구일정'}
                 </h3>
 
                 <div className="flex gap-4 mb-4">
@@ -4543,26 +4568,45 @@ function App() {
                   )}
 
                   <div className="flex gap-2 mt-4">
+                    {/* 1. 삭제 버튼 (ID가 있을 때만) */}
+                    {selectedSlot.id && (
+                      <button onClick={handleScheduleDelete} disabled={isWeekLocked || isScheduleLocked} className="btn btn-sm bg-red-500 text-white hover:bg-red-600 flex-1 border-none disabled:bg-gray-200 disabled:text-gray-400">삭제</button>
+                    )}
+
+                    {/* 2. 멈춤 vs 이동 버튼 (ID가 있을 때만) */}
                     {selectedSlot.id && (
                       <>
-                        <button onClick={handleScheduleDelete} disabled={isWeekLocked || isScheduleLocked} className="btn btn-sm bg-red-500 text-white hover:bg-red-600 flex-1 border-none disabled:bg-gray-200 disabled:text-gray-400">삭제</button>
-                        <button
-                          onClick={() => {
-                            setMovingSchedule({
-                              ...scheduleForm,
-                              id: selectedSlot.id,
-                              status: scheduleForm.status
-                            });
-                            setIsScheduleModalOpen(false);
-                          }}
-                          disabled={isWeekLocked || isScheduleLocked}
-                          className="btn btn-sm bg-orange-400 text-white hover:bg-orange-500 flex-1 border-none disabled:bg-gray-200 disabled:text-gray-400">
-                          이동
-                        </button>
+                        {!!scheduleForm.isFixed ? (
+                          <button
+                            onClick={handleStopFixedSchedule}
+                            disabled={isWeekLocked || isScheduleLocked}
+                            className="btn btn-sm bg-orange-600 text-white hover:bg-orange-700 flex-1 border-none disabled:bg-gray-200 disabled:text-gray-400">
+                            멈춤
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              setMovingSchedule({
+                                ...scheduleForm,
+                                id: selectedSlot.id,
+                                status: scheduleForm.status
+                              });
+                              setIsScheduleModalOpen(false);
+                            }}
+                            disabled={isWeekLocked || isScheduleLocked}
+                            className="btn btn-sm bg-orange-400 text-white hover:bg-orange-500 flex-1 border-none disabled:bg-gray-200 disabled:text-gray-400">
+                            이동
+                          </button>
+                        )}
                       </>
                     )}
-                    {scheduleForm.isFixed && <button onClick={handleCancelFixedOneTime} disabled={isWeekLocked || isScheduleLocked} className="btn btn-sm bg-green-500 text-white hover:bg-green-600 flex-1 border-none disabled:bg-gray-200 disabled:text-gray-400">취소</button>}
 
+                    {/* 3. 취소 버튼 (이미 생성된 고정 스케줄의 일회성 취소) */}
+                    {!!scheduleForm.isFixed && (
+                      <button onClick={handleCancelFixedOneTime} disabled={isWeekLocked || isScheduleLocked} className="btn btn-sm bg-green-500 text-white hover:bg-green-600 flex-1 border-none disabled:bg-gray-200 disabled:text-gray-400">취소</button>
+                    )}
+
+                    {/* 4. 저장 / 이동완료 버튼 */}
                     {movingSchedule ? (
                       <div className="flex-[2] flex gap-2">
                         <button onClick={() => setMovingSchedule(null)} className="btn btn-sm bg-gray-400 text-white flex-1 border-none">이동 취소</button>
