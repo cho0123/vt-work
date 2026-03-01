@@ -1001,7 +1001,7 @@ function App() {
           ghosts.push({
             id: `ghost-${student.id}-${gridType}`,
             isGhost: true,
-            isFixed: true,
+            isFixed: false,
             studentId: student.id,
             studentName: student.name,
             time: lastRecord.time,
@@ -1335,7 +1335,7 @@ function App() {
         });
       } else {
         // 일반 클릭 (수정/생성)
-        setScheduleTab(existingItem.isFixed ? 'personal' : (existingItem.category === '레슨' || existingItem.category === '상담' ? 'lesson' : 'personal'));
+        setScheduleTab(existingItem.category === '레슨' || existingItem.category === '상담' ? 'lesson' : 'personal');
         setScheduleForm({
           studentId: existingItem.studentId || '',
           studentName: existingItem.studentName || '',
@@ -4404,14 +4404,15 @@ function App() {
                           </>
                         )}
                       </select>
-                      <div className="form-control">
-                        <label className="label cursor-pointer justify-start gap-2">
-                          <input type="checkbox" className="checkbox checkbox-sm checkbox-primary" checked={scheduleForm.isFixed} onChange={(e) => setScheduleForm({ ...scheduleForm, isFixed: e.target.checked })} />
-                          <span className="label-text font-bold text-gray-700">매주 이 시간 고정</span>
-                        </label>
-                      </div>
                     </>
                   )}
+
+                  <div className="form-control">
+                    <label className="label cursor-pointer justify-start gap-2">
+                      <input type="checkbox" className="checkbox checkbox-sm checkbox-primary" checked={scheduleForm.isFixed} onChange={(e) => setScheduleForm({ ...scheduleForm, isFixed: e.target.checked })} />
+                      <span className="label-text font-bold text-gray-700">매주 이 시간 고정</span>
+                    </label>
+                  </div>
                   <input type="text" placeholder="메모" className="input input-sm border-gray-200 bg-white" value={scheduleForm.memo} onChange={(e) => setScheduleForm({ ...scheduleForm, memo: e.target.value })} />
 
                   {/* [FIX] 보컬 진행 시 시간 선택 (1시간 / 30분) */}
