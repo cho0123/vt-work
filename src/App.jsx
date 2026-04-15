@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, Fragment, useMemo } from 'react';
+import { useState, useEffect, Fragment, useMemo } from 'react';
 import {
   FaPlus, FaSearch, FaSignOutAlt, FaEdit, FaTrash,
   FaChevronLeft, FaChevronRight, FaUserSlash, FaUserCheck,
@@ -325,11 +325,13 @@ function App() {
   // [NEW] 개인별 출석부 보기 상태
   const [viewingStudentAtt, setViewingStudentAtt] = useState(null); // 선택된 학생 객체
   const [studentFullHistory, setStudentFullHistory] = useState([]); // 해당 학생의 전체 기록
+  const [viewingStudentHasPayment, setViewingStudentHasPayment] = useState(null); // 신규 수강생 결제 유무
 
   // [수정] 학생 개인 출석부 데이터 로딩 (실시간 연동 적용)
   useEffect(() => {
     if (!viewingStudentAtt) {
       setStudentFullHistory([]);
+      setViewingStudentHasPayment(null);
       return;
     }
 
@@ -351,6 +353,29 @@ function App() {
 
       setStudentFullHistory(list);
     });
+
+    // 2. 신규 결제 유무 판별 (Payment Status)
+    const fetchPaymentStatus = async () => {
+      // 명시적으로 결제 이력 보유/미보유 상태가 저장된 경우
+      if (viewingStudentAtt.hasPayment !== undefined) {
+        setViewingStudentHasPayment(viewingStudentAtt.hasPayment);
+        return;
+      }
+      // Excel 마이그레이션 예외: lastDate가 firstDate보다 미래라면 무조건 결제한 적이 있음
+      if (viewingStudentAtt.lastDate && viewingStudentAtt.firstDate && viewingStudentAtt.lastDate > viewingStudentAtt.firstDate) {
+        setViewingStudentHasPayment(true);
+        return;
+      }
+      // DB 실제결제 내역 쿼리
+      try {
+        const payQ = query(collection(db, "students", viewingStudentAtt.id, "payments"), limit(1));
+        const paySnap = await getDocs(payQ);
+        setViewingStudentHasPayment(!paySnap.empty);
+      } catch (e) {
+        setViewingStudentHasPayment(true); // 에러 시 기존 동작 유지
+      }
+    };
+    fetchPaymentStatus();
 
     return () => unsubscribe();
   }, [viewingStudentAtt?.id]);
@@ -504,7 +529,7 @@ function App() {
     lastDate: formatDateLocal(new Date()),
     memo: '',
     schedule: [{ week: 1, master: '', vocal: '', vocal30: '' }, { week: 2, master: '', vocal: '', vocal30: '' }, { week: 3, master: '', vocal: '', vocal30: '' }, { week: 4, master: '', vocal: '', vocal30: '' }],
-    rates: { master: '', vocal: '' }, unpaidList: [], isPaid: true,
+    rates: { master: '', vocal: '' }, unpaidList: [], isPaid: true, hasPayment: false,
   };
   const [formData, setFormData] = useState(initialFormState);
   const [settlementStatus, setSettlementStatus] = useState('pending'); // [NEW] 정산 상태 (pending | completed)
@@ -2166,6 +2191,14 @@ function App() {
     if (student.unpaidList && student.unpaidList.length > 0) {
       const sortedUnpaid = [...student.unpaidList].sort((a, b) => new Date(b.targetDate) - new Date(a.targetDate));
       if (sortedUnpaid[0].targetDate > anchorDate) anchorDate = sortedUnpaid[0].targetDate;
+    }
+
+    // [기능 추가] 전체 수강생 목록에서 '재등록 요망' 뱃지를 띄우기 위한 진성 신규 학생 판별 로직(동기식)
+    const isNewNoPaymentSync = student.hasPayment === false || (student.hasPayment === undefined && student.lastDate <= student.firstDate);
+    if (isNewNoPaymentSync && (!student.unpaidList || student.unpaidList.length === 0)) {
+      const d = new Date(anchorDate);
+      d.setDate(d.getDate() - 1);
+      anchorDate = formatDateLocal(d);
     }
 
     // [FIX] 시작일 기준 완화 (7일 전까지 포함) - 등록일보다 조금 일찍 시작한 수업도 로테이션에 포함
@@ -4040,6 +4073,13 @@ function App() {
                       if (sortedUnpaid[0].targetDate > anchorDate) anchorDate = sortedUnpaid[0].targetDate;
                     }
 
+                    // [기능 추가] 진성 신규 학생(결제금, 청구금 없음)의 경우 첫 레슨에 '결제요청' 버튼 표출을 위한 anchorDate 임시 우회
+                    if (viewingStudentHasPayment === false && (!s.unpaidList || s.unpaidList.length === 0) && s.lastDate <= s.firstDate) {
+                      const d = new Date(anchorDate);
+                      d.setDate(d.getDate() - 1);
+                      anchorDate = formatDateLocal(d);
+                    }
+
                     // [FIX] 시작일 기준 완화 (7일 전까지 포함)
                     const bufferDate = new Date(s.firstDate);
                     bufferDate.setDate(bufferDate.getDate() - 7);
@@ -4164,7 +4204,7 @@ function App() {
                                   const dStr = formatDateLocal(d);
                                   const isUnpaid = (viewingStudentAtt.unpaidList || []).some(u => u.targetDate === dStr);
                                   if (isUnpaid) { uiState = 'billed'; targetUiDate = dStr; break; }
-                                  if (viewingStudentAtt.lastDate === dStr) { uiState = 'paid'; targetUiDate = dStr; break; }
+                                  if (viewingStudentAtt.lastDate === dStr && viewingStudentHasPayment !== false) { uiState = 'paid'; targetUiDate = dStr; break; }
                                   if (localRotationStarts.has(dStr)) { uiState = 'register'; targetUiDate = dStr; break; }
                                 }
 
@@ -4510,11 +4550,16 @@ function App() {
                               value=""
                             >
                               <option value="">보강 학생 선택...</option>
-                              {makeupList.map((h, i) => (
-                                <option key={i} value={JSON.stringify(h)}>
-                                  {h.studentName} ({h.date} {h.time} 결석)
-                                </option>
-                              ))}
+                              {makeupList.map((h, i) => {
+                                const isMaster = h.gridType === 'master' || (!h.gridType && !h.vocalType);
+                                const isVocal = h.gridType === 'vocal' || (!h.gridType && h.vocalType);
+                                const typeLabel = isMaster ? '[마]' : (isVocal ? '[발]' : '');
+                                return (
+                                  <option key={i} value={JSON.stringify(h)}>
+                                    {h.studentName} {typeLabel} ({h.date} {h.time} 결석)
+                                  </option>
+                                );
+                              })}
                             </select>
                           </div>
                         );
