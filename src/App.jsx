@@ -73,6 +73,8 @@ import { compressImage } from './utils/image.js';
 import { calculateTotalAmount, formatCurrency } from './utils/money.js';
 import { getBadgeStyle } from './utils/badgeStyle.js';
 import { MemoInput } from './components/MemoInput.jsx';
+import { LoginScreen } from './components/LoginScreen.jsx';
+import { ImagePreviewModal } from './components/ImagePreviewModal.jsx';
 import { ROTATION_COLORS } from './constants/theme.js';
 import { expenseDefaults } from './constants/expenses.js';
 import {
@@ -87,8 +89,6 @@ import {
 function App() {
     const [user, setUser] = useState(null);
     const [loading, setLoading] = useState(true);
-    const [loginEmail, setLoginEmail] = useState('');
-    const [loginPw, setLoginPw] = useState('');
 
     useEffect(() => {
         const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -119,11 +119,11 @@ function App() {
         return '';
     };
 
-    const handleLogin = async (e) => {
-        e.preventDefault();
+    const handleLogin = async (email, pw) => {
         try {
-            await signInWithEmailAndPassword(auth, loginEmail, loginPw);
-        } catch (error) {
+            await signInWithEmailAndPassword(auth, email, pw);
+        } catch {
+            // 계정 존재 여부를 구분해 알려주지 않는다.
             alert('아이디 또는 비밀번호를 확인해주세요.');
         }
     };
@@ -2325,37 +2325,7 @@ function App() {
     const weeksInMonth = getWeeksInMonth(scheduleDate);
 
     if (loading) return <div className="h-screen flex justify-center items-center">Loading...</div>;
-    if (!user)
-        return (
-            <div className="h-screen bg-gray-100 font-sans p-2 md:p-8 lg:p-12 flex justify-center overflow-hidden">
-                <div className="w-full max-w-md bg-white p-10 rounded-[2.5rem] shadow-2xl">
-                    <div className="text-center mb-12">
-                        <h1 className="text-3xl font-extrabold text-gray-900">
-                            VT<span className="text-orange-500">Work</span>
-                        </h1>
-                    </div>
-                    <form onSubmit={handleLogin} className="space-y-6">
-                        <input
-                            type="email"
-                            placeholder="이메일"
-                            className="w-full bg-gray-50 border border-gray-200 rounded-2xl h-14 px-5 outline-none"
-                            value={loginEmail}
-                            onChange={(e) => setLoginEmail(e.target.value)}
-                        />
-                        <input
-                            type="password"
-                            placeholder="비밀번호"
-                            className="w-full bg-gray-50 border border-gray-200 rounded-2xl h-14 px-5 outline-none"
-                            value={loginPw}
-                            onChange={(e) => setLoginPw(e.target.value)}
-                        />
-                        <button className="w-full bg-gray-900 text-white h-14 rounded-2xl font-bold mt-4 shadow-md">
-                            로그인
-                        </button>
-                    </form>
-                </div>
-            </div>
-        );
+    if (!user) return <LoginScreen onLogin={handleLogin} />;
 
     return (
         // [수정] 부모 컨테이너에 p-2 md:p-6 추가 (화면 안쪽으로 여백 확보)
@@ -6614,39 +6584,11 @@ function App() {
 
                 {/* 이미지 미리보기 모달 (모바일 개선) */}
                 {/* 이미지 미리보기 모달 (모바일 개선 + 삭제 기능) */}
-                {previewImage && (
-                    <div
-                        className="fixed inset-0 z-[9999] bg-black/95 flex justify-center items-center p-4 touch-none"
-                        onClick={() => setPreviewImage(null)}
-                    >
-                        <div
-                            className="relative max-w-4xl w-full flex justify-center items-center"
-                            onClick={(e) => e.stopPropagation()}
-                        >
-                            <img
-                                src={previewImage.url || previewImage}
-                                alt="영수증 미리보기"
-                                className="max-w-full max-h-[85vh] rounded-lg shadow-2xl object-contain"
-                            />
-
-                            <button
-                                onClick={() => setPreviewImage(null)}
-                                className="absolute top-2 right-2 md:top-4 md:right-4 btn btn-circle btn-sm bg-black/50 text-white border-2 border-white/20 hover:bg-black hover:border-white shadow-lg z-50"
-                            >
-                                <FaTimesCircle className="text-xl" />
-                            </button>
-
-                            {previewImage.sid && (
-                                <button
-                                    onClick={handleDeleteRetroactivePhoto}
-                                    className="absolute bottom-4 right-4 btn btn-error btn-sm text-white shadow-lg z-50 font-bold"
-                                >
-                                    <FaTrash className="mr-1" /> 삭제
-                                </button>
-                            )}
-                        </div>
-                    </div>
-                )}
+                <ImagePreviewModal
+                    image={previewImage}
+                    onClose={() => setPreviewImage(null)}
+                    onDelete={handleDeleteRetroactivePhoto}
+                />
             </div>
         </div>
     );
