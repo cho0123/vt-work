@@ -28,9 +28,7 @@ export function ScheduleTab({
     schedules,
     fixedSchedules,
     scheduleCancellations,
-    students,
     getGhostSchedules,
-    getScheduleRotationInfo,
     handleSlotClick,
     weeklyMemo,
     handleWeeklyMemoSave,
@@ -313,18 +311,16 @@ export function ScheduleTab({
                                                             ? 'bg-emerald-100 text-emerald-700 border-emerald-200'
                                                             : 'bg-emerald-200 text-emerald-950 border-emerald-400';
                                                     } else if (item.category === '레슨') {
-                                                        const itemStudent = students.find(
-                                                            (s) => s.id === item.studentId
-                                                        );
-                                                        const rotationInfo = getScheduleRotationInfo(
-                                                            itemStudent,
-                                                            item.id
-                                                        );
-                                                        // [FIX] Pass classType directly to getBadgeStyle
+                                                        // 로테이션 회차는 넘기지 않는다.
+                                                        // getBadgeStyle 은 ctx 가 'history'/'dashboard' 일 때만
+                                                        // 회차 색을 쓰고, 여기(스케쥴 화면)는 기본값 'calendar' 라
+                                                        // 회차 값을 받아도 쓰지 않는다. 예전에는 수업 하나를 그릴
+                                                        // 때마다 전체 스케쥴을 훑어 회차를 구한 뒤 그대로 버렸다.
+                                                        // (배정 시 남은 횟수 계산은 별개 함수라 영향 없음)
                                                         const badgeClass = getBadgeStyle(
                                                             isVocal ? 'vocal' : 'master',
                                                             strType,
-                                                            rotationInfo.index,
+                                                            undefined,
                                                             item.status
                                                         );
 

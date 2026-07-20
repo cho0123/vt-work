@@ -2500,9 +2500,7 @@ function App() {
                             schedules={schedules}
                             fixedSchedules={fixedSchedules}
                             scheduleCancellations={scheduleCancellations}
-                            students={students}
                             getGhostSchedules={getGhostSchedules}
-                            getScheduleRotationInfo={getScheduleRotationInfo}
                             handleSlotClick={handleSlotClick}
                             weeklyMemo={weeklyMemo}
                             handleWeeklyMemoSave={handleWeeklyMemoSave}
