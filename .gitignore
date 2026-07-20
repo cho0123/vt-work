@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# 운영 Firebase 설정 - 실제 값은 Netlify 환경변수에서 주입된다.
+# 필요한 항목은 .env.example 참고. (.env.development 는 개발용 공개 설정이라 커밋한다)
+.env
+
 # Firebase 서비스 계정 키 - 절대 커밋 금지
 key-A.json
 key-B.json
