@@ -12,7 +12,9 @@
     "verify-backup": "node scripts/verify-backup.js",
     "seed-dev": "node scripts/import-dev.js",
     "verify-dev": "node scripts/verify-dev.js",
-    "verify-rotation": "node scripts/verify-rotation.js"
+    "verify-dev-cheap": "node scripts/verify-dev-cheap.js",
+    "verify-rotation": "node scripts/verify-rotation.js",
+    "verify-transaction": "node scripts/verify-transaction.js"
   },
   "dependencies": {
     "firebase": "^12.6.0",

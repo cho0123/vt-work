@@ -32,3 +32,6 @@ firebase-adminsdk*.json
 *.njsproj
 *.sln
 *.sw?
+
+# 임시 진단 스크립트
+/q*.mjs
