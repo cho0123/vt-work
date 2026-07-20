@@ -12,6 +12,15 @@ dist
 dist-ssr
 *.local
 
+# Firebase 서비스 계정 키 - 절대 커밋 금지
+key-A.json
+key-B.json
+*serviceAccount*.json
+firebase-adminsdk*.json
+
+# 데이터 백업 덤프
+/backup/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
