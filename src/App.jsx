@@ -24,7 +24,6 @@ import {
     FaFileInvoiceDollar,
     FaCalculator,
     FaStickyNote,
-    FaSave,
     FaExternalLinkAlt,
     FaCalendarCheck,
     FaCheck,
@@ -72,6 +71,7 @@ import {
 import { compressImage } from './utils/image.js';
 import { calculateTotalAmount, formatCurrency } from './utils/money.js';
 import { getBadgeStyle } from './utils/badgeStyle.js';
+import { MemoInput } from './components/MemoInput.jsx';
 import { ROTATION_COLORS } from './constants/theme.js';
 import { expenseDefaults } from './constants/expenses.js';
 import {
@@ -363,9 +363,10 @@ function App() {
         fetchStudentMemo();
     }, [user, activeTab]);
 
-    const handleStudentMemoSave = async () => {
+    const handleStudentMemoSave = async (text) => {
         try {
-            await setDoc(doc(db, 'site_settings', 'student_tab'), { memo: studentMemo }, { merge: true });
+            await setDoc(doc(db, 'site_settings', 'student_tab'), { memo: text }, { merge: true });
+            setStudentMemo(text);
             alert('학생관리 메모가 저장되었습니다.');
         } catch (e) {
             console.error(e);
@@ -518,32 +519,42 @@ function App() {
   setExpenses(expenseList);
   */
 
-        let allPayments = [];
-        let allUnpaid = [];
+        const allPayments = [];
+        const allUnpaid = [];
 
         if (students.length > 0) {
-            for (const student of students) {
-                // [FIX] 날짜 포맷(. 또는 -) 이슈로 쿼리 누락 방지를 위해, 기간 필터 없이 전체 조회 후 메모리 필터링
-                const payQ = query(collection(db, 'students', student.id, 'payments'));
-                const paySnap = await getDocs(payQ);
-                paySnap.forEach((doc) => {
-                    const data = doc.data();
-                    // 메모리 필터링: YYYY-MM 또는 YYYY.MM 포함 여부 확인
-                    const tDate = data.targetDate || '';
-                    const normTDate = tDate.replace(/\./g, '-'); // 전부 대시로 통일
-                    if (normTDate.startsWith(yearMonth)) {
-                        allPayments.push({ ...data, studentName: student.name, studentId: student.id });
-                    }
-                });
+            try {
+                // 학생별 결제 내역을 동시에 조회한다.
+                // 예전에는 순차 await 라서 학생 수만큼 왕복이 그대로 쌓였다(47명이면 47번).
+                const perStudent = await Promise.all(
+                    students.map(async (student) => {
+                        // [FIX] 날짜 포맷(. 또는 -) 이슈로 쿼리 누락 방지를 위해, 기간 필터 없이 전체 조회 후 메모리 필터링
+                        const paySnap = await getDocs(collection(db, 'students', student.id, 'payments'));
+                        const payments = [];
+                        paySnap.forEach((d) => {
+                            const data = d.data();
+                            // 메모리 필터링: YYYY-MM 또는 YYYY.MM 포함 여부 확인
+                            const normTDate = (data.targetDate || '').replace(/\./g, '-'); // 전부 대시로 통일
+                            if (normTDate.startsWith(yearMonth)) {
+                                payments.push({ ...data, studentName: student.name, studentId: student.id });
+                            }
+                        });
 
-                if (student.unpaidList) {
-                    const unpaidInMonth = student.unpaidList.filter(
-                        (item) => item.targetDate && item.targetDate.startsWith(yearMonth)
-                    );
-                    unpaidInMonth.forEach((item) => {
-                        allUnpaid.push({ ...item, studentName: student.name, studentId: student.id });
-                    });
+                        const unpaid = (student.unpaidList || [])
+                            .filter((item) => item.targetDate && item.targetDate.startsWith(yearMonth))
+                            .map((item) => ({ ...item, studentName: student.name, studentId: student.id }));
+
+                        return { payments, unpaid };
+                    })
+                );
+
+                for (const r of perStudent) {
+                    allPayments.push(...r.payments);
+                    allUnpaid.push(...r.unpaid);
                 }
+            } catch (e) {
+                console.error('Settlement Payments Fetch Error:', e);
+                return; // 부분 결과로 화면을 덮어쓰지 않는다
             }
         }
         allPayments.sort((a, b) => new Date(a.targetDate) - new Date(b.targetDate));
@@ -688,10 +699,28 @@ function App() {
         };
     }, [user]);
 
+    // 정산 재조회 트리거.
+    //
+    // students 배열 자체를 의존성에 넣으면 onSnapshot 이 돌 때마다 새 배열이 되어,
+    // 학생 문서가 하나만 바뀌어도 학생 수만큼의 결제 조회가 통째로 다시 돌았다.
+    // 정산 계산이 students 에서 실제로 읽는 것은 id / 이름 / 미수금뿐이므로,
+    // 그 부분만 문자열로 요약해 실제 변화가 있을 때만 재조회한다.
+    const studentsSettlementKey = useMemo(
+        () =>
+            students
+                .map(
+                    (s) =>
+                        `${s.id}~${s.name}~${(s.unpaidList || []).map((u) => `${u.targetDate}:${u.amount}`).join(',')}`
+                )
+                .join(';'),
+        [students]
+    );
+
     useEffect(() => {
         if (!user || activeTab !== 'settlement') return;
         fetchSettlementData();
-    }, [user, activeTab, currentDate, students]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [user, activeTab, currentDate, studentsSettlementKey]);
 
     useEffect(() => {
         if (!user || activeTab !== 'schedule') return;
@@ -821,16 +850,13 @@ function App() {
     }, [user, activeTab, attBaseDate, attViewMode, attMonth]);
 
     // [NEW] 출석부 월별 보기 시 정산 데이터 동기화
+    // (위와 같은 이유로 students 대신 요약 키를 쓴다)
     useEffect(() => {
         if (activeTab === 'attendance' && attViewMode === 'month') {
             fetchSettlementData(attMonth);
-        } else {
-            // 그 외(스케줄 탭 등)는 현재 날짜 기준
-            // 필요하다면 여기서 fetchSettlementData()를 호출하거나,
-            // 탭 전환 시 호출되는 다른 로직을 확인해야 함.
-            // (기존에는 스케줄 변경/삭제 시 등에서 호출됨)
         }
-    }, [activeTab, attViewMode, attMonth, students]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [activeTab, attViewMode, attMonth, studentsSettlementKey]);
 
     // --- [Logic: Ghost Schedules] ---
     const getGhostSchedules = (gridType = 'master') => {
@@ -923,18 +949,30 @@ function App() {
         setSearchTerm(sname);
         setExpandedStudentId(sid);
     };
-    const handleWeeklyMemoSave = async () => {
-        await setDoc(
-            doc(db, 'weekly_memos', formatDateLocal(getStartOfWeek(scheduleDate))),
-            { text: weeklyMemo },
-            { merge: true }
-        );
-        alert('주간 메모 저장 완료');
+    const handleWeeklyMemoSave = async (text) => {
+        try {
+            await setDoc(
+                doc(db, 'weekly_memos', formatDateLocal(getStartOfWeek(scheduleDate))),
+                { text },
+                { merge: true }
+            );
+            setWeeklyMemo(text);
+            alert('주간 메모 저장 완료');
+        } catch (e) {
+            console.error(e);
+            alert('주간 메모 저장 실패');
+        }
     };
-    const handleSettlementMemoSave = async () => {
-        const ym = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
-        await setDoc(doc(db, 'settlement_memos', ym), { text: settlementMemo }, { merge: true });
-        alert('저장됨');
+    const handleSettlementMemoSave = async (text) => {
+        try {
+            const ym = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
+            await setDoc(doc(db, 'settlement_memos', ym), { text }, { merge: true });
+            setSettlementMemo(text);
+            alert('저장됨');
+        } catch (e) {
+            console.error(e);
+            alert('메모 저장 실패');
+        }
     };
 
     // [수정] 등록 모달 학생 리스트 생성 함수 (고정 스케쥴 규칙에 의한 '유령 차단' 방지)
@@ -2489,23 +2527,13 @@ function App() {
                                 <div className="bg-white px-4 py-2 rounded-xl shadow-sm border border-gray-100 flex items-center gap-3">
                                     {/* ... (메모 영역은 그대로 유지) ... */}
 
-                                    <div className="flex items-center gap-2 min-w-fit">
-                                        <FaStickyNote className="text-blue-500 text-base" />
-                                        <span className="text-xs font-bold text-gray-500">주간 메모</span>
-                                    </div>
-                                    <input
-                                        type="text"
-                                        className="input input-sm border-none bg-transparent flex-1 text-sm focus:outline-none"
-                                        placeholder="이번 주 특이사항..."
+                                    <MemoInput
                                         value={weeklyMemo}
-                                        onChange={(e) => setWeeklyMemo(e.target.value)}
+                                        onSave={handleWeeklyMemoSave}
+                                        placeholder="이번 주 특이사항..."
+                                        label="주간 메모"
+                                        icon={<FaStickyNote className="text-blue-500 text-base" />}
                                     />
-                                    <button
-                                        className="btn btn-xs bg-gray-100 text-gray-500 border-none hover:bg-black hover:text-white rounded-2xl shadow-md transition-all px-6 hover:shadow-lg"
-                                        onClick={handleWeeklyMemoSave}
-                                    >
-                                        <FaSave className="mr-1" /> 저장
-                                    </button>
                                 </div>
                             </div>
 
@@ -3820,25 +3848,18 @@ function App() {
                         <div className="flex flex-col h-full w-full p-4 md:p-8 lg:px-12 pb-20 gap-6 overflow-y-auto">
                             {/* [NEW] 학생관리 탭 상단 메모 */}
                             <div className="bg-white px-4 py-3 rounded-2xl shadow-sm border border-gray-100 flex items-center gap-3">
-                                <div className="flex items-center gap-2 min-w-fit">
-                                    <div className="w-8 h-8 rounded-full bg-purple-50 flex items-center justify-center">
-                                        <FaStickyNote className="text-purple-500 text-sm" />
-                                    </div>
-                                    <span className="text-xs font-bold text-gray-500">학생관리 메모</span>
-                                </div>
-                                <input
-                                    type="text"
-                                    className="input input-sm border-none bg-transparent flex-1 text-sm focus:outline-none placeholder-gray-300 font-medium"
-                                    placeholder="학생 관리 관련 메모를 입력하세요... (예: 대기자 명단 확인, 신규 문의 연락 등)"
+                                <MemoInput
                                     value={studentMemo}
-                                    onChange={(e) => setStudentMemo(e.target.value)}
+                                    onSave={handleStudentMemoSave}
+                                    placeholder="학생 관리 관련 메모를 입력하세요... (예: 대기자 명단 확인, 신규 문의 연락 등)"
+                                    label="학생관리 메모"
+                                    compact
+                                    icon={
+                                        <div className="w-8 h-8 rounded-full bg-purple-50 flex items-center justify-center">
+                                            <FaStickyNote className="text-purple-500 text-sm" />
+                                        </div>
+                                    }
                                 />
-                                <button
-                                    onClick={handleStudentMemoSave}
-                                    className="btn btn-xs btn-circle bg-gray-900 text-white border-none shadow-md hover:scale-110 transition-transform"
-                                >
-                                    <FaSave />
-                                </button>
                             </div>
 
                             <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-6 gap-4">
@@ -4750,23 +4771,13 @@ function App() {
 
                                 {/* 월별 메모 */}
                                 <div className="bg-white px-4 py-2 rounded-xl shadow-sm border border-gray-100 flex items-center gap-3">
-                                    <div className="flex items-center gap-2 min-w-fit">
-                                        <FaStickyNote className="text-yellow-500 text-base" />
-                                        <span className="text-xs font-bold text-gray-500">메모</span>
-                                    </div>
-                                    <input
-                                        type="text"
-                                        className="input input-sm border-none bg-transparent flex-1 text-sm focus:outline-none"
-                                        placeholder="이달의 정산 특이사항 입력..."
+                                    <MemoInput
                                         value={settlementMemo}
-                                        onChange={(e) => setSettlementMemo(e.target.value)}
+                                        onSave={handleSettlementMemoSave}
+                                        placeholder="이달의 정산 특이사항 입력..."
+                                        label="메모"
+                                        icon={<FaStickyNote className="text-yellow-500 text-base" />}
                                     />
-                                    <button
-                                        onClick={handleSettlementMemoSave}
-                                        className="btn btn-xs bg-gray-100 text-gray-500 border-none hover:bg-black hover:text-white rounded-2xl shadow-md transition-all px-6 hover:shadow-lg"
-                                    >
-                                        <FaSave className="mr-1" /> 저장
-                                    </button>
                                 </div>
                             </div>
 
