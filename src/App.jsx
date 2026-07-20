@@ -57,260 +57,28 @@ import {
     writeBatch,
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL, uploadString } from 'firebase/storage';
-
-// 로컬 시간 기준 날짜 포맷터 (YYYY-MM-DD)
-const formatDateLocal = (date) => {
-    const d = new Date(date);
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-};
-
-// 날짜 포맷 (MM.DD)
-const formatMonthDay = (dateStr) => {
-    if (!dateStr) return '';
-    return dateStr.substring(5).replace('-', '.');
-};
-
-// 이미지 압축 헬퍼 함수 (Component 외부로 이동)
-const compressImage = (file) =>
-    new Promise((resolve, reject) => {
-        // 타임아웃 10초 설정
-        const timer = setTimeout(() => reject(new Error('이미지 압축 시간 초과')), 10000);
-
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const img = new Image();
-            img.onload = () => {
-                clearTimeout(timer);
-                const canvas = document.createElement('canvas');
-                const MAX_WIDTH = 800;
-                let width = img.width;
-                let height = img.height;
-
-                if (width > MAX_WIDTH) {
-                    height *= MAX_WIDTH / width;
-                    width = MAX_WIDTH;
-                }
-                canvas.width = width;
-                canvas.height = height;
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(img, 0, 0, width, height);
-                resolve(canvas.toDataURL('image/jpeg', 0.6));
-            };
-            img.onerror = (err) => {
-                clearTimeout(timer);
-                reject(new Error('이미지 개체 로드 실패'));
-            };
-            img.src = e.target.result;
-        };
-        reader.onerror = (err) => {
-            clearTimeout(timer);
-            reject(new Error('파일 읽기 실패'));
-        };
-        reader.readAsDataURL(file);
-    });
+import {
+    formatDateLocal,
+    formatMonthDay,
+    getStartOfWeek,
+    getRotationWeek,
+    getWeekDays,
+    get12Weeks,
+    getWeeksInMonth,
+    getMonthWeeksForView,
+    getDaysPassed,
+} from './utils/date.js';
+import { compressImage } from './utils/image.js';
+import { calculateTotalAmount, formatCurrency } from './utils/money.js';
+import { getBadgeStyle } from './utils/badgeStyle.js';
+import { ROTATION_COLORS } from './constants/theme.js';
+import { expenseDefaults } from './constants/expenses.js';
 
 function App() {
     const [user, setUser] = useState(null);
     const [loading, setLoading] = useState(true);
     const [loginEmail, setLoginEmail] = useState('');
     const [loginPw, setLoginPw] = useState('');
-
-    // [VISUALIZATION] 로테이션 색상 정의 (M은 진하게, V는 연하게)
-    // [VISUALIZATION] 로테이션 색상 정의 (M은 진하게, V는 연하게-투명도 60%)
-    const ROTATION_COLORS = [
-        {
-            v: 'bg-blue-50 border-blue-200',
-            m: 'bg-blue-200 border-blue-300',
-            v_hex: '#eff6ff',
-            m_hex: '#bfdbfe',
-            two_tone: 'bg-[linear-gradient(135deg,#bfdbfe_50%,#eff6ff_50%)]',
-            two_tone_vocal: 'bg-[linear-gradient(135deg,#bfdbfe99_50%,#eff6ff99_50%)]',
-        },
-        {
-            v: 'bg-orange-50 border-orange-200',
-            m: 'bg-orange-200 border-orange-300',
-            v_hex: '#fff7ed',
-            m_hex: '#fed7aa',
-            two_tone: 'bg-[linear-gradient(135deg,#fed7aa_50%,#fff7ed_50%)]',
-            two_tone_vocal: 'bg-[linear-gradient(135deg,#fed7aa99_50%,#fff7ed99_50%)]',
-        },
-        {
-            v: 'bg-green-50 border-green-200',
-            m: 'bg-green-200 border-green-300',
-            v_hex: '#f0fdf4',
-            m_hex: '#bbf7d0',
-            two_tone: 'bg-[linear-gradient(135deg,#bbf7d0_50%,#f0fdf4_50%)]',
-            two_tone_vocal: 'bg-[linear-gradient(135deg,#bbf7d099_50%,#f0fdf499_50%)]',
-        },
-        {
-            v: 'bg-purple-50 border-purple-200',
-            m: 'bg-purple-200 border-purple-300',
-            v_hex: '#faf5ff',
-            m_hex: '#e9d5ff',
-            two_tone: 'bg-[linear-gradient(135deg,#e9d5ff_50%,#faf5ff_50%)]',
-            two_tone_vocal: 'bg-[linear-gradient(135deg,#e9d5ff99_50%,#faf5ff99_50%)]',
-        },
-        {
-            v: 'bg-pink-50 border-pink-200',
-            m: 'bg-pink-200 border-pink-300',
-            v_hex: '#fdf2f8',
-            m_hex: '#fbcfe8',
-            two_tone: 'bg-[linear-gradient(135deg,#fbcfe8_50%,#fdf2f8_50%)]',
-            two_tone_vocal: 'bg-[linear-gradient(135deg,#fbcfe899_50%,#fdf2f899_50%)]',
-        },
-        {
-            v: 'bg-yellow-50 border-yellow-200',
-            m: 'bg-yellow-200 border-yellow-300',
-            v_hex: '#fefce8',
-            m_hex: '#fef08a',
-            two_tone: 'bg-[linear-gradient(135deg,#fef08a_50%,#fefce8_50%)]',
-            two_tone_vocal: 'bg-[linear-gradient(135deg,#fef08a99_50%,#fefce899_50%)]',
-        },
-        {
-            v: 'bg-teal-50 border-teal-200',
-            m: 'bg-teal-200 border-teal-300',
-            v_hex: '#f0fdfa',
-            m_hex: '#99f6e4',
-            two_tone: 'bg-[linear-gradient(135deg,#99f6e4_50%,#f0fdfa_50%)]',
-            two_tone_vocal: 'bg-[linear-gradient(135deg,#99f6e499_50%,#f0fdfa99_50%)]',
-        },
-        {
-            v: 'bg-indigo-50 border-indigo-200',
-            m: 'bg-indigo-200 border-indigo-300',
-            v_hex: '#eef2ff',
-            m_hex: '#c7d2fe',
-            two_tone: 'bg-[linear-gradient(135deg,#c7d2fe_50%,#eef2ff_50%)]',
-            two_tone_vocal: 'bg-[linear-gradient(135deg,#c7d2fe99_50%,#eef2ff99_50%)]',
-        },
-        {
-            v: 'bg-red-50 border-red-200',
-            m: 'bg-red-200 border-red-300',
-            v_hex: '#fef2f2',
-            m_hex: '#fecaca',
-            two_tone: 'bg-[linear-gradient(135deg,#fecaca_50%,#fef2f2_50%)]',
-            two_tone_vocal: 'bg-[linear-gradient(135deg,#fecaca99_50%,#fef2f299_50%)]',
-        },
-        {
-            v: 'bg-lime-50 border-lime-200',
-            m: 'bg-lime-200 border-lime-300',
-            v_hex: '#f7fee7',
-            m_hex: '#d9f99d',
-            two_tone: 'bg-[linear-gradient(135deg,#d9f99d_50%,#f7fee7_50%)]',
-            two_tone_vocal: 'bg-[linear-gradient(135deg,#d9f99d99_50%,#f7fee799_50%)]',
-        },
-    ];
-
-    const getBadgeStyle = (gridType, classType, rotationIndex, status, ctx = 'calendar') => {
-        const isVocal = gridType === 'vocal';
-        const is30 = String(classType) === '30';
-        const isHalf = String(classType) === 'half';
-        // [MOD] reschedule을 Special Status에서 제외하여 로테이션 배경색 적용 허용
-        const isSpecialStatus =
-            status &&
-            status !== 'completed' &&
-            status !== 'absent' &&
-            status !== 'pending' &&
-            status !== 'reschedule' &&
-            status !== 'reschedule_assigned';
-
-        // [FIX] 보컬 30분(vocalType='30')은 온전한 1개 수업이므로 Split 처리하지 않음 (half만 Split)
-        const isSplitClass = (gridType === 'master' && is30) || (gridType === 'vocal' && isHalf);
-
-        // 1. [History 전용] 배정만 된 경우(Pending) 또는 상태 없음 -> 연한 그레이
-        if (ctx === 'history' && (status === 'pending' || !status)) {
-            if (isSplitClass) {
-                return 'bg-[linear-gradient(135deg,#e5e7eb_50%,#f9fafb_50%)] border-gray-300 text-gray-400 font-bold opacity-80 shadow-none';
-            } else {
-                return 'bg-gray-100 border-gray-200 text-gray-400 font-bold opacity-80 shadow-none';
-            }
-        }
-
-        // 2. [공통] 로테이션 정보가 있으면 최우선 적용 (단, 출석부/전체기록 컨텍스트에서만 적용)
-        // [FIX] 캘린더(스케줄) 화면에서는 로테이션 색상을 쓰지 않고 오렌지/블루 기본색을 유지해야 함
-        const shouldApplyRotationColor =
-            rotationIndex !== undefined &&
-            rotationIndex !== null &&
-            rotationIndex !== -1 &&
-            !isSpecialStatus &&
-            (ctx === 'history' || ctx === 'dashboard');
-
-        if (shouldApplyRotationColor) {
-            const idx = Math.max(0, parseInt(rotationIndex)) % ROTATION_COLORS.length;
-            const colors = ROTATION_COLORS[idx];
-
-            if (colors) {
-                let baseClass = '';
-                if (isSplitClass) {
-                    const borderClass =
-                        colors.m.split(' ').find((c) => c.startsWith('border-')) ||
-                        (isVocal ? 'border-blue-400' : 'border-orange-400');
-                    const gradientClass = (isVocal ? colors.two_tone_vocal : colors.two_tone) || '';
-                    const distinctClass = isVocal ? 'ring-1 ring-white/50' : '';
-                    baseClass = `${gradientClass} ${borderClass} border-[1.5px] font-bold text-gray-800 ${distinctClass}`;
-                } else {
-                    baseClass = `${isVocal ? colors.v : colors.m} font-bold text-gray-800`;
-                }
-
-                // [NEW] 보강 예정인 경우 테두리 점선 + 노란색 텍스트 강제 적용 (THIN 1px로 강제 변경 - 빨간 원 부분)
-                if (status === 'reschedule' || status === 'reschedule_assigned') {
-                    return (
-                        baseClass
-                            .replace(/border-\[?[a-z0-9.]+\]?/g, '')
-                            .replace(/border-[a-z]+-\d+/g, '')
-                            .replace('border-solid', '') +
-                        ' border-yellow-500 border-dashed border-[1px] !text-yellow-700'
-                    );
-                }
-                return baseClass;
-            }
-        }
-
-        // 2.5 [Fallback for Reschedule] 로테이션 정보가 없는 경우에도 보강 예정 스타일 적용 (1px 점선)
-        if (status === 'reschedule' || status === 'reschedule_assigned') {
-            const fallbackBg = isVocal ? 'bg-blue-100' : 'bg-orange-100';
-            return `${fallbackBg} border-dashed border-yellow-500 border-[1px] !text-yellow-700 font-bold`;
-        }
-
-        // 3. [Calendar 전용] 완료/결석/지각 상태의 Split 수업 처리
-        // Vocal: History context에서는 Blue 2-tone, Calendar에서는 Gray 2-tone
-        if (isSplitClass && (status === 'completed' || status === 'absent')) {
-            if (gridType === 'master') {
-                if (ctx === 'history') {
-                    return 'bg-[linear-gradient(135deg,#fed7aa_50%,#fff7ed_50%)] border-orange-300 text-orange-900 font-bold';
-                }
-                return 'bg-[linear-gradient(135deg,#030712_50%,#374151_50%)] border-black text-white font-bold';
-            }
-            if (gridType === 'vocal') {
-                if (ctx === 'history') {
-                    return 'bg-[linear-gradient(135deg,#60a5fa_50%,#dbeafe_50%)] border-blue-600 text-blue-950 font-bold';
-                }
-                return 'bg-[linear-gradient(135deg,#9ca3af_50%,#f3f4f6_50%)] border-gray-400 text-gray-800 font-bold';
-            }
-        }
-
-        // [FIX] Vocal 30분(Solid) 수업 완료 시 회색 처리 (Calendar 전용)
-        // History에서는 그냥 파란색 유지 (or as per design), Calendar에서는 완료 느낌(회색) 필요
-        if (gridType === 'vocal' && is30 && (status === 'completed' || status === 'absent')) {
-            if (ctx !== 'history') {
-                return 'bg-gray-200 border-gray-400 text-gray-700 font-bold';
-            }
-        }
-
-        // Default styles
-        if (isVocal) {
-            if (isHalf)
-                return 'bg-[linear-gradient(135deg,#60a5fa_50%,#dbeafe_50%)] border-blue-600 text-blue-950 font-bold';
-            return 'bg-blue-100 text-blue-700 border-blue-300';
-        } else {
-            if (is30)
-                return 'bg-[linear-gradient(135deg,#fed7aa_50%,#fff7ed_50%)] border-orange-300 text-orange-900 font-bold';
-            // Master 60 -> Solid Orange
-            return 'bg-orange-200 text-orange-950 border-orange-400 font-black';
-        }
-    };
 
     useEffect(() => {
         const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
@@ -646,14 +414,6 @@ function App() {
     const [attViewMode, setAttViewMode] = useState('12weeks');
     const [attMonth, setAttMonth] = useState(new Date());
 
-    const getStartOfWeek = (date) => {
-        const d = new Date(date);
-        d.setHours(0, 0, 0, 0);
-        const day = d.getDay();
-        const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-        return new Date(d.setDate(diff));
-    };
-
     const [attBaseDate, setAttBaseDate] = useState(getStartOfWeek(new Date()));
     const [periodAttendance, setPeriodAttendance] = useState({});
     const [attSchedules, setAttSchedules] = useState([]);
@@ -666,17 +426,6 @@ function App() {
         d.setMonth(0); // 해당 년도 1월 1일 기준 주차로 이동
         d.setDate(1);
         setAttBaseDate(getStartOfWeek(d));
-    };
-
-    const expenseDefaults = {
-        임대료: 5005000,
-        임금: 0,
-        전기료: 0,
-        통신료: 55000,
-        세콤: 60500,
-        단말기: 5500,
-        정수기: 10000,
-        기타: 0,
     };
 
     const initialPaymentForm = {
@@ -1076,124 +825,6 @@ function App() {
             // (기존에는 스케줄 변경/삭제 시 등에서 호출됨)
         }
     }, [activeTab, attViewMode, attMonth, students]);
-    // --- [Helpers] ---
-    const getRotationWeek = (firstDate, targetDate) => {
-        if (!firstDate) return 1;
-        // [FIX] 주차 계산을 월요일 기준(달력 주차)으로 고정
-        const start = getStartOfWeek(new Date(firstDate));
-        const current = new Date(targetDate);
-        // 시간 성분 제거 (getStartOfWeek에서 이미 처리되지만, targetDate 안전장치)
-        current.setHours(0, 0, 0, 0);
-
-        const diffTime = current.getTime() - start.getTime();
-        const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-
-        if (diffDays < 0) return 1;
-        return (Math.floor(diffDays / 7) % 4) + 1;
-    };
-
-    const getWeekDays = (baseDate) => {
-        const start = getStartOfWeek(baseDate);
-        return Array.from({ length: 7 }, (_, i) => {
-            const d = new Date(start);
-            d.setDate(start.getDate() + i);
-            return d;
-        });
-    };
-
-    const get12Weeks = (baseDate) => {
-        const start = new Date(baseDate);
-        return Array.from({ length: 12 }, (_, i) => {
-            const s = new Date(start);
-            s.setDate(start.getDate() + i * 7);
-            const e = new Date(s);
-            e.setDate(s.getDate() + 6);
-
-            const format = (d) => {
-                const yy = d.getFullYear().toString().slice(2);
-                const mm = String(d.getMonth() + 1).padStart(2, '0');
-                const dd = String(d.getDate()).padStart(2, '0');
-                return `${yy}.${mm}.${dd}`;
-            };
-
-            return {
-                weekNum: i + 1,
-                start: s,
-                end: e,
-                startStr: formatDateLocal(s),
-                endStr: formatDateLocal(e),
-                label: format(s),
-                rangeLabel: `${format(s)} ~ ${format(e)}`,
-            };
-        });
-    };
-
-    const getMonthWeeksForView = (date) => {
-        const weeks = getWeeksInMonth(date);
-        return weeks.map((w, i) => {
-            const format = (d) => {
-                const yy = d.getFullYear().toString().slice(2);
-                const mm = String(d.getMonth() + 1).padStart(2, '0');
-                const dd = String(d.getDate()).padStart(2, '0');
-                return `${yy}.${mm}.${dd}`;
-            };
-            return {
-                weekNum: i + 1,
-                start: w.start,
-                end: w.end,
-                startStr: formatDateLocal(w.start),
-                endStr: formatDateLocal(w.end),
-                label: format(w.start),
-                rangeLabel: `${format(w.start)} ~ ${format(w.end)}`,
-            };
-        });
-    };
-
-    const getWeeksInMonth = (date) => {
-        const year = date.getFullYear();
-        const month = date.getMonth();
-        const firstDay = new Date(year, month, 1);
-        const lastDay = new Date(year, month + 1, 0);
-        const weeks = [];
-        let current = new Date(firstDay);
-        const day = current.getDay();
-        const diff = current.getDate() - day + (day === 0 ? -6 : 1);
-        current.setDate(diff);
-        while (current <= lastDay || (current.getMonth() === month && current.getDate() <= lastDay.getDate())) {
-            const start = new Date(current);
-            const end = new Date(current);
-            end.setDate(end.getDate() + 6);
-            const startInMonth = start.getMonth() === month;
-            const endInMonth = end.getMonth() === month;
-            if (startInMonth || endInMonth) {
-                weeks.push({ start, end });
-            }
-            current.setDate(current.getDate() + 7);
-            if (weeks.length > 6) break;
-        }
-        return weeks;
-    };
-    const getDaysPassed = (d) => {
-        if (!d) return 0;
-        return Math.floor((new Date() - new Date(d)) / (1000 * 60 * 60 * 24));
-    };
-    const calculateTotalAmount = (s) => {
-        let tm = 0,
-            tv = 0,
-            tv30 = 0;
-        if (s.schedule && Array.isArray(s.schedule))
-            s.schedule.forEach((w) => {
-                tm += Number(w.master || 0);
-                tv += Number(w.vocal || 0);
-                tv30 += Number(w.vocal30 || 0);
-            });
-        return (
-            tm * Number(s.rates?.master || 0) +
-            tv * Number(s.rates?.vocal || 0) +
-            tv30 * (Number(s.rates?.vocal || 0) * 0.5)
-        );
-    };
-    const formatCurrency = (val) => (val ? Number(val).toLocaleString() : '0');
 
     // --- [Logic: Ghost Schedules] ---
     const getGhostSchedules = (gridType = 'master') => {
