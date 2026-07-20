@@ -26,7 +26,6 @@ import { expenseDefaults } from '../constants/expenses.js';
  * 본문 JSX 를 손대지 않기 위해 prop 이름도 원래 변수명을 유지한다.
  */
 export function SettlementTab({
-    activeTab,
     currentDate,
     handleYearChange,
     handleMonthChange,
@@ -58,8 +57,6 @@ export function SettlementTab({
     handleDeletePayment,
     students,
 }) {
-    if (!activeTab) return null;
-
     return (
         <div className="flex flex-col gap-6 p-4 md:p-8 lg:px-12 pb-20 overflow-y-auto">
             {/* 상단 컨트롤러 */}

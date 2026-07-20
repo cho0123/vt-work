@@ -28,7 +28,6 @@ import { getBadgeStyle } from '../utils/badgeStyle.js';
  * 본문 JSX 를 손대지 않기 위해 prop 이름도 원래 변수명을 유지한다.
  */
 export function AttendanceTab({
-    activeTab,
     attViewMode,
     setAttViewMode,
     attCategory,
@@ -51,8 +50,6 @@ export function AttendanceTab({
     handleRegisterRotation,
     handleMonthlySettlementRequest,
 }) {
-    if (!activeTab) return null;
-
     return (
         // [수정] pb-20 추가
         <div className="flex flex-col gap-4 h-full p-4 md:p-8 lg:px-12 pb-20 overflow-y-auto">

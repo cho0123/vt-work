@@ -17,7 +17,6 @@ import { getBadgeStyle } from '../utils/badgeStyle.js';
  * 본문 JSX 를 손대지 않기 위해 prop 이름도 원래 변수명을 유지한다.
  */
 export function ScheduleTab({
-    activeTab,
     scheduleDate,
     setScheduleDate,
     handleScheduleYearChange,
@@ -36,8 +35,6 @@ export function ScheduleTab({
     weeklyMemo,
     handleWeeklyMemoSave,
 }) {
-    if (!activeTab) return null;
-
     return (
         <div className="flex flex-col h-full w-full p-4 md:p-8 lg:px-12 gap-4">
             {/* 날짜 선택 및 메모 영역 (고정) */}
