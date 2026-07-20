@@ -1280,10 +1280,15 @@ function App() {
         setEditingExpenseId(null);
         setExpenseForm({ date: '', category: '기타', amount: '', memo: '' });
     };
+    // 확인창은 호출부(SettlementTab)에서 띄운다. 지출 내용과 지급 여부를
+    // 알고 있어야 제대로 된 경고를 보여줄 수 있기 때문이다.
     const handleExpenseDelete = async (id) => {
-        if (window.confirm('삭제?')) {
+        try {
             await deleteDoc(doc(db, 'expenses', id));
             fetchSettlementData();
+        } catch (e) {
+            console.error('지출 삭제 실패:', e);
+            alert('지출 삭제에 실패했습니다: ' + e.message);
         }
     };
     const handleYearChange = (e) => {

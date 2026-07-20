@@ -396,10 +396,27 @@ export function SettlementTab({
                                                 >
                                                     <FaEdit />
                                                 </button>
+                                                {/* 지급 완료된 지출도 지울 수 있어야 한다.
+                                                    막아두면 잘못 등록했을 때 손쓸 방법이 없고,
+                                                    보컬 임금 지출의 경우 그 달 수업 수정까지 계속 막힌다.
+                                                    대신 지급 완료 건은 한 번 더 경고한다. */}
                                                 <button
-                                                    onClick={() => handleExpenseDelete(item.id)}
-                                                    className={`text-gray-300 ${item.paidDate ? 'cursor-not-allowed opacity-30' : 'hover:text-red-500'}`}
-                                                    disabled={!!item.paidDate}
+                                                    onClick={() => {
+                                                        const head = item.paidDate
+                                                            ? `이 지출은 이미 지급 완료(${item.paidDate}) 처리되었습니다.\n그래도 삭제하시겠습니까?`
+                                                            : '이 지출을 삭제하시겠습니까?';
+                                                        if (
+                                                            !window.confirm(
+                                                                `${head}\n\n` +
+                                                                    `[${item.category}] ${formatCurrency(item.amount)}원\n` +
+                                                                    `${item.date}${item.memo ? '  ' + item.memo : ''}`
+                                                            )
+                                                        )
+                                                            return;
+                                                        handleExpenseDelete(item.id);
+                                                    }}
+                                                    className={`text-gray-300 hover:text-red-500 ${item.paidDate ? 'opacity-50' : ''}`}
+                                                    title={item.paidDate ? '지급 완료된 지출 (삭제 시 경고)' : '삭제'}
                                                 >
                                                     <FaTimesCircle />
                                                 </button>
@@ -480,11 +497,41 @@ export function SettlementTab({
                                     {vocalCompletedEvents.length > 0 &&
                                         (existingWageExpense ? (
                                             existingWageExpense.paidDate ? (
+                                                // 지급 처리를 되돌릴 수 있어야 한다.
+                                                // 예전에는 이 버튼이 비활성이라, 잘못 눌렀을 때 앱 안에서
+                                                // 빠져나올 방법이 없었다(지출도 삭제 버튼이 막혀 있었고,
+                                                // 그 지출이 있는 한 그 달 보컬 수업 수정이 계속 차단됐다).
                                                 <button
-                                                    disabled
-                                                    className="btn btn-sm w-full bg-green-100 text-green-600 border-none rounded-xl font-bold"
+                                                    onClick={async () => {
+                                                        if (
+                                                            !window.confirm(
+                                                                `지급 처리를 취소하시겠습니까?\n\n` +
+                                                                    `지급일(${existingWageExpense.paidDate}) 기록이 지워집니다.\n` +
+                                                                    `지출 내역 자체는 그대로 남습니다.`
+                                                            )
+                                                        )
+                                                            return;
+                                                        try {
+                                                            await updateDoc(
+                                                                doc(db, 'expenses', existingWageExpense.id),
+                                                                {
+                                                                    paidDate: null,
+                                                                    memo: (existingWageExpense.memo || '').replace(
+                                                                        ' [지급완료]',
+                                                                        ''
+                                                                    ),
+                                                                }
+                                                            );
+                                                            fetchSettlementData();
+                                                        } catch (e) {
+                                                            console.error(e);
+                                                            alert('지급 취소에 실패했습니다: ' + e.message);
+                                                        }
+                                                    }}
+                                                    title="클릭하면 지급 처리를 취소합니다"
+                                                    className="btn btn-sm w-full bg-green-100 text-green-600 border-none rounded-xl font-bold hover:bg-green-200"
                                                 >
-                                                    지급 완료 ({existingWageExpense.paidDate})
+                                                    지급 완료 ({existingWageExpense.paidDate}) · 취소
                                                 </button>
                                             ) : (
                                                 <button
