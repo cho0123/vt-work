@@ -54,6 +54,7 @@ import {
     setDoc,
     limit,
     writeBatch,
+    runTransaction,
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL, uploadString } from 'firebase/storage';
 import {
@@ -213,15 +214,12 @@ function App() {
                 memo: `${targetYearMonth}월 월정산 청구`,
             };
 
-            // 기존 미수금 리스트에 추가
-            const list = [...(student.unpaidList || []), newItem].sort(
-                (a, b) => new Date(a.targetDate) - new Date(b.targetDate)
-            );
-
-            // DB 업데이트
-            await updateDoc(doc(db, 'students', student.id), {
-                unpaidList: list,
-                isPaid: false,
+            // 기존 미수금 리스트에 추가 (최신 목록을 트랜잭션 안에서 읽는다)
+            await updateStudentTx(student.id, (sData) => {
+                const list = [...(sData.unpaidList || []), newItem].sort(
+                    (a, b) => new Date(a.targetDate) - new Date(b.targetDate)
+                );
+                return { patch: { unpaidList: list, isPaid: false } };
             });
 
             // 후처리
@@ -362,6 +360,38 @@ function App() {
         };
         fetchStudentMemo();
     }, [user, activeTab]);
+
+    /**
+     * 학생 문서를 트랜잭션 안에서 갱신한다.
+     *
+     * 미수금 목록(unpaidList)과 등록 회차(count)는 "읽어서 → 고쳐서 → 통째로 쓰기"
+     * 방식이라, 두 군데서 동시에 건드리면 나중에 쓴 쪽이 먼저 쓴 쪽의 변경을
+     * 통째로 날려버린다. 화면에 그려질 때 받은 낡은 학생 객체를 기준으로 쓰는
+     * 경로도 있어서, 저장 버튼 연타만으로도 미수금이 유실될 수 있었다.
+     * 트랜잭션 안에서 항상 최신 문서를 다시 읽고 계산한다.
+     *
+     * @param studentId 대상 학생
+     * @param mutate    최신 학생 데이터를 받아 { patch, info } 를 돌려주는 함수.
+     *                  patch 는 실제로 쓸 필드, info 는 호출부가 알림 등에 쓸 부가 정보.
+     *                  ※ 트랜잭션은 충돌 시 재시도되므로 mutate 안에서 alert/confirm 같은
+     *                    부수효과를 내면 안 된다. 알림은 반환된 info 로 바깥에서 처리할 것.
+     * @returns info (문서가 없으면 null)
+     */
+    const updateStudentTx = async (studentId, mutate) => {
+        let info = null;
+        await runTransaction(db, async (tx) => {
+            const ref = doc(db, 'students', studentId);
+            const snap = await tx.get(ref);
+            if (!snap.exists()) {
+                info = null;
+                return;
+            }
+            const { patch = {}, info: mutInfo = null } = mutate(snap.data()) || {};
+            info = mutInfo;
+            if (Object.keys(patch).length > 0) tx.update(ref, patch);
+        });
+        return info;
+    };
 
     const handleStudentMemoSave = async (text) => {
         try {
@@ -1515,54 +1545,46 @@ function App() {
         // [New] 보컬 정산 완료 여부 체크 (기존 로직 유지)
         if (scheduleForm.studentId) {
             try {
-                const studentRef = doc(db, 'students', scheduleForm.studentId);
-                const studentSnap = await getDoc(studentRef);
+                // 아티스트 카운트 증감은 트랜잭션 밖에서 미리 정한다(기존 스케쥴 상태 비교라 학생 문서와 무관).
+                let countChange = 0;
+                {
+                    const newStatus = scheduleForm.status;
+                    let oldStatus = ''; // 기존 상태
+                    if (selectedSlot.id) {
+                        const oldSchedule = schedules.find((s) => s.id === selectedSlot.id);
+                        if (oldSchedule) oldStatus = oldSchedule.status;
+                    }
+                    if (newStatus === 'completed' && oldStatus !== 'completed') countChange = 1;
+                    else if (newStatus !== 'completed' && oldStatus === 'completed') countChange = -1;
+                }
 
-                if (studentSnap.exists()) {
-                    const sData = studentSnap.data();
-                    const updates = {};
-                    let deletedCount = 0;
+                const deletedCount = await updateStudentTx(scheduleForm.studentId, (sData) => {
+                    const patch = {};
 
                     // A. 아티스트 카운트
-                    if (sData.isArtist) {
-                        let countChange = 0;
-                        const newStatus = scheduleForm.status;
-                        let oldStatus = ''; // 기존 상태
-
-                        if (selectedSlot.id) {
-                            const oldSchedule = schedules.find((s) => s.id === selectedSlot.id);
-                            if (oldSchedule) oldStatus = oldSchedule.status;
-                        }
-
-                        if (newStatus === 'completed' && oldStatus !== 'completed') countChange = 1;
-                        else if (newStatus !== 'completed' && oldStatus === 'completed') countChange = -1;
-
-                        if (countChange !== 0) {
-                            const currentCount = parseInt(sData.count || '0');
-                            updates.count = String(currentCount + countChange);
-                        }
+                    if (sData.isArtist && countChange !== 0) {
+                        patch.count = String(parseInt(sData.count || '0') + countChange);
                     }
 
                     // B. [핵심 변경] 저장일(포함) 및 미래 미수금 삭제
+                    let removed = 0;
                     if (sData.unpaidList && sData.unpaidList.length > 0) {
                         // [수정] <= 에서 < 로 변경 (당일 날짜도 삭제 대상에 포함)
                         // 저장하려는 날짜(saveDate)보다 "엄격하게 과거인 것"만 남김
                         const filteredUnpaidList = sData.unpaidList.filter((item) => item.targetDate < saveDate);
 
                         if (filteredUnpaidList.length !== sData.unpaidList.length) {
-                            deletedCount = sData.unpaidList.length - filteredUnpaidList.length;
-                            updates.unpaidList = filteredUnpaidList;
-                            updates.isPaid = filteredUnpaidList.length === 0;
+                            removed = sData.unpaidList.length - filteredUnpaidList.length;
+                            patch.unpaidList = filteredUnpaidList;
+                            patch.isPaid = filteredUnpaidList.length === 0;
                         }
                     }
 
-                    // DB 업데이트
-                    if (Object.keys(updates).length > 0) {
-                        await updateDoc(studentRef, updates);
-                        if (deletedCount > 0) {
-                            alert(`[자동정리] 일정 변경으로 인해 ${saveDate}일 포함, 이후의 내역이 정리되었습니다.`);
-                        }
-                    }
+                    return { patch, info: removed };
+                });
+
+                if (deletedCount > 0) {
+                    alert(`[자동정리] 일정 변경으로 인해 ${saveDate}일 포함, 이후의 내역이 정리되었습니다.`);
                 }
             } catch (err) {
                 console.error('학생 정보 업데이트 실패:', err);
@@ -1665,17 +1687,14 @@ function App() {
             const scheduleData = scheduleSnap.data();
 
             if (scheduleData.studentId) {
-                const studentRef = doc(db, 'students', scheduleData.studentId);
-                const studentSnap = await getDoc(studentRef);
+                // 삭제하려는 일정의 년.월 계산 (예: "2025.11")
+                const d = new Date(scheduleData.date);
+                const targetYM = `${d.getFullYear()}.${d.getMonth() + 1}`;
+                const monthlyMemo = `${targetYM}월 월정산 청구`;
 
-                if (studentSnap.exists()) {
-                    const sData = studentSnap.data();
-                    const updates = {};
-
-                    // 삭제하려는 일정의 년.월 계산 (예: "2025.11")
-                    const d = new Date(scheduleData.date);
-                    const targetYM = `${d.getFullYear()}.${d.getMonth() + 1}`;
-                    const monthlyMemo = `${targetYM}월 월정산 청구`;
+                const removed = await updateStudentTx(scheduleData.studentId, (sData) => {
+                    const patch = {};
+                    let removedCount = 0;
 
                     if (sData.unpaidList && sData.unpaidList.length > 0) {
                         const beforeCount = sData.unpaidList.length;
@@ -1692,23 +1711,23 @@ function App() {
                         });
 
                         if (filteredList.length !== beforeCount) {
-                            updates.unpaidList = filteredList;
-                            updates.isPaid = filteredList.length === 0;
-                            alert(
-                                `[자동정리] 일정 삭제로 인해 관련 미수금/월정산 내역 ${beforeCount - filteredList.length}건이 삭제되었습니다.`
-                            );
+                            patch.unpaidList = filteredList;
+                            patch.isPaid = filteredList.length === 0;
+                            removedCount = beforeCount - filteredList.length;
                         }
                     }
 
                     // 아티스트 카운트 복구
                     if (sData.isArtist && scheduleData.status === 'completed') {
                         const currentCount = parseInt(sData.count || '0');
-                        updates.count = String(Math.max(0, currentCount - 1));
+                        patch.count = String(Math.max(0, currentCount - 1));
                     }
 
-                    if (Object.keys(updates).length > 0) {
-                        await updateDoc(studentRef, updates);
-                    }
+                    return { patch, info: removedCount };
+                });
+
+                if (removed > 0) {
+                    alert(`[자동정리] 일정 삭제로 인해 관련 미수금/월정산 내역 ${removed}건이 삭제되었습니다.`);
                 }
             }
 
@@ -1791,42 +1810,38 @@ function App() {
             };
 
             if (scheduleForm.studentId) {
-                const studentRef = doc(db, 'students', scheduleForm.studentId);
-                const studentSnap = await getDoc(studentRef);
+                let countChange = 0;
+                {
+                    const newStatus = scheduleForm.status;
+                    const oldStatus = movingSchedule.status;
+                    if (newStatus === 'completed' && oldStatus !== 'completed') countChange = 1;
+                    else if (newStatus !== 'completed' && oldStatus === 'completed') countChange = -1;
+                }
 
-                if (studentSnap.exists()) {
-                    const sData = studentSnap.data();
-                    const stUpdates = {};
+                const cleaned = await updateStudentTx(scheduleForm.studentId, (sData) => {
+                    const patch = {};
 
                     // 1. 아티스트 카운트 조정
-                    if (sData.isArtist) {
-                        let countChange = 0;
-                        const newStatus = scheduleForm.status;
-                        const oldStatus = movingSchedule.status;
-
-                        if (newStatus === 'completed' && oldStatus !== 'completed') countChange = 1;
-                        else if (newStatus !== 'completed' && oldStatus === 'completed') countChange = -1;
-
-                        if (countChange !== 0) {
-                            stUpdates.count = String(parseInt(sData.count || '0') + countChange);
-                        }
+                    if (sData.isArtist && countChange !== 0) {
+                        patch.count = String(parseInt(sData.count || '0') + countChange);
                     }
 
                     // 2. 미수금/청구 내역 정리
+                    let didClean = false;
                     if (sData.unpaidList && sData.unpaidList.length > 0) {
                         const filteredUnpaidList = sData.unpaidList.filter((item) => item.targetDate < saveDate);
                         if (filteredUnpaidList.length !== sData.unpaidList.length) {
-                            stUpdates.unpaidList = filteredUnpaidList;
-                            stUpdates.isPaid = filteredUnpaidList.length === 0;
-                            alert(
-                                `[자동정리] 일정 이동으로 인해 ${saveDate}일 포함, 이후의 청구 내역이 정리되었습니다.`
-                            );
+                            patch.unpaidList = filteredUnpaidList;
+                            patch.isPaid = filteredUnpaidList.length === 0;
+                            didClean = true;
                         }
                     }
 
-                    if (Object.keys(stUpdates).length > 0) {
-                        await updateDoc(studentRef, stUpdates);
-                    }
+                    return { patch, info: didClean };
+                });
+
+                if (cleaned) {
+                    alert(`[자동정리] 일정 이동으로 인해 ${saveDate}일 포함, 이후의 청구 내역이 정리되었습니다.`);
                 }
             }
 
@@ -1916,16 +1931,23 @@ function App() {
             amount: calculateTotalAmount(s),
             createdAt: new Date().toISOString(),
         };
-        const list = [...(s.unpaidList || []), item].sort((a, b) => new Date(a.targetDate) - new Date(b.targetDate));
-        await updateDoc(doc(db, 'students', s.id), { unpaidList: list, isPaid: false });
+        // 화면에 그려질 때의 s.unpaidList 가 아니라 트랜잭션 안에서 최신 목록을 읽어 덧붙인다.
+        await updateStudentTx(s.id, (sData) => {
+            const list = [...(sData.unpaidList || []), item].sort(
+                (a, b) => new Date(a.targetDate) - new Date(b.targetDate)
+            );
+            return { patch: { unpaidList: list, isPaid: false } };
+        });
         await updateStudentLastDate(s.id);
         setTempDates({ ...tempDates, [s.id]: '' });
         fetchSettlementData();
     };
     const handleDeleteUnpaid = async (s, id) => {
         if (!window.confirm('삭제?')) return;
-        const list = (s.unpaidList || []).filter((i) => i.id !== id);
-        await updateDoc(doc(db, 'students', s.id), { unpaidList: list, isPaid: list.length === 0 });
+        await updateStudentTx(s.id, (sData) => {
+            const list = (sData.unpaidList || []).filter((i) => i.id !== id);
+            return { patch: { unpaidList: list, isPaid: list.length === 0 } };
+        });
         await updateStudentLastDate(s.id);
         if (selectedUnpaidId === id) {
             setSelectedUnpaidId(null);
@@ -1970,14 +1992,20 @@ function App() {
             // alert("DB 저장 완료");
 
             if (!paymentForm.id) {
-                let list = s.unpaidList || [];
-                if (selectedUnpaidId) list = list.filter((i) => i.id !== selectedUnpaidId);
-                const currentCount = parseInt(s.count || '0', 10);
-                const newCount = currentCount + 1;
-                await updateDoc(doc(db, 'students', s.id), {
-                    unpaidList: list,
-                    isPaid: list.length === 0,
-                    count: newCount,
+                // 최신 문서를 트랜잭션 안에서 다시 읽는다.
+                // 예전에는 화면에 그려질 때의 s.unpaidList / s.count 를 기준으로 덮어써서,
+                // 저장 연타나 다른 창에서의 동시 작업 시 미수금·회차가 유실될 수 있었다.
+                await updateStudentTx(s.id, (sData) => {
+                    let list = sData.unpaidList || [];
+                    if (selectedUnpaidId) list = list.filter((i) => i.id !== selectedUnpaidId);
+                    const newCount = parseInt(sData.count || '0', 10) + 1;
+                    return {
+                        patch: {
+                            unpaidList: list,
+                            isPaid: list.length === 0,
+                            count: newCount,
+                        },
+                    };
                 });
             }
             await updateStudentLastDate(s.id);
@@ -2192,13 +2220,11 @@ function App() {
                 createdAt: new Date().toISOString(),
             };
 
-            const list = [...(student.unpaidList || []), newItem].sort(
-                (a, b) => new Date(a.targetDate) - new Date(b.targetDate)
-            );
-
-            await updateDoc(doc(db, 'students', student.id), {
-                unpaidList: list,
-                isPaid: false,
+            await updateStudentTx(student.id, (sData) => {
+                const list = [...(sData.unpaidList || []), newItem].sort(
+                    (a, b) => new Date(a.targetDate) - new Date(b.targetDate)
+                );
+                return { patch: { unpaidList: list, isPaid: false } };
             });
             await updateStudentLastDate(student.id);
             fetchSettlementData();
