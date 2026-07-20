@@ -861,11 +861,22 @@ function App() {
         });
 
         // 5. 스케줄 데이터 구독 (Schedules)
-        // [중요] 여기에 변수 쓰지 말고 "2020-01-01"을 직접 넣으세요!
+        //
+        // 화면에 보이는 기간만 받으면 될 것 같지만 그렇지 않다. 로테이션(R1, R2...)
+        // 계산과 재등록 시점 판정이 학생의 '전체' 완료 이력을 필요로 하기 때문에,
+        // 범위를 좁히면 화면 밖 수업이 빠져 회차가 어긋난다.
+        //
+        // 그래서 범위는 넓게 두되, 반복 방문 시의 읽기 비용은 firebase.js 의
+        // 로컬 지속 캐시로 줄인다(두 번째 방문부터는 변경분만 받아온다).
+        //
+        // 상한을 '2030-12-31' 로 박아두면 2031년부터 스케쥴이 조용히 사라지므로,
+        // 현재 연도를 기준으로 넉넉히 잡는다.
+        const SCHED_RANGE_START = '2000-01-01';
+        const SCHED_RANGE_END = `${new Date().getFullYear() + 5}-12-31`;
         const qSched = query(
             collection(db, 'schedules'),
-            where('date', '>=', '2020-01-01'),
-            where('date', '<=', '2030-12-31')
+            where('date', '>=', SCHED_RANGE_START),
+            where('date', '<=', SCHED_RANGE_END)
         );
         const unsubSched = onSnapshot(qSched, (snapshot) => {
             const list = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
