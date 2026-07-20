@@ -1,0 +1,44 @@
+rules_version = '2';
+
+// VTWork Firestore 보안 규칙
+//
+// 배경:
+//   이전 규칙은 `allow read, write: if request.auth != null` 이었다.
+//   즉 "로그인한 사용자면 누구나 전부"였는데, Firebase Authentication 의
+//   신규 가입이 열려 있어서 배포된 JS 에 들어있는 API 키만으로 누구나
+//   계정을 만들 수 있었다. 그렇게 만든 계정으로 학생 실명·연락처·결제내역·
+//   영수증 이미지를 전부 읽고 쓸 수 있는 상태였다.
+//
+// 방침:
+//   이 앱은 학원 운영자 본인만 쓰는 내부 도구이므로, 허용된 UID 목록에
+//   있는 계정만 접근할 수 있게 한다. 가입이 열려 있더라도 새로 만든
+//   계정은 아무것도 할 수 없다.
+//
+// 계정을 추가하려면:
+//   1) Firebase 콘솔 → Authentication → 사용자 추가
+//   2) 생성된 UID 를 아래 목록에 추가 (주석으로 이메일도 함께)
+//   3) 규칙 재배포 (node scripts/deploy-rules.js key-A.json)
+//
+// 목록 확인: node scripts/list-auth-users.js key-A.json
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAllowedUser() {
+      return request.auth != null
+          && request.auth.uid in [
+               // ── 운영 (vt-schedule-12568)
+               'xA6nm0L4uBTyRBctRRNqzKND1oW2',  // voicetuning@nate.com
+               // ── 개발 (vt-work-dev-eeeaa)
+               'dLFgRjqJIzOdBjFBcozMvB36uAx1'   // wlusa2@nate.com
+             ];
+    }
+
+    // 이 앱의 모든 데이터(students, schedules, attendance, expenses,
+    // weekly_memos/locks, settlement_memos, site_settings,
+    // schedule_cancellations, students/*/payments)는 운영자 전용이다.
+    match /{document=**} {
+      allow read, write: if isAllowedUser();
+    }
+  }
+}
