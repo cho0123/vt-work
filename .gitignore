@@ -15,6 +15,7 @@ dist-ssr
 # Firebase 서비스 계정 키 - 절대 커밋 금지
 key-A.json
 key-B.json
+key-C.json
 *serviceAccount*.json
 firebase-adminsdk*.json
 

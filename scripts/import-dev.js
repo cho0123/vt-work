@@ -7,9 +7,9 @@
  */
 import fs from 'fs';
 import path from 'path';
-import { initDb, deserialize, BACKUP_DIR, PROD_PROJECT_ID, DEV_PROJECT_ID } from './lib/common.js';
+import { initDb, deserialize, BACKUP_DIR, PROD_PROJECT_ID, DEV_PROJECT_ID, DEV_KEY } from './lib/common.js';
 
-const { db, projectId } = initDb('key-B.json', 'target');
+const { db, projectId } = initDb(DEV_KEY, 'target');
 
 // ── 하드 가드 ────────────────────────────────────────────────
 // 어떤 경우에도 운영 프로젝트에 쓰지 않는다.

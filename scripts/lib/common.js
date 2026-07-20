@@ -9,8 +9,26 @@ export const BACKUP_DIR = path.join(ROOT, 'backup');
 
 /** 운영 프로젝트. 이 값은 안전장치의 기준이므로 절대 바꾸지 말 것. */
 export const PROD_PROJECT_ID = 'vt-schedule-12568';
-/** 개발(스테이징) 프로젝트. */
-export const DEV_PROJECT_ID = 'vt-work-dev-3aec5';
+
+/**
+ * 개발(스테이징) 프로젝트 목록 — 키 파일 -> 프로젝트 ID.
+ * 쓰기 스크립트는 여기 등록된 프로젝트에만 동작한다.
+ *
+ * 3aec5 는 2026-07-20 검증 중 일일 읽기 한도를 소진해 하루 동안 쓸 수 없게 되어,
+ * 예비로 만들어져 있던 eeeaa 로 옮겨왔다.
+ */
+export const DEV_PROJECTS = {
+    'key-B.json': 'vt-work-dev-3aec5',
+    'key-C.json': 'vt-work-dev-eeeaa',
+};
+
+/** 현재 사용할 개발 프로젝트. 바꾸려면 이 줄만 고치면 된다. */
+export const DEV_KEY = process.env.VT_DEV_KEY || 'key-C.json';
+export const DEV_PROJECT_ID = DEV_PROJECTS[DEV_KEY];
+
+if (!DEV_PROJECT_ID) {
+    throw new Error(`알 수 없는 개발 키 파일: ${DEV_KEY} (DEV_PROJECTS 에 등록하세요)`);
+}
 
 export function loadKey(fileName) {
     const p = path.join(ROOT, fileName);

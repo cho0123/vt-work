@@ -7,7 +7,7 @@
  *
  * 실행: npm run verify-rotation
  */
-import { initDb, PROD_PROJECT_ID } from './lib/common.js';
+import { initDb, PROD_PROJECT_ID, DEV_KEY } from './lib/common.js';
 import {
     computeRequirement,
     getRotationInfo,
@@ -17,7 +17,7 @@ import {
     sortByDateTime,
 } from '../src/domain/rotation.js';
 
-const { db, projectId } = initDb('key-B.json', 'verify-rot');
+const { db, projectId } = initDb(DEV_KEY, 'verify-rot');
 if (projectId === PROD_PROJECT_ID) {
     console.error('🛑 운영 프로젝트입니다.');
     process.exit(1);

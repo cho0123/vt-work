@@ -8,11 +8,11 @@
  *
  * 실행: npm run verify-transaction
  */
-import { initDb, PROD_PROJECT_ID } from './lib/common.js';
+import { initDb, PROD_PROJECT_ID, DEV_PROJECT_ID, DEV_KEY } from './lib/common.js';
 
-const { db, projectId } = initDb('key-B.json', 'verify-tx');
-if (projectId !== 'vt-work-dev-3aec5' || projectId === PROD_PROJECT_ID) {
-    console.error(`🛑 개발 프로젝트가 아닙니다: ${projectId}`);
+const { db, projectId } = initDb(DEV_KEY, 'verify-tx');
+if (projectId !== DEV_PROJECT_ID || projectId === PROD_PROJECT_ID) {
+    console.error(`🛑 등록된 개발 프로젝트가 아닙니다: ${projectId}`);
     process.exit(1);
 }
 

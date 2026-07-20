@@ -4,9 +4,9 @@
  */
 import fs from 'fs';
 import path from 'path';
-import { initDb, serialize, BACKUP_DIR, PROD_PROJECT_ID } from './lib/common.js';
+import { initDb, serialize, BACKUP_DIR, PROD_PROJECT_ID, DEV_KEY } from './lib/common.js';
 
-const { db, projectId } = initDb('key-B.json', 'verify');
+const { db, projectId } = initDb(DEV_KEY, 'verify');
 if (projectId === PROD_PROJECT_ID) {
     console.error('🛑 대상이 운영 프로젝트입니다. 중단합니다.');
     process.exit(1);
