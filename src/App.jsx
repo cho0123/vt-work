@@ -334,6 +334,9 @@ function App() {
     const itemsPerPage = 30;
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingId, setEditingId] = useState(null);
+    // 수정 모달을 열 때의 학생 원본. 저장 시 '사용자가 실제로 바꾼 필드'만
+    // 가려내는 기준으로 쓴다. (아래 handleSubmit 주석 참고)
+    const [editingOriginal, setEditingOriginal] = useState(null);
     const [tempDates, setTempDates] = useState({});
     const [paymentFile, setPaymentFile] = useState(null);
     const [previewImage, setPreviewImage] = useState(null);
@@ -2135,52 +2138,76 @@ function App() {
         try {
             if (editingId) {
                 // [수정]
-                const studentRef = doc(db, 'students', editingId);
-                const studentSnap = await getDoc(studentRef);
-
-                if (studentSnap.exists()) {
-                    const oldData = studentSnap.data();
-                    let finalFormData = { ...formData };
-
-                    // [NEW] 시작일(firstDate) 변경 감지 및 미수금 자동 수정 로직
-                    if (oldData.firstDate && oldData.firstDate !== formData.firstDate) {
-                        if (
-                            window.confirm(
-                                '수강 시작일이 변경되었습니다.\n최초 미수금 내역의 날짜도 함께 변경하시겠습니까?'
-                            )
-                        ) {
-                            const oldDate = oldData.firstDate;
-                            const newDate = formData.firstDate;
-                            const newAmount = calculateTotalAmount(formData); // 현재 단가 등 기준 재계산
-
-                            let list = [...(oldData.unpaidList || [])];
-
-                            // 1. 기존 날짜의 '최초 등록금' 내역 삭제
-                            // (메모가 '최초 등록금'이거나, 혹은 날짜가 정확히 일치하는 미수금) - 여기선 메모 기준 권장
-                            const initialCount = list.length;
-                            list = list.filter((item) => !(item.targetDate === oldDate && item.memo === '최초 등록금'));
-
-                            // 2. 새로운 날짜로 내역 생성
-                            list.push({
-                                id: Date.now().toString(),
-                                targetDate: newDate,
-                                amount: newAmount,
-                                createdAt: new Date().toISOString(),
-                                memo: '최초 등록금',
-                            });
-
-                            // 날짜순 정렬
-                            list.sort((a, b) => new Date(a.targetDate) - new Date(b.targetDate));
-
-                            finalFormData.unpaidList = list;
-                            finalFormData.isPaid = false; // 새로운 미수금이 생겼으므로 미납 상태로 변경
-
-                            alert('최초 미수금 내역이 갱신되었습니다.');
-                        }
-                    }
-
-                    await updateDoc(studentRef, finalFormData);
+                //
+                // 사용자가 실제로 바꾼 필드만 쓴다.
+                //
+                // 예전에는 formData 를 통째로 updateDoc 했다. 그런데 모달을 열 때
+                // 학생 문서 전체(unpaidList, count, lastDate, isPaid, hasPayment ...)를
+                // 폼 상태로 복사해두기 때문에, 저장하는 순간 그 낡은 값들이 다시 쓰였다.
+                // 모달을 열어둔 사이에 결제가 처리되면 전화번호만 고치고 저장해도
+                // 미수금이 되살아나고 회차가 되돌아갔다.
+                //
+                // 편집 대상 필드만 추린 뒤, 그중에서도 모달을 열 때와 값이 달라진
+                // 것만 보낸다. 특히 '등록 회차(count)'는 폼에서도 고칠 수 있고 결제
+                // 처리로도 올라가기 때문에, 손대지 않았다면 건드리지 말아야 한다.
+                const EDITABLE = [
+                    'name',
+                    'phone',
+                    'isMonthly',
+                    'isArtist',
+                    'firstDate',
+                    'count',
+                    'schedule',
+                    'rates',
+                    'memo',
+                    'cashReceiptMemo',
+                ];
+                const patch = {};
+                for (const k of EDITABLE) {
+                    const now = formData[k];
+                    const was = editingOriginal ? editingOriginal[k] : undefined;
+                    if (JSON.stringify(now) !== JSON.stringify(was)) patch[k] = now;
                 }
+
+                // 시작일이 바뀌었으면 최초 등록금 미수금도 옮길지 먼저 물어본다.
+                // (트랜잭션은 충돌 시 재시도되므로 그 안에서 confirm 을 띄우면 안 된다)
+                const beforeSnap = await getDoc(doc(db, 'students', editingId));
+                const oldFirstDate = beforeSnap.exists() ? beforeSnap.data().firstDate : null;
+                const firstDateChanged = oldFirstDate && oldFirstDate !== formData.firstDate;
+                const moveInitialUnpaid =
+                    firstDateChanged &&
+                    window.confirm('수강 시작일이 변경되었습니다.\n최초 미수금 내역의 날짜도 함께 변경하시겠습니까?');
+
+                const newAmount = calculateTotalAmount(formData); // 현재 단가 등 기준 재계산
+                const movedUnpaidId = Date.now().toString();
+
+                const moved = await updateStudentTx(editingId, (sData) => {
+                    if (!moveInitialUnpaid) return { patch };
+
+                    // 미수금 목록은 트랜잭션 안에서 읽은 최신 값을 기준으로 고친다.
+                    let list = [...(sData.unpaidList || [])];
+
+                    // 1. 기존 날짜의 '최초 등록금' 내역 삭제
+                    list = list.filter((item) => !(item.targetDate === sData.firstDate && item.memo === '최초 등록금'));
+
+                    // 2. 새로운 날짜로 내역 생성
+                    list.push({
+                        id: movedUnpaidId,
+                        targetDate: formData.firstDate,
+                        amount: newAmount,
+                        createdAt: new Date().toISOString(),
+                        memo: '최초 등록금',
+                    });
+
+                    list.sort((a, b) => new Date(a.targetDate) - new Date(b.targetDate));
+
+                    return {
+                        patch: { ...patch, unpaidList: list, isPaid: false },
+                        info: true,
+                    };
+                });
+
+                if (moved) alert('최초 미수금 내역이 갱신되었습니다.');
             } else {
                 // [신규 등록]
                 const amt = calculateTotalAmount(formData);
@@ -2219,12 +2246,15 @@ function App() {
     const handleEditClick = (s) => {
         setEditingId(s.id);
         const sch = (s.schedule || initialFormState.schedule).map((w) => ({ ...w, vocal30: w.vocal30 || '' }));
-        setFormData({ ...initialFormState, ...s, schedule: sch, rates: s.rates || initialFormState.rates });
+        const filled = { ...initialFormState, ...s, schedule: sch, rates: s.rates || initialFormState.rates };
+        setFormData(filled);
+        setEditingOriginal(filled); // 저장 시 변경 여부 비교용
         setIsModalOpen(true);
     };
     const closeModal = () => {
         setIsModalOpen(false);
         setEditingId(null);
+        setEditingOriginal(null);
         setFormData(initialFormState);
     };
 

@@ -15,7 +15,8 @@
     "verify-dev-cheap": "node scripts/verify-dev-cheap.js",
     "verify-rotation": "node scripts/verify-rotation.js",
     "verify-transaction": "node scripts/verify-transaction.js",
-    "verify-billing": "node scripts/verify-billing.js"
+    "verify-billing": "node scripts/verify-billing.js",
+    "verify-student-edit": "node scripts/verify-student-edit.js"
   },
   "dependencies": {
     "firebase": "^12.6.0",
