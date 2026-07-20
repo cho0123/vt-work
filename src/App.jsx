@@ -67,6 +67,7 @@ import {
     getWeeksInMonth,
     getMonthWeeksForView,
     getDaysPassed,
+    shiftMonth,
 } from './utils/date.js';
 import { compressImage } from './utils/image.js';
 import { calculateTotalAmount, formatCurrency } from './utils/money.js';
@@ -803,9 +804,6 @@ function App() {
         const unsubSched = onSnapshot(qSched, (snapshot) => {
             const list = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
 
-            // [디버깅] 이 로그가 12건보다 훨씬 많이(수백 건) 나와야 정상입니다.
-            console.log(`🔥 스케줄 로딩 확인: 총 ${list.length}건 (2020-01-01 부터)`);
-
             setAttSchedules(list);
         });
 
@@ -1248,7 +1246,11 @@ function App() {
                 return;
             }
         } catch (e) {
+            // 마감 여부를 확인하지 못한 상태에서 통과시키면 마감된 달이 수정될 수 있다.
+            // 확인 실패는 차단으로 처리한다.
             console.error('Lock Check Error', e);
+            alert('정산 마감 여부를 확인하지 못했습니다. 네트워크 상태를 확인하고 다시 시도해주세요.');
+            return;
         }
 
         // [New] 보컬 정산 완료 여부 체크
@@ -1279,7 +1281,10 @@ function App() {
                     return;
                 }
             } catch (err) {
+                // 위와 같은 이유로 확인 실패는 차단.
                 console.error('Blocking Check Failed:', err);
+                alert('보컬 정산 상태를 확인하지 못했습니다. 네트워크 상태를 확인하고 다시 시도해주세요.');
+                return;
             }
         }
 
@@ -1447,6 +1452,8 @@ function App() {
                 }
             } catch (err) {
                 console.error('Save Blocking Check Failed:', err);
+                alert('보컬 정산 상태를 확인하지 못했습니다. 저장을 중단합니다.');
+                return;
             }
         }
 
@@ -1463,7 +1470,8 @@ function App() {
             }
         } catch (e) {
             console.error('Save Lock Check Error', e);
-            // 에러 시 안전을 위해 진행하거나 차단? 여기선 진행하지만 로그 남김
+            alert('정산 마감 여부를 확인하지 못했습니다. 저장을 중단합니다.');
+            return;
         }
 
         // [New] 보컬 정산 완료 여부 체크 (기존 로직 유지)
@@ -2237,7 +2245,7 @@ function App() {
         if (viewStatus === 'active') m = s.isActive;
         else if (viewStatus === 'inactive') m = !s.isActive;
         else if (viewStatus === 'artist') m = s.isArtist;
-        return m && (s.name.includes(searchTerm) || (s.phone && s.phone.includes(searchTerm)));
+        return m && ((s.name && s.name.includes(searchTerm)) || (s.phone && s.phone.includes(searchTerm)));
     });
     const currentItems = filteredStudents.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
     const totalPages = Math.ceil(filteredStudents.length / itemsPerPage);
@@ -2904,9 +2912,7 @@ function App() {
                                     <div className="flex items-center gap-4">
                                         <div className="flex items-center gap-2 bg-gray-100 px-3 py-1.5 rounded-xl">
                                             <button
-                                                onClick={() =>
-                                                    setAttMonth(new Date(attMonth.setMonth(attMonth.getMonth() - 1)))
-                                                }
+                                                onClick={() => setAttMonth(shiftMonth(attMonth, -1))}
                                                 className="btn btn-xs btn-circle btn-ghost"
                                             >
                                                 <FaChevronLeft />
@@ -2916,9 +2922,7 @@ function App() {
                                                 {String(attMonth.getMonth() + 1).padStart(2, '0')}
                                             </span>
                                             <button
-                                                onClick={() =>
-                                                    setAttMonth(new Date(attMonth.setMonth(attMonth.getMonth() + 1)))
-                                                }
+                                                onClick={() => setAttMonth(shiftMonth(attMonth, 1))}
                                                 className="btn btn-xs btn-circle btn-ghost"
                                             >
                                                 <FaChevronRight />
@@ -3436,7 +3440,8 @@ function App() {
                                                                     s.studentId === student.id &&
                                                                     s.date >= w.startStr &&
                                                                     s.date <= w.endStr &&
-                                                                    (!s.memo.includes('보강(') ||
+                                                                    (!s.memo ||
+                                                                        !s.memo.includes('보강(') ||
                                                                         s.status === 'completed' ||
                                                                         s.status === 'reschedule' ||
                                                                         s.status === 'reschedule_assigned') &&
@@ -5412,12 +5417,6 @@ function App() {
                                                                         // 포맷 정규화 (YYYY-MM-DD)
                                                                         const normalizedDate = `${match[1]}-${match[2]}-${match[3]}`;
                                                                         makeupSourceDates.add(normalizedDate);
-                                                                        console.log(
-                                                                            '[DEBUG] SmartLink Found:',
-                                                                            normalizedDate,
-                                                                            'from',
-                                                                            historyItem.memo
-                                                                        );
                                                                     }
                                                                 }
                                                             });

@@ -126,3 +126,18 @@ export const getDaysPassed = (d) => {
     if (!d) return 0;
     return Math.floor((new Date() - new Date(d)) / (1000 * 60 * 60 * 24));
 };
+
+/**
+ * 월 이동. 원본 Date 를 변경하지 않고 새 Date 를 돌려준다.
+ *
+ * 날짜를 1일로 맞춘 뒤 월을 옮긴다. 그냥 setMonth 를 쓰면 1월 31일에서
+ * 다음 달로 갈 때 2월 31일 -> 3월 3일이 되어 한 달을 건너뛴다.
+ * 이 값은 '몇 년 몇 월'로만 쓰이므로 1일 고정이 안전하다.
+ */
+export const shiftMonth = (date, delta) => {
+    const d = new Date(date);
+    d.setDate(1);
+    d.setMonth(d.getMonth() + delta);
+    d.setHours(0, 0, 0, 0);
+    return d;
+};
