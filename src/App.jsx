@@ -73,6 +73,14 @@ import { calculateTotalAmount, formatCurrency } from './utils/money.js';
 import { getBadgeStyle } from './utils/badgeStyle.js';
 import { ROTATION_COLORS } from './constants/theme.js';
 import { expenseDefaults } from './constants/expenses.js';
+import {
+    computeRequirement,
+    getRotationInfo,
+    findRotationStarts,
+    resolveAnchorDate,
+    rotationBufferDate,
+    sortByDateTime,
+} from './domain/rotation.js';
 
 function App() {
     const [user, setUser] = useState(null);
@@ -1552,99 +1560,6 @@ function App() {
             relatedScheduleId: selectedMakeupId || null,
         };
 
-        // [NEW] 로테이션 정보 '박제'(Freeze) 로직
-        // 상태가 완료/지각/결석이고 학생이 지정된 경우, 현재 시점의 로테이션 정보를 계산하여 데이터에 포함합니다.
-        const isCompletedStatus =
-            scheduleForm.status === 'completed' || scheduleForm.status === 'late' || scheduleForm.status === 'absent';
-        if (isCompletedStatus && scheduleForm.studentId && !scheduleForm.isFixed) {
-            try {
-                const studentRef = doc(db, 'students', scheduleForm.studentId);
-                const studentSnap = await getDoc(studentRef);
-                if (studentSnap.exists()) {
-                    const student = { id: studentSnap.id, ...studentSnap.data() };
-
-                    let reqM = 0;
-                    let reqV = 0;
-                    (student.schedule || []).forEach((w) => {
-                        reqM += Number(w.master || 0);
-                        reqV += Number(w.vocal || 0) + Number(w.vocal30 || 0);
-                    });
-
-                    const bufferDate = new Date(student.firstDate);
-                    bufferDate.setDate(bufferDate.getDate() - 7);
-                    const bufferDateStr = formatDateLocal(bufferDate);
-
-                    // [FIX] attSchedules 대신 Firestore에서 직접 내역을 가져와 정확성을 보장합니다.
-                    const q = query(
-                        collection(db, 'schedules'),
-                        where('studentId', '==', student.id),
-                        where('date', '>=', bufferDateStr),
-                        where('status', 'in', ['completed', 'absent'])
-                    );
-                    const querySnap = await getDocs(q);
-                    const allScheds = querySnap.docs
-                        .map((d) => ({ id: d.id, ...d.data() }))
-                        .filter((s) => s.id !== selectedSlot.id); // 기존 본인 데이터 제외
-
-                    // 현재 저장하려는 데이터를 가상으로 추가하여 인덱스 계산
-                    const virtualCurrent = {
-                        id: selectedSlot.id || 'TEMP_ID',
-                        date: selectedSlot.date,
-                        time: timeToSave,
-                        gridType: finalGridType,
-                        vocalType: finalVocalType, // [NEW] Use inferred vocal type
-                        masterType: scheduleForm.masterType,
-                    };
-                    const combined = [...allScheds, virtualCurrent].sort(
-                        (a, b) =>
-                            new Date((a.date || '') + 'T' + (a.time || '00:00')) -
-                            new Date((b.date || '') + 'T' + (b.time || '00:00'))
-                    );
-
-                    const isTargetMaster = finalGridType === 'master' || !finalGridType;
-                    let typeScheds = [];
-                    let currentWeightedCount = 0;
-                    let limit = 0;
-
-                    if (isTargetMaster) {
-                        limit = reqM || 1;
-                        for (const s of combined) {
-                            if (s.gridType === 'master' || !s.gridType) {
-                                const weight = s.masterType === '30' ? 0.5 : 1;
-                                typeScheds.push({ ...s, _weight: weight });
-                            }
-                        }
-                    } else {
-                        limit = reqV || 1;
-                        for (const s of combined) {
-                            if (s.gridType === 'vocal') {
-                                // [수정] V30도 출석부/배지 로직에서는 온전한 1회 수업으로 처리 (사용자 요청)
-                                const weight = 1;
-                                typeScheds.push({ ...s, _weight: weight });
-                            }
-                        }
-                    }
-
-                    let myWeightedIndex = -1;
-                    for (let i = 0; i < typeScheds.length; i++) {
-                        if (typeScheds[i].id === virtualCurrent.id) {
-                            myWeightedIndex = currentWeightedCount;
-                            break;
-                        }
-                        currentWeightedCount += typeScheds[i]._weight;
-                    }
-
-                    if (myWeightedIndex !== -1) {
-                        const rotIdx = Math.floor(myWeightedIndex / limit);
-                        data.rotationIndex = rotIdx;
-                        data.rotationLabel = `R${rotIdx + 1}`;
-                    }
-                }
-            } catch (e) {
-                console.error('Rotation Freeze Error:', e);
-            }
-        }
-
         if (scheduleTab === 'personal') {
             data.studentId = '';
             data.studentName = '';
@@ -2248,197 +2163,44 @@ function App() {
         }
     };
 
-    // [FIX] 학생별 로테이션 시작일 계산 (M/V 중 '먼저' 시작하는 수업 기준)
+    // 학생별 로테이션 시작일 계산 (M/V 중 '먼저' 시작하는 수업 기준)
     const calculateRotationStarts = (student) => {
-        let reqM = 0;
-        let reqV = 0;
-        (student.schedule || []).forEach((w) => {
-            reqM += Number(w.master || 0);
-            reqV += Number(w.vocal || 0) + Number(w.vocal30 || 0);
-        });
-
+        const { reqM, reqV } = computeRequirement(student);
         if (reqM === 0 && reqV === 0) return new Set();
 
-        let anchorDate = student.firstDate;
-        if (student.lastDate && student.lastDate > anchorDate) anchorDate = student.lastDate;
-
-        if (student.unpaidList && student.unpaidList.length > 0) {
-            const sortedUnpaid = [...student.unpaidList].sort(
-                (a, b) => new Date(b.targetDate) - new Date(a.targetDate)
-            );
-            if (sortedUnpaid[0].targetDate > anchorDate) anchorDate = sortedUnpaid[0].targetDate;
-        }
-
-        // [기능 추가] 전체 수강생 목록에서 '재등록 요망' 뱃지를 띄우기 위한 진성 신규 학생 판별 로직(동기식)
-        const isNewNoPaymentSync =
+        // 전체 수강생 목록에서 '재등록 요망' 뱃지를 띄우기 위한 진성 신규 학생 판별(동기식)
+        const isNewNoPayment =
             student.hasPayment === false || (student.hasPayment === undefined && student.lastDate <= student.firstDate);
-        if (isNewNoPaymentSync && (!student.unpaidList || student.unpaidList.length === 0)) {
-            const d = new Date(anchorDate);
-            d.setDate(d.getDate() - 1);
-            anchorDate = formatDateLocal(d);
-        }
+        const anchorDate = resolveAnchorDate(student, isNewNoPayment, formatDateLocal);
 
-        // [FIX] 시작일 기준 완화 (7일 전까지 포함) - 등록일보다 조금 일찍 시작한 수업도 로테이션에 포함
-        const bufferDate = new Date(student.firstDate);
-        bufferDate.setDate(bufferDate.getDate() - 7);
-        const bufferDateStr = formatDateLocal(bufferDate);
-
-        const allScheds = attSchedules
-            .filter(
+        const bufferDateStr = rotationBufferDate(student.firstDate, formatDateLocal);
+        const scheds = sortByDateTime(
+            attSchedules.filter(
                 (s) =>
                     s.studentId === student.id &&
                     s.date >= bufferDateStr &&
                     (s.status === 'completed' || s.status === 'absent')
             )
-            .sort(
-                (a, b) =>
-                    new Date((a.date || '') + 'T' + (a.time || '00:00')) -
-                    new Date((b.date || '') + 'T' + (b.time || '00:00'))
-            );
+        );
 
-        const mScheds = [];
-        const vScheds = [];
-
-        for (const s of allScheds) {
-            if (s.gridType === 'master' || (!s.gridType && !s.vocalType)) {
-                const weight = s.masterType === '30' ? 0.5 : 1;
-                mScheds.push({ ...s, _weight: weight });
-            } else if (s.gridType === 'vocal' || (!s.gridType && s.vocalType)) {
-                // [FIX] vocalType '30'은 1로 계산, 'half'만 0.5로 계산
-                const weight = s.vocalType === 'half' ? 0.5 : 1;
-                vScheds.push({ ...s, _weight: weight });
-            }
-        }
-
-        const startDates = new Set();
-
-        // 100회차까지 돌면서 시작일 찾기
-        for (let i = 0; i <= 100; i++) {
-            let mStartDate = null;
-            let vStartDate = null;
-
-            if (reqM > 0) {
-                let currentWeightedCount = 0;
-                let mTargetIdx = -1;
-                for (let j = 0; j < mScheds.length; j++) {
-                    if (currentWeightedCount >= i * reqM) {
-                        mTargetIdx = j;
-                        break;
-                    }
-                    currentWeightedCount += mScheds[j]._weight;
-                }
-                if (mTargetIdx !== -1) mStartDate = mScheds[mTargetIdx].date;
-            }
-
-            if (reqV > 0) {
-                let currentWeightedCount = 0;
-                let vTargetIdx = -1;
-                for (let j = 0; j < vScheds.length; j++) {
-                    if (currentWeightedCount >= i * reqV) {
-                        vTargetIdx = j;
-                        break;
-                    }
-                    currentWeightedCount += vScheds[j]._weight;
-                }
-                if (vTargetIdx !== -1) vStartDate = vScheds[vTargetIdx].date;
-            }
-
-            let rotationTriggerDate = null;
-
-            // [핵심] M과 V 중 '먼저' 시작하는 날짜(Min)를 채택하여 버튼 표시
-            if (mStartDate && vStartDate) {
-                rotationTriggerDate = mStartDate < vStartDate ? mStartDate : vStartDate;
-            } else if (mStartDate) {
-                rotationTriggerDate = mStartDate;
-            } else if (vStartDate) {
-                rotationTriggerDate = vStartDate;
-            }
-
-            if (rotationTriggerDate && rotationTriggerDate > anchorDate) {
-                startDates.add(rotationTriggerDate);
-            }
-        }
-
-        return startDates;
+        return findRotationStarts(scheds, { reqM, reqV, anchorDate });
     };
 
-    // [FIX] 로테이션 정보 계산 (시각화용, M/V 독립 카운트 방식)
+    // 로테이션 정보 계산 (시각화용, M/V 독립 카운트 방식)
     const getScheduleRotationInfo = (student, targetSchedId) => {
         if (!student) return { index: -1, label: '' };
-        let reqM = 0;
-        let reqV = 0;
-        (student.schedule || []).forEach((w) => {
-            reqM += Number(w.master || 0);
-            reqV += Number(w.vocal || 0) + Number(w.vocal30 || 0);
-        });
 
-        // [FIX] 시작일 기준 완화 (7일 전까지 포함)
-        const bufferDate = new Date(student.firstDate);
-        bufferDate.setDate(bufferDate.getDate() - 7);
-        const bufferDateStr = formatDateLocal(bufferDate);
-
-        const allScheds = attSchedules
-            .filter(
+        const bufferDateStr = rotationBufferDate(student.firstDate, formatDateLocal);
+        const scheds = sortByDateTime(
+            attSchedules.filter(
                 (s) =>
                     s.studentId === student.id &&
                     s.date >= bufferDateStr &&
                     (s.status === 'completed' || s.status === 'absent' || s.id === targetSchedId)
             )
-            .sort(
-                (a, b) =>
-                    new Date((a.date || '') + 'T' + (a.time || '00:00')) -
-                    new Date((b.date || '') + 'T' + (b.time || '00:00'))
-            );
+        );
 
-        const target = allScheds.find((s) => s.id === targetSchedId);
-        if (!target) return { index: -1, label: '' };
-
-        // [NEW] 저장된 로테이션 정보가 있으면 우선 사용
-        if (target.rotationLabel) {
-            return { index: target.rotationIndex ?? -1, label: target.rotationLabel };
-        }
-
-        const isTargetMaster = target.gridType === 'master' || (!target.gridType && !target.vocalType);
-
-        let typeScheds = [];
-        let limit = 0;
-        let currentWeightedCount = 0;
-
-        if (isTargetMaster) {
-            if (reqM === 0) return { index: 0, label: 'R1' };
-            limit = reqM;
-            for (const s of allScheds) {
-                if (s.gridType === 'master' || (!s.gridType && !s.vocalType)) {
-                    const weight = s.masterType === '30' ? 0.5 : 1;
-                    typeScheds.push({ ...s, _weight: weight });
-                }
-            }
-        } else {
-            if (reqV === 0) return { index: 0, label: 'R1' };
-            limit = reqV;
-            for (const s of allScheds) {
-                if (s.gridType === 'vocal' || (!s.gridType && s.vocalType)) {
-                    // [FIX] vocalType '30'은 1로 계산, 'half'만 0.5로 계산
-                    const weight = s.vocalType === 'half' ? 0.5 : 1;
-                    typeScheds.push({ ...s, _weight: weight });
-                }
-            }
-        }
-
-        let myWeightedIndex = -1;
-        for (let i = 0; i < typeScheds.length; i++) {
-            if (typeScheds[i].id === targetSchedId) {
-                myWeightedIndex = currentWeightedCount;
-                break;
-            }
-            currentWeightedCount += typeScheds[i]._weight;
-        }
-
-        if (myWeightedIndex === -1) return { index: -1, label: '' };
-
-        const rotationIndex = Math.floor(myWeightedIndex / limit);
-
-        return { index: rotationIndex, label: `R${rotationIndex + 1}` };
+        return getRotationInfo(scheds, targetSchedId, student);
     };
 
     // --- [기간제 출석 토글 핸들러] ---
@@ -5547,120 +5309,35 @@ function App() {
                                 }
 
                                 // 4. [로컬 전용] 로테이션 정보 계산 (History 데이터 사용)
+                                // studentFullHistory 는 로딩 시점에 date+time 순으로 이미 정렬돼 있다.
                                 const getLocalRotationInfo = (targetSchedId) => {
-                                    let reqM = 0,
-                                        reqV = 0;
-                                    (viewingStudentAtt.schedule || []).forEach((w) => {
-                                        reqM += Number(w.master || 0);
-                                        reqV += Number(w.vocal || 0) + Number(w.vocal30 || 0);
-                                    });
-                                    const allCompleted = studentFullHistory.filter(
+                                    const scheds = studentFullHistory.filter(
                                         (s) =>
                                             s.status === 'completed' || s.status === 'absent' || s.id === targetSchedId
                                     );
-                                    const target = allCompleted.find((s) => s.id === targetSchedId);
-                                    if (!target) return { index: -1, label: '' };
-
-                                    // [NEW] 저장된 로테이션 정보가 있으면 우선 사용
-                                    if (target.rotationLabel) {
-                                        let idx = target.rotationIndex;
-                                        // 기존 데이터에 index가 없는 경우 라벨에서 추출 시도 (R1 -> 0)
-                                        if (idx === undefined || idx === null || idx === -1) {
-                                            const match = target.rotationLabel.match(/R(\d+)/);
-                                            if (match) idx = parseInt(match[1]) - 1;
-                                        }
-                                        return { index: idx ?? -1, label: target.rotationLabel };
-                                    }
-
-                                    const isTargetMaster =
-                                        target.gridType === 'master' || (!target.gridType && !target.vocalType);
-                                    let limit = 0;
-                                    if (isTargetMaster) {
-                                        if (reqM === 0) return { index: 0, label: 'R1' };
-                                        limit = reqM;
-                                    } else {
-                                        if (reqV === 0) return { index: 0, label: 'R1' };
-                                        limit = reqV;
-                                    }
-
-                                    const typeScheds = [];
-                                    for (const s of allCompleted) {
-                                        const isV = s.gridType === 'vocal' || (!s.gridType && s.vocalType);
-                                        const isM =
-                                            (s.gridType === 'master' || (!s.gridType && !s.vocalType)) &&
-                                            s.category !== '상담';
-                                        if (isTargetMaster && isM) {
-                                            const weight = s.masterType === '30' ? 0.5 : 1;
-                                            typeScheds.push({ ...s, _weight: weight });
-                                        } else if (!isTargetMaster && isV) {
-                                            // [FIX] vocalType '30'은 1로 계산, 'half'만 0.5로 계산
-                                            const weight = s.vocalType === 'half' ? 0.5 : 1;
-                                            typeScheds.push({ ...s, _weight: weight });
-                                        }
-                                    }
-
-                                    let currentWeightedCount = 0;
-                                    let myWeightedIndex = -1;
-                                    for (const s of typeScheds) {
-                                        if (s.id === targetSchedId) {
-                                            myWeightedIndex = currentWeightedCount;
-                                            break;
-                                        }
-                                        currentWeightedCount += s._weight;
-                                    }
-
-                                    if (myWeightedIndex === -1) return { index: -1, label: '' };
-
-                                    const rotationIndex = Math.floor(myWeightedIndex / limit);
-                                    const weightRemain = myWeightedIndex % limit;
-                                    return {
-                                        index: rotationIndex,
-                                        label: `R${rotationIndex + 1}-${Math.floor(weightRemain) + 1}`,
-                                    };
+                                    return getRotationInfo(scheds, targetSchedId, viewingStudentAtt, {
+                                        excludeConsult: true,
+                                        withSubIndex: true,
+                                    });
                                 };
 
-                                // 5. [수정됨] 재등록 버튼 날짜 계산 (로컬 데이터 사용)
+                                // 5. 재등록 버튼 날짜 계산 (로컬 데이터 사용)
                                 const calculateLocalStarts = () => {
                                     const s = viewingStudentAtt;
-                                    // [NEW] 월정산, 아티스트 학생은 재등록 버튼 노출 제외
+                                    // 월정산, 아티스트 학생은 재등록 버튼 노출 제외
                                     if (s.isMonthly || s.isArtist) return new Set();
 
-                                    let reqM = 0,
-                                        reqV = 0;
-                                    (s.schedule || []).forEach((w) => {
-                                        reqM += Number(w.master || 0);
-                                        reqV += Number(w.vocal || 0) + Number(w.vocal30 || 0);
-                                    });
+                                    const { reqM, reqV } = computeRequirement(s);
                                     if (reqM === 0 && reqV === 0) return new Set();
 
-                                    // 기준일 설정
-                                    let anchorDate = s.firstDate;
-                                    if (s.lastDate && s.lastDate > anchorDate) anchorDate = s.lastDate;
-                                    if (s.unpaidList && s.unpaidList.length > 0) {
-                                        const sortedUnpaid = [...s.unpaidList].sort(
-                                            (a, b) => new Date(b.targetDate) - new Date(a.targetDate)
-                                        );
-                                        if (sortedUnpaid[0].targetDate > anchorDate)
-                                            anchorDate = sortedUnpaid[0].targetDate;
-                                    }
+                                    // 진성 신규 학생(결제·청구 모두 없음)은 첫 수업에 '결제요청' 버튼이 뜨도록
+                                    // 기준일을 하루 앞당긴다.
+                                    const isNewNoPayment =
+                                        viewingStudentHasPayment === false && s.lastDate <= s.firstDate;
+                                    const anchorDate = resolveAnchorDate(s, isNewNoPayment, formatDateLocal);
 
-                                    // [기능 추가] 진성 신규 학생(결제금, 청구금 없음)의 경우 첫 레슨에 '결제요청' 버튼 표출을 위한 anchorDate 임시 우회
-                                    if (
-                                        viewingStudentHasPayment === false &&
-                                        (!s.unpaidList || s.unpaidList.length === 0) &&
-                                        s.lastDate <= s.firstDate
-                                    ) {
-                                        const d = new Date(anchorDate);
-                                        d.setDate(d.getDate() - 1);
-                                        anchorDate = formatDateLocal(d);
-                                    }
-
-                                    // [FIX] 시작일 기준 완화 (7일 전까지 포함)
-                                    const bufferDate = new Date(s.firstDate);
-                                    bufferDate.setDate(bufferDate.getDate() - 7);
-                                    const bufferDateStr = formatDateLocal(bufferDate);
-
-                                    const validScheds = studentFullHistory.filter(
+                                    const bufferDateStr = rotationBufferDate(s.firstDate, formatDateLocal);
+                                    const scheds = studentFullHistory.filter(
                                         (sch) =>
                                             sch.date >= bufferDateStr &&
                                             (sch.status === 'completed' ||
@@ -5669,59 +5346,7 @@ function App() {
                                                 !sch.status)
                                     );
 
-                                    const mScheds = [];
-                                    const vScheds = [];
-
-                                    for (const sch of validScheds) {
-                                        if (sch.gridType === 'master' || !sch.gridType) {
-                                            const weight = sch.masterType === '30' ? 0.5 : 1;
-                                            mScheds.push({ ...sch, _weight: weight });
-                                        } else if (sch.gridType === 'vocal') {
-                                            // [FIX] vocalType '30'은 1로 계산, 'half'만 0.5로 계산
-                                            const weight = sch.vocalType === 'half' ? 0.5 : 1;
-                                            vScheds.push({ ...sch, _weight: weight });
-                                        }
-                                    }
-
-                                    const starts = new Set();
-                                    for (let i = 0; i <= 100; i++) {
-                                        let mDate = null,
-                                            vDate = null;
-                                        if (reqM > 0) {
-                                            let currentWeightedCount = 0;
-                                            let mTargetIdx = -1;
-                                            for (let j = 0; j < mScheds.length; j++) {
-                                                if (currentWeightedCount >= i * reqM) {
-                                                    mTargetIdx = j;
-                                                    break;
-                                                }
-                                                currentWeightedCount += mScheds[j]._weight;
-                                            }
-                                            if (mTargetIdx !== -1) mDate = mScheds[mTargetIdx].date;
-                                        }
-                                        if (reqV > 0) {
-                                            let currentWeightedCount = 0;
-                                            let vTargetIdx = -1;
-                                            for (let j = 0; j < vScheds.length; j++) {
-                                                if (currentWeightedCount >= i * reqV) {
-                                                    vTargetIdx = j;
-                                                    break;
-                                                }
-                                                currentWeightedCount += vScheds[j]._weight;
-                                            }
-                                            if (vTargetIdx !== -1) vDate = vScheds[vTargetIdx].date;
-                                        }
-
-                                        let trigger = null;
-                                        if (mDate && vDate) trigger = mDate < vDate ? mDate : vDate;
-                                        else if (mDate) trigger = mDate;
-                                        else if (vDate) trigger = vDate;
-
-                                        if (trigger && trigger > anchorDate) {
-                                            starts.add(trigger);
-                                        }
-                                    }
-                                    return starts;
+                                    return findRotationStarts(scheds, { reqM, reqV, anchorDate });
                                 };
 
                                 const localRotationStarts = calculateLocalStarts();

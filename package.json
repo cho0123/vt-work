@@ -11,7 +11,8 @@
     "backup": "node scripts/export-prod.js",
     "verify-backup": "node scripts/verify-backup.js",
     "seed-dev": "node scripts/import-dev.js",
-    "verify-dev": "node scripts/verify-dev.js"
+    "verify-dev": "node scripts/verify-dev.js",
+    "verify-rotation": "node scripts/verify-rotation.js"
   },
   "dependencies": {
     "firebase": "^12.6.0",
