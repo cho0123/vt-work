@@ -20,7 +20,7 @@ import {
     getMonthWeeksForView,
     shiftMonth,
 } from '../utils/date.js';
-import { formatCurrency } from '../utils/money.js';
+import { formatCurrency, calculateBilledAmount, vocalRateFactorFor } from '../utils/money.js';
 import { getBadgeStyle } from '../utils/badgeStyle.js';
 
 /**
@@ -372,9 +372,10 @@ export function AttendanceTab({
                                                             (s.gridType === 'master' || !s.gridType) &&
                                                             s.category !== '상담'
                                                     ).length;
-                                                    const cntV_All = monthScheds.filter(
+                                                    const vocalScheds = monthScheds.filter(
                                                         (s) => s.gridType === 'vocal'
-                                                    ).length;
+                                                    );
+                                                    const cntV_All = vocalScheds.length;
 
                                                     if (cntM === 0 && cntV_All === 0) return null;
 
@@ -384,21 +385,22 @@ export function AttendanceTab({
                                                     const statusLabel = hasPending ? '(진행중)' : '(완료)';
                                                     const statusColor = hasPending ? 'text-gray-400' : 'text-blue-600';
 
-                                                    let planV = 0,
-                                                        planV30 = 0;
-                                                    (student.schedule || []).forEach((w) => {
-                                                        planV += Number(w.vocal || 0);
-                                                        planV30 += Number(w.vocal30 || 0);
-                                                    });
-                                                    const isV30 = planV30 > planV;
-
                                                     const rateM = Number(student.rates?.master || 0);
                                                     const rateV_Base = Number(student.rates?.vocal || 0);
-                                                    const rateV_Final = isV30 ? rateV_Base * 0.5 : rateV_Base;
 
-                                                    const amountM = cntM * rateM;
-                                                    const amountV = cntV_All * rateV_Final;
-                                                    const totalAmount = amountM + amountV;
+                                                    // 수업마다 자기 종류대로 단가를 매긴다.
+                                                    // 종류가 적혀 있지 않은 옛 수업은 학생 계획으로 추정한다.
+                                                    const totalAmount = calculateBilledAmount(
+                                                        cntM,
+                                                        vocalScheds,
+                                                        student
+                                                    );
+
+                                                    // 표시용: 정가 수업과 반값 수업(30분·half)을 나눠 보여준다
+                                                    const cntV_Full = vocalScheds.filter(
+                                                        (s) => vocalRateFactorFor(s, student) === 1
+                                                    ).length;
+                                                    const cntV_Half = cntV_All - cntV_Full;
 
                                                     return (
                                                         <div className="mt-1.5 flex flex-col items-start gap-1 p-2 bg-blue-50/80 rounded-lg border border-blue-100 shadow-sm w-full">
@@ -412,13 +414,22 @@ export function AttendanceTab({
                                                                         ×{cntM}
                                                                     </span>
                                                                 )}
-                                                                {cntV_All > 0 && (
+                                                                {cntV_Full > 0 && (
                                                                     <span className="whitespace-nowrap">
-                                                                        {isV30 ? 'V30' : 'V'}
+                                                                        V
                                                                         <span className="text-gray-400">
-                                                                            ({formatCurrency(rateV_Final)})
+                                                                            ({formatCurrency(rateV_Base)})
                                                                         </span>
-                                                                        ×{cntV_All}
+                                                                        ×{cntV_Full}
+                                                                    </span>
+                                                                )}
+                                                                {cntV_Half > 0 && (
+                                                                    <span className="whitespace-nowrap">
+                                                                        V30
+                                                                        <span className="text-gray-400">
+                                                                            ({formatCurrency(rateV_Base * 0.5)})
+                                                                        </span>
+                                                                        ×{cntV_Half}
                                                                     </span>
                                                                 )}
                                                             </div>
