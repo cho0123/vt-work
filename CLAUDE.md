@@ -136,9 +136,30 @@ npm run verify-student-edit  # 학생 수정이 결제 결과를 덮지 않는�
   개인일정·고정·유령은 제외. 개별 완료의 '미수금 자동정리'는 대량 삭제 방지를 위해 일부러 안 함.
 - 스케쥴 상단 년/월/주차 UI 정돈(월=주황 배지, 드롭다운 투명 버그 수정).
 
+### 2026-07-21 추가 2 (스케쥴 팝업 기능·UI, 모두 화면 확인 완료 — 커밋 3a3f2cc)
+
+- **스케쥴 팝업에 학생 로테이션/결제 요약**: 레슨 수업 클릭 시 상단 박스.
+  일반 학생은 마스터/보컬 각 사이클을 칸으로 시각화(클릭한 수업 칸=진한 테두리,
+  완료=회차색, 예정=회색). 최종결제일(재등록일)/실제결제일(payments.paymentDate)/
+  미결제 건수. 이름 클릭 시 학생관리로 이동. 월정산=이번달 진행횟수, 아티스트=누적(count).
+  `components/StudentRotationInfo.jsx`, `domain/rotation.js`의 `cycleCells`.
+- **본수업 우선 규칙**: '추가수업'으로 잡으려는데 본수업 미배정이면 본수업으로 등록(알림).
+  '추가수업' 메모 붙은 고스트 확정도 여기서 잡힘. `handleScheduleSave` 안.
+- **당겨오기**: 추가수업 영역 체크박스. memo='당겨오기'라 로테이션엔 정규 1회로 포함
+  (추가/보강처럼 제외 안 됨). 미해제 당겨오기를 전 기간 실시간 구독(`pendingBroughtForward`)해
+  본수업 선택 위에 알림+해제. 해제=`bfAcknowledged:true`(수업은 유지). 다음주 목록 자동제외는
+  안 함(월 2~3건이라 위험한 generateAvailableStudents 안 건드림). `BroughtForwardNotices`.
+- **개인일정 항목 관리**: 하드코딩 → 기본항목(`constants/personalCategories.js`, 삭제불가) +
+  사용자항목(`site_settings/personal_categories`, 추가/삭제). 팝업 '항목 관리'로 그 자리 편집.
+  '기타'는 항상 맨 아래. `PersonalCategoryPicker`.
+- **팝업 색 박스 구분**(실수 방지): 본수업=파랑, 추가수업=주황, 보강=빨강, 개인일정 쌤=파랑/짱구=초록.
+  폰트·select 크기 통일. 일괄완료 버튼=단색 pill(오늘 버튼 톤). 고정 핀 FaThumbtack→FaRedoAlt.
+- 본수업 select 중복 key(주2회 학생) 버그 수정: key=name+index.
+
 검증: eslint(no-undef 없음) + dev HMR + 반복 날짜 단위테스트 18/18.
 주의: 로컬 `npm run build` 는 트랜스폼 뒤 네이티브 크래시(윈도우 rollup, **환경 문제**)라
 개발/배포엔 무관(배포는 Netlify 리눅스 빌드). dev 서버는 정상.
+  (참고: 회사 PC에서는 `npm run build` 정상 작동함 — 집 PC 환경 문제로 추정)
 
 ### 끝난 것
 
