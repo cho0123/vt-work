@@ -6,7 +6,7 @@ import {
     FaCheckCircle,
     FaTimesCircle,
     FaStickyNote,
-    FaThumbtack,
+    FaRedoAlt,
     FaClock,
 } from 'react-icons/fa';
 import { MemoInput } from './MemoInput.jsx';
@@ -181,11 +181,11 @@ export function ScheduleTab({
                                                 e.stopPropagation();
                                                 handleBulkCompleteDay(dateStr);
                                             }}
-                                            className="group mt-1.5 inline-flex w-full items-center justify-center gap-1 rounded-full bg-gradient-to-b from-emerald-400 to-green-500 px-2 py-1 text-[10px] font-semibold text-white shadow-sm shadow-emerald-500/30 ring-1 ring-inset ring-white/20 transition-all duration-150 hover:from-emerald-500 hover:to-green-600 hover:shadow-md hover:shadow-emerald-500/40 active:scale-95"
+                                            className="mt-1.5 inline-flex w-full items-center justify-center gap-1 rounded-full bg-green-600 px-2 py-1 text-[11px] font-semibold text-white shadow-sm transition-all hover:bg-green-700 active:scale-95"
                                             title="이 날의 미처리 학생 수업을 한꺼번에 완료 처리"
                                         >
-                                            <FaCheckCircle className="text-[9px] opacity-90 transition-transform duration-150 group-hover:scale-110" />
-                                            <span className="tracking-tight">일괄완료</span>
+                                            <FaCheckCircle className="text-[9px]" />
+                                            <span>일괄완료</span>
                                         </button>
                                     )}
                                 </div>
@@ -385,7 +385,7 @@ export function ScheduleTab({
                                                         )}
 
                                                         {item.isFixed && (
-                                                            <FaThumbtack className="text-[8px] min-w-fit" />
+                                                            <FaRedoAlt className="text-[7px] min-w-fit opacity-70" />
                                                         )}
                                                         {statusIcon}
 

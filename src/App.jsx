@@ -84,6 +84,7 @@ import { SettlementTab } from './components/SettlementTab.jsx';
 import { StudentsTab } from './components/StudentsTab.jsx';
 import { ROTATION_COLORS } from './constants/theme.js';
 import { expenseDefaults } from './constants/expenses.js';
+import { DEFAULT_PERSONAL_CATEGORIES } from './constants/personalCategories.js';
 import {
     computeRequirement,
     getRotationInfo,
@@ -422,6 +423,12 @@ function App() {
     const [schedules, setSchedules] = useState([]);
     const [fixedSchedules, setFixedSchedules] = useState([]);
     const [historySchedules, setHistorySchedules] = useState([]);
+    // 미해제 당겨오기 알림. 주간 데이터와 무관하게 항상(전 기간) 실시간 구독한다.
+    // 해제할 때까지 어느 주를 보든 팝업에 떠야 하기 때문.
+    const [pendingBroughtForward, setPendingBroughtForward] = useState([]);
+    // 사용자가 추가한 개인일정 항목. { master: [...], vocal: [...] }
+    // 기본 항목(DEFAULT_PERSONAL_CATEGORIES)과 합쳐서 팝업에 보여준다.
+    const [userPersonalCategories, setUserPersonalCategories] = useState({ master: [], vocal: [] });
     const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
     const [selectedSlot, setSelectedSlot] = useState({
         date: '',
@@ -453,6 +460,7 @@ function App() {
         status: '',
         gridType: 'master',
         isVocalProgress: false,
+        broughtForward: false, // 다음 회차를 당겨서 진행하는 수업
         vocalType: '60',
         masterType: '60',
     });
@@ -705,6 +713,67 @@ function App() {
         return () => unsubscribe();
     }, [user]);
 
+    // 미해제 당겨오기 알림 구독 (전 기간). 어느 주를 보든, 해제 전까지 팝업에 뜬다.
+    useEffect(() => {
+        if (!user) return;
+        const q = query(collection(db, 'schedules'), where('broughtForward', '==', true));
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            const list = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })).filter((s) => !s.bfAcknowledged);
+            setPendingBroughtForward(list);
+        });
+        return () => unsubscribe();
+    }, [user]);
+
+    // 사용자가 추가한 개인일정 항목 구독
+    useEffect(() => {
+        if (!user) return;
+        const ref = doc(db, 'site_settings', 'personal_categories');
+        const unsubscribe = onSnapshot(ref, (snap) => {
+            const data = snap.exists() ? snap.data() : {};
+            setUserPersonalCategories({
+                master: Array.isArray(data.master) ? data.master : [],
+                vocal: Array.isArray(data.vocal) ? data.vocal : [],
+            });
+        });
+        return () => unsubscribe();
+    }, [user]);
+
+    // 개인일정 항목 추가 (기본 항목/중복은 막는다)
+    const handleAddPersonalCategory = async (gridType, rawName) => {
+        const name = (rawName || '').trim();
+        if (!name) return;
+        const key = gridType === 'master' ? 'master' : 'vocal';
+        if (DEFAULT_PERSONAL_CATEGORIES[key].includes(name) || userPersonalCategories[key].includes(name)) {
+            alert('이미 있는 항목입니다.');
+            return;
+        }
+        try {
+            await setDoc(
+                doc(db, 'site_settings', 'personal_categories'),
+                { [key]: [...userPersonalCategories[key], name] },
+                { merge: true }
+            );
+        } catch (e) {
+            console.error('항목 추가 실패:', e);
+            alert('항목 추가에 실패했습니다: ' + e.message);
+        }
+    };
+
+    // 개인일정 항목 삭제 (사용자 추가 항목만 가능. 기본 항목은 호출 자체를 안 함)
+    const handleRemovePersonalCategory = async (gridType, name) => {
+        const key = gridType === 'master' ? 'master' : 'vocal';
+        try {
+            await setDoc(
+                doc(db, 'site_settings', 'personal_categories'),
+                { [key]: userPersonalCategories[key].filter((c) => c !== name) },
+                { merge: true }
+            );
+        } catch (e) {
+            console.error('항목 삭제 실패:', e);
+            alert('항목 삭제에 실패했습니다: ' + e.message);
+        }
+    };
+
     useEffect(() => {
         if (!expandedStudentId) {
             setPaymentHistory([]);
@@ -953,11 +1022,20 @@ function App() {
             }
 
             if (hasLessonThisWeek) {
+                // 고스트(직전 수업 미리보기)는 최근 4주 이내 수업만 참고한다.
+                // historySchedules 자체는 3개월치를 들고 있지만(사이클 잔여량 계산에 필요),
+                // 너무 오래된 수업을 고스트로 띄우지 않도록 여기서만 범위를 좁힌다.
+                const ghostLimit = new Date(weekStart);
+                ghostLimit.setDate(ghostLimit.getDate() - 28);
+                const ghostLimitStr = formatDateLocal(ghostLimit);
+
+                // historySchedules 는 날짜 내림차순이라 .find 가 가장 최근 수업을 먼저 잡는다.
                 const lastRecord = historySchedules.find(
                     (h) =>
                         h.studentId === student.id &&
                         (h.category === '레슨' || h.category === '상담') &&
-                        (h.gridType || 'master') === gridType
+                        (h.gridType || 'master') === gridType &&
+                        h.date >= ghostLimitStr
                 );
 
                 if (lastRecord) {
@@ -1002,6 +1080,16 @@ function App() {
         setActiveTab('students');
         setSearchTerm(sname);
         setExpandedStudentId(sid);
+    };
+
+    // 당겨오기 알림 '해제' — 알림만 끈다(bfAcknowledged=true). 수업 데이터는 유지.
+    const handleAcknowledgeBroughtForward = async (schedId) => {
+        try {
+            await updateDoc(doc(db, 'schedules', schedId), { bfAcknowledged: true });
+        } catch (e) {
+            console.error('당겨오기 알림 해제 실패:', e);
+            alert('알림 해제에 실패했습니다: ' + e.message);
+        }
     };
     const handleWeeklyMemoSave = async (text) => {
         try {
@@ -1446,6 +1534,7 @@ function App() {
                     status: movingSchedule.status || '',
                     gridType: existingItem.gridType || 'master', // GridType은 타겟 슬롯 따름
                     isVocalProgress: movingSchedule.isVocalProgress || false,
+                    broughtForward: movingSchedule.broughtForward || false,
                     vocalType: movingSchedule.vocalType || '60',
                     masterType: movingSchedule.masterType || '60',
                 });
@@ -1465,6 +1554,7 @@ function App() {
                     status: existingItem.status || '',
                     gridType: existingItem.gridType || 'master',
                     isVocalProgress: existingItem.isVocalProgress || false,
+                    broughtForward: existingItem.broughtForward || false,
                     vocalType: existingItem.vocalType || '60',
                     masterType: existingItem.masterType || '60',
                 });
@@ -1486,6 +1576,7 @@ function App() {
                     status: movingSchedule.status || '',
                     gridType: gridType, // 이동하려는 새 슬롯의 gridType 적용
                     isVocalProgress: movingSchedule.isVocalProgress || false,
+                    broughtForward: movingSchedule.broughtForward || false,
                     vocalType: movingSchedule.vocalType || '60',
                     masterType: movingSchedule.masterType || '60',
                 });
@@ -1502,6 +1593,7 @@ function App() {
                     status: '',
                     gridType,
                     isVocalProgress: false,
+                    broughtForward: false,
                     vocalType: '60',
                     masterType: '60',
                 });
@@ -1784,6 +1876,35 @@ function App() {
         if (scheduleTab === 'personal') {
             data.studentId = '';
             data.studentName = '';
+        }
+
+        // [NEW] 당겨오기: 다음 회차를 이번 주로 앞당겨 진행하는 수업.
+        // memo 를 '당겨오기'로 두면 로테이션 사용량 계산에서 '추가'/'보강'처럼
+        // 제외되지 않아 정규 1회로 세어진다(원하는 동작). 본수업 학생 선택 위에
+        // 알림으로 띄우기 위해 broughtForward 플래그도 남긴다.
+        if (scheduleTab === 'lesson' && data.studentId && scheduleForm.broughtForward) {
+            data.memo = '당겨오기';
+            data.broughtForward = true;
+            data.bfAcknowledged = false;
+        } else {
+            data.broughtForward = false;
+        }
+
+        // [NEW] 본수업 우선 규칙
+        // '추가수업'으로 잡으려는데 이 학생의 이번 주 본수업(정규 로테이션 수업)이
+        // 아직 배정 안 됐으면, 추가수업이 아니라 본수업으로 등록한다.
+        // 본수업 미배정 = generateAvailableStudents 목록에 이 학생의 정규 슬롯이
+        // 남아있는 것(추가수업/보강은 그 계산에서 제외되므로 남아있게 된다).
+        // 추가수업 드롭다운 오선택, '추가수업' 메모가 붙은 고스트 확정 둘 다 여기서 잡힌다.
+        if (scheduleTab === 'lesson' && data.studentId && typeof data.memo === 'string' && data.memo.includes('추가')) {
+            const candidates = generateAvailableStudents(saveDate, null, finalGridType);
+            // 정규 슬롯만(30분 짝맞추기 '(30분)' 항목은 제외) 본수업 미배정으로 본다.
+            const mainUnassigned = candidates.some((o) => o.id === data.studentId && !String(o.name).includes('(30분'));
+            if (mainUnassigned) {
+                data.memo = '';
+                data.isVocalProgress = false;
+                alert(`${data.studentName} 학생의 이번 주 본수업이 아직 없어, 추가수업이 아닌 본수업으로 등록합니다.`);
+            }
         }
 
         try {
@@ -2787,6 +2908,12 @@ function App() {
                     handleStopFixedSchedule={handleStopFixedSchedule}
                     handleCancelFixedOneTime={handleCancelFixedOneTime}
                     onGoToStudent={handleGoToStudent}
+                    onAcknowledgeBroughtForward={handleAcknowledgeBroughtForward}
+                    pendingBroughtForward={pendingBroughtForward}
+                    defaultPersonalCategories={DEFAULT_PERSONAL_CATEGORIES}
+                    userPersonalCategories={userPersonalCategories}
+                    onAddPersonalCategory={handleAddPersonalCategory}
+                    onRemovePersonalCategory={handleRemovePersonalCategory}
                 />
 
                 {/* 수강생 등록/수정 모달 (단가 입력 0 제거 로직 적용) */}
