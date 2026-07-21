@@ -2786,6 +2786,7 @@ function App() {
                     handleMoveSchedule={handleMoveSchedule}
                     handleStopFixedSchedule={handleStopFixedSchedule}
                     handleCancelFixedOneTime={handleCancelFixedOneTime}
+                    onGoToStudent={handleGoToStudent}
                 />
 
                 {/* 수강생 등록/수정 모달 (단가 입력 0 제거 로직 적용) */}

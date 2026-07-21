@@ -1,4 +1,5 @@
 import { FaCheckCircle, FaTimesCircle, FaClock } from 'react-icons/fa';
+import { StudentRotationInfo } from './StudentRotationInfo.jsx';
 
 /**
  * App.jsx 에서 그대로 옮긴 블록.
@@ -28,6 +29,7 @@ export function ScheduleModal({
     handleMoveSchedule,
     handleStopFixedSchedule,
     handleCancelFixedOneTime,
+    onGoToStudent,
 }) {
     if (!isScheduleModalOpen) return null;
 
@@ -45,6 +47,22 @@ export function ScheduleModal({
                     [V] {selectedSlot.date} {selectedSlot.time}:{selectedMinute}{' '}
                     {scheduleForm.gridType === 'master' ? '쌤일정' : '짱구일정'}
                 </h3>
+
+                {/* 레슨(학생 지정) 수업이면 학생 로테이션 요약을 보여준다 */}
+                {scheduleForm.category === '레슨' && scheduleForm.studentId && (
+                    <StudentRotationInfo
+                        student={students.find((s) => s.id === scheduleForm.studentId)}
+                        slotDate={selectedSlot.date}
+                        slotId={selectedSlot.id}
+                        onNameClick={
+                            onGoToStudent &&
+                            ((sid, sname) => {
+                                setIsScheduleModalOpen(false); // 팝업 닫고 이동
+                                onGoToStudent(sid, sname);
+                            })
+                        }
+                    />
+                )}
 
                 <div className="flex gap-4 mb-4">
                     <label className="flex items-center gap-2 cursor-pointer">
@@ -221,14 +239,12 @@ export function ScheduleModal({
                                 <select
                                     className="select select-sm border-gray-200 bg-white mt-1 w-full"
                                     value={scheduleForm.recurrence || 'weekly'}
-                                    onChange={(e) =>
-                                        setScheduleForm({ ...scheduleForm, recurrence: e.target.value })
-                                    }
+                                    onChange={(e) => setScheduleForm({ ...scheduleForm, recurrence: e.target.value })}
                                 >
                                     <option value="weekly">매주 같은 요일</option>
                                     <option value="monthlyDate">
-                                        매월 {scheduleForm.dayOfMonth || Number(selectedSlot?.date?.split('-')[2]) || ''}
-                                        일
+                                        매월{' '}
+                                        {scheduleForm.dayOfMonth || Number(selectedSlot?.date?.split('-')[2]) || ''}일
                                     </option>
                                     <option value="monthlyLast">매월 말일</option>
                                 </select>

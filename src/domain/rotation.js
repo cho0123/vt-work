@@ -204,3 +204,48 @@ export function sortByDateTime(scheds) {
             new Date((a.date || '') + 'T' + (a.time || '00:00')) - new Date((b.date || '') + 'T' + (b.time || '00:00'))
     );
 }
+
+/**
+ * 클릭한 수업이 속한 사이클을, 칸 단위로 상태를 매겨 돌려준다.
+ *
+ * 스케쥴 팝업의 로테이션 시각화에 쓴다. 클릭한 수업을 기준으로,
+ * 그 수업이 속한 사이클(req칸)의 각 칸이 어떤 상태인지 알려준다.
+ *   - 'done'    : 완료(+결석)된 수업
+ *   - 'current' : 지금 클릭한 이 수업 (아직 예정이면 강조만, 완료면 done)
+ *   - 'future'  : 아직 안 온 예정 수업
+ *
+ * 계산: 그 종류의 수업(완료 + 클릭한 본인)을 시간순으로 세워 클릭한 수업의
+ * 전역 순번(globalIndex)을 구하고, req 로 나눠 사이클과 칸 위치를 얻는다.
+ *
+ * @param typeScheds     그 종류(마스터 or 보컬)의 수업 목록. 시간순 정렬,
+ *                       완료·결석 + 클릭한 수업(pending 이어도)이 포함돼 있어야 함.
+ * @param currentId      클릭한 수업의 id
+ * @param req            사이클당 요구 횟수
+ * @returns { req, cycleIndex, label, cells: string[] }  또는 null
+ *          cells[i] ∈ 'done' | 'current' | 'future'
+ */
+export function cycleCells(typeScheds, currentId, req) {
+    if (!req || req <= 0) return null;
+
+    const globalIndex = typeScheds.findIndex((s) => s.id === currentId);
+    if (globalIndex === -1) return null;
+
+    const cycleIndex = Math.floor(globalIndex / req);
+    const posInCycle = globalIndex % req; // 이 사이클 안에서 클릭한 수업의 칸 위치
+
+    const cells = [];
+    for (let i = 0; i < req; i++) {
+        const sched = typeScheds[cycleIndex * req + i];
+        if (i === posInCycle) {
+            // 클릭한 수업 칸: 이미 완료됐으면 done, 아니면 current(강조)
+            const st = sched?.status;
+            cells.push(st === 'completed' || st === 'absent' ? 'done' : 'current');
+        } else if (sched && (sched.status === 'completed' || sched.status === 'absent')) {
+            cells.push('done');
+        } else {
+            cells.push('future');
+        }
+    }
+
+    return { req, cycleIndex, label: `R${cycleIndex + 1}`, cells };
+}
