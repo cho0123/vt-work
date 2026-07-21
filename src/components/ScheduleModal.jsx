@@ -197,17 +197,44 @@ export function ScheduleModal({
                         </>
                     )}
 
-                    <div className="form-control">
-                        <label className="label cursor-pointer justify-start gap-2">
-                            <input
-                                type="checkbox"
-                                className="checkbox checkbox-sm checkbox-primary"
-                                checked={scheduleForm.isFixed}
-                                onChange={(e) => setScheduleForm({ ...scheduleForm, isFixed: e.target.checked })}
-                            />
-                            <span className="label-text font-bold text-gray-700">매주 이 시간 고정</span>
-                        </label>
-                    </div>
+                    {/* 고정 기능은 개인일정 전용 (수업/레슨에는 쓰지 않음) */}
+                    {scheduleTab === 'personal' && (
+                        <div className="form-control">
+                            <label className="label cursor-pointer justify-start gap-2">
+                                <input
+                                    type="checkbox"
+                                    className="checkbox checkbox-sm checkbox-primary"
+                                    checked={scheduleForm.isFixed}
+                                    onChange={(e) =>
+                                        setScheduleForm({
+                                            ...scheduleForm,
+                                            isFixed: e.target.checked,
+                                            recurrence: e.target.checked
+                                                ? scheduleForm.recurrence || 'weekly'
+                                                : 'weekly',
+                                        })
+                                    }
+                                />
+                                <span className="label-text font-bold text-gray-700">이 시간 고정</span>
+                            </label>
+                            {scheduleForm.isFixed && (
+                                <select
+                                    className="select select-sm border-gray-200 bg-white mt-1 w-full"
+                                    value={scheduleForm.recurrence || 'weekly'}
+                                    onChange={(e) =>
+                                        setScheduleForm({ ...scheduleForm, recurrence: e.target.value })
+                                    }
+                                >
+                                    <option value="weekly">매주 같은 요일</option>
+                                    <option value="monthlyDate">
+                                        매월 {scheduleForm.dayOfMonth || Number(selectedSlot?.date?.split('-')[2]) || ''}
+                                        일
+                                    </option>
+                                    <option value="monthlyLast">매월 말일</option>
+                                </select>
+                            )}
+                        </div>
+                    )}
                     <input
                         type="text"
                         placeholder="메모"

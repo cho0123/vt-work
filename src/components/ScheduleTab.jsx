@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import {
     FaPlus,
     FaChevronLeft,
@@ -11,6 +12,7 @@ import {
 import { MemoInput } from './MemoInput.jsx';
 import { formatDateLocal, getStartOfWeek } from '../utils/date.js';
 import { getBadgeStyle } from '../utils/badgeStyle.js';
+import { fixedScheduleOccursOn } from '../domain/fixedRecurrence.js';
 
 /**
  * App.jsx 에서 그대로 옮긴 블록.
@@ -30,87 +32,99 @@ export function ScheduleTab({
     scheduleCancellations,
     getGhostSchedules,
     handleSlotClick,
+    handleBulkCompleteDay,
     weeklyMemo,
     handleWeeklyMemoSave,
 }) {
+    // 취소 내역을 매 칸마다 전체 훑지 않도록, 렌더당 한 번만 조회용 Set 으로 만든다.
+    // 키: `날짜|시간|학생ID` — 아래 필터의 비교 조건(date·time·studentId)과 동일하다.
+    const cancelledKeys = useMemo(
+        () => new Set(scheduleCancellations.map((c) => `${c.date}|${c.time}|${c.studentId}`)),
+        [scheduleCancellations]
+    );
+
     return (
         <div className="flex flex-col h-full w-full p-4 md:p-8 lg:px-12 gap-4">
             {/* 날짜 선택 및 메모 영역 (고정) */}
             <div className="flex-none flex flex-col gap-4">
                 <div className="flex justify-between items-center">
                     {/* [수정됨] 날짜 선택 컨트롤 영역 */}
-                    <div className="flex items-center gap-2 bg-white px-4 py-2 rounded-2xl shadow-sm border border-gray-100">
-                        {/* 년도 선택: 글씨 크기 text-lg로 축소 */}
+                    <div className="flex items-center gap-1.5 rounded-2xl bg-white px-3 py-2 shadow-sm ring-1 ring-gray-100">
+                        {/* 년도: 작고 옅은 회색 pill (드롭다운 배경이 비치지 않도록 불투명 bg) */}
                         <select
-                            className="select select-ghost text-lg font-extrabold focus:bg-gray-50 rounded-xl px-2 h-10 min-w-[100px]"
+                            className="cursor-pointer rounded-lg bg-gray-50 py-1.5 pl-2.5 pr-1 text-sm font-semibold text-gray-500 transition-colors hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-gray-200"
                             value={scheduleDate.getFullYear()}
                             onChange={handleScheduleYearChange}
                         >
                             {Array.from({ length: 10 }, (_, i) => new Date().getFullYear() - 5 + i).map((y) => (
-                                <option key={y} value={y}>
+                                <option key={y} value={y} style={{ backgroundColor: '#ffffff', color: '#374151' }}>
                                     {y}년
                                 </option>
                             ))}
                         </select>
 
-                        {/* 월 선택: 글씨 크기 text-lg로 축소 */}
+                        {/* 월: 색깔 배지 버튼 (화살표 없는 깔끔한 pill) */}
                         <select
-                            className="select select-ghost text-lg font-extrabold focus:bg-gray-50 rounded-xl px-2 h-10 text-orange-500"
+                            className="cursor-pointer appearance-none rounded-full bg-orange-500 px-4 py-1.5 text-center text-sm font-bold text-white shadow-sm transition-colors hover:bg-orange-600 focus:outline-none focus:ring-2 focus:ring-orange-200"
                             value={scheduleDate.getMonth() + 1}
                             onChange={handleScheduleMonthChange}
                         >
                             {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
-                                <option key={m} value={m}>
+                                <option key={m} value={m} style={{ backgroundColor: '#ffffff', color: '#374151' }}>
                                     {m}월
                                 </option>
                             ))}
                         </select>
 
-                        <div className="w-[2px] h-5 bg-gray-200 mx-2"></div>
+                        <div className="mx-1 h-5 w-px bg-gray-200"></div>
 
-                        {/* [추가됨] 이전 주 이동 버튼 */}
+                        {/* 주차: 화살표로 감싼 깔끔한 라벨 */}
                         <button
-                            className="btn btn-sm btn-circle btn-ghost text-gray-500"
+                            className="grid h-8 w-8 place-items-center rounded-full text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
+                            aria-label="이전 주"
                             onClick={() => {
                                 const d = new Date(scheduleDate);
                                 d.setDate(d.getDate() - 7);
                                 setScheduleDate(d);
                             }}
                         >
-                            <FaChevronLeft />
+                            <FaChevronLeft className="text-xs" />
                         </button>
 
-                        {/* 주차 선택 셀렉트 */}
                         <select
-                            className="select select-ghost font-bold text-gray-600 text-sm h-10 min-w-[200px] text-center"
+                            className="cursor-pointer appearance-none rounded-lg bg-gray-50 px-3 py-1.5 text-center text-sm font-semibold text-gray-600 transition-colors hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-gray-200"
                             onChange={handleScheduleWeekChange}
                             value={formatDateLocal(getStartOfWeek(scheduleDate))}
                         >
                             {weeksInMonth.map((w, i) => (
-                                <option key={i} value={formatDateLocal(w.start)}>
-                                    {i + 1}주차 ({w.start.getMonth() + 1}.{w.start.getDate()} ~ {w.end.getMonth() + 1}.
-                                    {w.end.getDate()})
+                                <option
+                                    key={i}
+                                    value={formatDateLocal(w.start)}
+                                    style={{ backgroundColor: '#ffffff', color: '#374151' }}
+                                >
+                                    {i + 1}주차 · {w.start.getMonth() + 1}.{w.start.getDate()}–{w.end.getMonth() + 1}.
+                                    {w.end.getDate()}
                                 </option>
                             ))}
                         </select>
 
-                        {/* [추가됨] 다음 주 이동 버튼 */}
                         <button
-                            className="btn btn-sm btn-circle btn-ghost text-gray-500"
+                            className="grid h-8 w-8 place-items-center rounded-full text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
+                            aria-label="다음 주"
                             onClick={() => {
                                 const d = new Date(scheduleDate);
                                 d.setDate(d.getDate() + 7);
                                 setScheduleDate(d);
                             }}
                         >
-                            <FaChevronRight />
+                            <FaChevronRight className="text-xs" />
                         </button>
                     </div>
 
                     <div className="flex gap-2">
                         <button
                             onClick={() => setScheduleDate(new Date())}
-                            className="btn btn-sm bg-gray-100 text-gray-500 hover:bg-black hover:text-white rounded-2xl shadow-md transition-all px-6"
+                            className="rounded-full bg-gray-900 px-5 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-gray-700 active:scale-95"
                         >
                             오늘
                         </button>
@@ -140,8 +154,10 @@ export function ScheduleTab({
                             Time
                         </div>
                         {weekDays.map((d, i) => {
-                            const isToday = formatDateLocal(d) === formatDateLocal(new Date());
-                            const isWeekend = d.getDay() === 0 || d.getDay() === 6;
+                            const dateStr = formatDateLocal(d);
+                            const isToday = dateStr === formatDateLocal(new Date());
+                            // 오늘 이전(지난 요일)에만 일괄 완료 버튼을 띄운다.
+                            const isPastDay = dateStr < formatDateLocal(new Date());
                             const dayColor =
                                 d.getDay() === 0
                                     ? 'text-red-500'
@@ -158,6 +174,20 @@ export function ScheduleTab({
                                         {['일', '월', '화', '수', '목', '금', '토'][d.getDay()]}
                                     </div>
                                     <div className={`text-lg font-extrabold ${dayColor}`}>{d.getDate()}</div>
+                                    {isPastDay && handleBulkCompleteDay && (
+                                        <button
+                                            type="button"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleBulkCompleteDay(dateStr);
+                                            }}
+                                            className="group mt-1.5 inline-flex w-full items-center justify-center gap-1 rounded-full bg-gradient-to-b from-emerald-400 to-green-500 px-2 py-1 text-[10px] font-semibold text-white shadow-sm shadow-emerald-500/30 ring-1 ring-inset ring-white/20 transition-all duration-150 hover:from-emerald-500 hover:to-green-600 hover:shadow-md hover:shadow-emerald-500/40 active:scale-95"
+                                            title="이 날의 미처리 학생 수업을 한꺼번에 완료 처리"
+                                        >
+                                            <FaCheckCircle className="text-[9px] opacity-90 transition-transform duration-150 group-hover:scale-110" />
+                                            <span className="tracking-tight">일괄완료</span>
+                                        </button>
+                                    )}
                                 </div>
                             );
                         })}
@@ -191,18 +221,13 @@ export function ScheduleTab({
                                             );
                                             const fixed = fixedSchedules.filter(
                                                 (s) =>
-                                                    s.dayOfWeek === dayOfWeek &&
+                                                    fixedScheduleOccursOn(s, day) &&
                                                     s.time === matchStr &&
                                                     (s.gridType || 'master') === gType &&
                                                     (!s.fixedStartDate || s.fixedStartDate <= dateStr) &&
                                                     (!s.fixedEndDate || s.fixedEndDate >= dateStr) &&
                                                     // [NEW] 취소 내역 확인 (날짜 + 시간 + 학생ID)
-                                                    !scheduleCancellations.some(
-                                                        (c) =>
-                                                            c.date === dateStr &&
-                                                            c.time === matchStr &&
-                                                            c.studentId === s.studentId
-                                                    )
+                                                    !cancelledKeys.has(`${dateStr}|${matchStr}|${s.studentId}`)
                                             );
                                             const merged = [...normal];
                                             fixed.forEach((f) => {

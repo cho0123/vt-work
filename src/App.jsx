@@ -92,6 +92,7 @@ import {
     rotationBufferDate,
     sortByDateTime,
 } from './domain/rotation.js';
+import { fixedScheduleOccursOn } from './domain/fixedRecurrence.js';
 
 function App() {
     const [user, setUser] = useState(null);
@@ -447,6 +448,8 @@ function App() {
         memo: '',
         category: '레슨',
         isFixed: false,
+        recurrence: 'weekly',
+        dayOfMonth: null,
         status: '',
         gridType: 'master',
         isVocalProgress: false,
@@ -1075,18 +1078,43 @@ function App() {
             if (!s.studentId) return;
             if (s.fixedStartDate && s.fixedStartDate > weekEndStr) return;
 
-            const dayIndex = s.dayOfWeek === 0 ? 6 : s.dayOfWeek - 1;
-            const targetDate = new Date(weekStart);
-            targetDate.setDate(weekStart.getDate() + dayIndex);
-            const targetDateStr = formatDateLocal(targetDate);
+            const rec = s.recurrence || 'weekly';
 
-            const isOverridden = schedules.some((sch) => sch.date === targetDateStr && sch.time === s.time);
-            const isCancelled = scheduleCancellations.some(
-                (c) => c.date === targetDateStr && c.time === s.time && c.studentId === s.studentId
-            );
+            if (rec === 'weekly') {
+                // ── 매주 고정 (기존 로직 그대로) ──
+                const dayIndex = s.dayOfWeek === 0 ? 6 : s.dayOfWeek - 1;
+                const targetDate = new Date(weekStart);
+                targetDate.setDate(weekStart.getDate() + dayIndex);
+                const targetDateStr = formatDateLocal(targetDate);
 
-            if (!isOverridden && !isCancelled) {
-                addUsage(s.studentId, s.masterType, s.vocalType, sType);
+                const isOverridden = schedules.some((sch) => sch.date === targetDateStr && sch.time === s.time);
+                const isCancelled = scheduleCancellations.some(
+                    (c) => c.date === targetDateStr && c.time === s.time && c.studentId === s.studentId
+                );
+
+                if (!isOverridden && !isCancelled) {
+                    addUsage(s.studentId, s.masterType, s.vocalType, sType);
+                }
+            } else {
+                // ── 매월 고정: 이번 주 7일 중 규칙에 걸리는 날을 찾는다 (주가 두 달에 걸칠 수 있음) ──
+                for (let i = 0; i < 7; i++) {
+                    const targetDate = new Date(weekStart);
+                    targetDate.setDate(weekStart.getDate() + i);
+                    if (!fixedScheduleOccursOn(s, targetDate)) continue;
+
+                    const targetDateStr = formatDateLocal(targetDate);
+                    if (s.fixedStartDate && s.fixedStartDate > targetDateStr) continue;
+                    if (s.fixedEndDate && s.fixedEndDate < targetDateStr) continue;
+
+                    const isOverridden = schedules.some((sch) => sch.date === targetDateStr && sch.time === s.time);
+                    const isCancelled = scheduleCancellations.some(
+                        (c) => c.date === targetDateStr && c.time === s.time && c.studentId === s.studentId
+                    );
+
+                    if (!isOverridden && !isCancelled) {
+                        addUsage(s.studentId, s.masterType, s.vocalType, sType);
+                    }
+                }
             }
         });
 
@@ -1413,6 +1441,8 @@ function App() {
                     memo: movingSchedule.memo || '',
                     category: movingSchedule.category || '레슨',
                     isFixed: movingSchedule.isFixed || false,
+                    recurrence: movingSchedule.recurrence || 'weekly',
+                    dayOfMonth: movingSchedule.dayOfMonth || null,
                     status: movingSchedule.status || '',
                     gridType: existingItem.gridType || 'master', // GridType은 타겟 슬롯 따름
                     isVocalProgress: movingSchedule.isVocalProgress || false,
@@ -1430,6 +1460,8 @@ function App() {
                     memo: existingItem.memo || '',
                     category: existingItem.category || '레슨',
                     isFixed: existingItem.isFixed || false,
+                    recurrence: existingItem.recurrence || 'weekly',
+                    dayOfMonth: existingItem.dayOfMonth || null,
                     status: existingItem.status || '',
                     gridType: existingItem.gridType || 'master',
                     isVocalProgress: existingItem.isVocalProgress || false,
@@ -1449,6 +1481,8 @@ function App() {
                     memo: movingSchedule.memo || '',
                     category: movingSchedule.category || '레슨',
                     isFixed: movingSchedule.isFixed || false,
+                    recurrence: movingSchedule.recurrence || 'weekly',
+                    dayOfMonth: movingSchedule.dayOfMonth || null,
                     status: movingSchedule.status || '',
                     gridType: gridType, // 이동하려는 새 슬롯의 gridType 적용
                     isVocalProgress: movingSchedule.isVocalProgress || false,
@@ -1463,6 +1497,8 @@ function App() {
                     memo: '',
                     category: '레슨',
                     isFixed: false,
+                    recurrence: 'weekly',
+                    dayOfMonth: null,
                     status: '',
                     gridType,
                     isVocalProgress: false,
@@ -1488,7 +1524,84 @@ function App() {
                 status: '',
             }));
         } else {
-            setScheduleForm((prev) => ({ ...prev, category: '레슨', status: '' }));
+            // 수업(레슨)에는 고정 기능을 쓰지 않는다. 개인일정에서 켜둔 채 넘어와도 해제한다.
+            setScheduleForm((prev) => ({
+                ...prev,
+                category: '레슨',
+                status: '',
+                isFixed: false,
+                recurrence: 'weekly',
+            }));
+        }
+    };
+
+    // [NEW] 특정 지난 날짜의 '미처리' 학생 수업을 한꺼번에 완료 처리한다.
+    // - 대상: 그 날짜의 학생 수업(studentId 있음) 중 아직 아무 상태도 없는 것.
+    //   완료·결석·보강·지각 등 이미 처리된 건 상태가 있으므로 자동으로 제외된다.
+    // - 개인일정(studentId 없음)·고정(핀)·예정(유령)은 제외한다.
+    // - 개별 완료와 동일하게 상태를 '완료'로 바꾸고, 아티스트 학생은 count 를 올린다.
+    //   단, 개별 저장 시의 '미수금 자동정리'는 하지 않는다. 여러 건을 한 번에 완료할 때
+    //   학생의 미수금이 의도치 않게 대량 삭제되는 것을 막기 위함이다.
+    const handleBulkCompleteDay = async (dateStr) => {
+        if (isWeekLocked || isScheduleLocked) {
+            alert('이번 주가 마감되어 있어 완료 처리할 수 없습니다.');
+            return;
+        }
+
+        // 정산이 마감된 달이면 개별 완료와 동일하게 차단한다.
+        try {
+            const [y, m] = dateStr.split('-');
+            const lockSnap = await getDoc(doc(db, 'settlement_memos', `${y}-${m}`));
+            if (lockSnap.exists() && lockSnap.data().status === 'completed') {
+                alert(`[${y}년 ${m}월]은 정산이 마감되어 완료 처리할 수 없습니다.`);
+                return;
+            }
+        } catch (e) {
+            console.error('정산 마감 확인 실패', e);
+            alert('정산 마감 여부를 확인하지 못해 완료 처리를 중단합니다.');
+            return;
+        }
+
+        const targets = schedules.filter(
+            (s) => s.date === dateStr && s.studentId && !s.status && !s.isGhost && !s.isFixed
+        );
+
+        if (targets.length === 0) {
+            alert('완료 처리할 미처리 수업이 없습니다.');
+            return;
+        }
+
+        const list = [...targets]
+            .sort((a, b) => a.time.localeCompare(b.time))
+            .map((s) => `· ${s.time} ${s.studentName || ''}${s.gridType === 'vocal' ? ' (보컬)' : ''}`)
+            .join('\n');
+        if (!window.confirm(`${dateStr} 미처리 수업 ${targets.length}건을 완료 처리합니다:\n\n${list}\n\n계속할까요?`))
+            return;
+
+        try {
+            // 1. 상태를 한꺼번에 '완료'로 (원자적 일괄 쓰기)
+            const batch = writeBatch(db);
+            targets.forEach((s) => batch.update(doc(db, 'schedules', s.id), { status: 'completed' }));
+            await batch.commit();
+
+            // 2. 아티스트 학생은 완료 건수만큼 count 를 올린다 (학생별로 합산해 1회 트랜잭션).
+            const perStudent = {};
+            targets.forEach((s) => {
+                perStudent[s.studentId] = (perStudent[s.studentId] || 0) + 1;
+            });
+            for (const [sid, cnt] of Object.entries(perStudent)) {
+                const stu = students.find((x) => x.id === sid);
+                if (stu && stu.isArtist) {
+                    await updateStudentTx(sid, (sData) => ({
+                        patch: { count: String(parseInt(sData.count || '0') + cnt) },
+                    }));
+                }
+            }
+
+            alert(`${targets.length}건을 완료 처리했습니다.`);
+        } catch (e) {
+            console.error('일괄 완료 처리 실패', e);
+            alert('일괄 완료 처리 중 오류가 발생했습니다. 일부만 처리되었을 수 있습니다.');
         }
     };
 
@@ -1643,13 +1756,27 @@ function App() {
         }
 
         // 2. 스케쥴 저장
+        // 고정 반복 방식(recurrence)에 따라 저장 필드가 갈린다.
+        //  - weekly       : dayOfWeek 사용 (기존 방식)
+        //  - monthlyDate  : dayOfMonth 사용. 신규/이동은 클릭한 칸 날짜로, 편집이면 기존 값 유지
+        //                   (말일로 당겨 표시된 칸을 편집할 때 지정일이 바뀌지 않도록)
+        //  - monthlyLast  : 날짜 필드 불필요 (말일은 매달 계산)
+        const recurrence = scheduleForm.isFixed ? scheduleForm.recurrence || 'weekly' : null;
+        const clickedDayOfMonth = selectedSlot.date ? Number(selectedSlot.date.split('-')[2]) : null;
         const data = {
             time: timeToSave,
             ...scheduleForm,
             vocalType: finalVocalType, // [NEW] Use inferred vocal type
             gridType: finalGridType,
             date: scheduleForm.isFixed ? 'FIXED' : selectedSlot.date,
-            dayOfWeek: scheduleForm.isFixed ? selectedSlot.dayOfWeek : null,
+            recurrence,
+            dayOfWeek: recurrence === 'weekly' ? selectedSlot.dayOfWeek : null,
+            dayOfMonth:
+                recurrence === 'monthlyDate'
+                    ? selectedSlot.id && scheduleForm.dayOfMonth
+                        ? Number(scheduleForm.dayOfMonth)
+                        : clickedDayOfMonth
+                    : null,
             fixedStartDate: scheduleForm.isFixed ? selectedSlot.date || formatDateLocal(new Date()) : null,
             relatedScheduleId: selectedMakeupId || null,
         };
@@ -2502,6 +2629,7 @@ function App() {
                             scheduleCancellations={scheduleCancellations}
                             getGhostSchedules={getGhostSchedules}
                             handleSlotClick={handleSlotClick}
+                            handleBulkCompleteDay={handleBulkCompleteDay}
                             weeklyMemo={weeklyMemo}
                             handleWeeklyMemoSave={handleWeeklyMemoSave}
                         />
