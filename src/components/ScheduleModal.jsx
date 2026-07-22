@@ -71,28 +71,65 @@ export function ScheduleModal({
                     />
                 )}
 
-                <div className="flex gap-4 mb-4">
-                    <label className="flex items-center gap-2 cursor-pointer">
+                {scheduleTab === 'personal' ? (
+                    // 개인일정: 정시/30분 빠른 선택 + 분 직접 입력 (예: 병원예약 5시 17분)
+                    <div className="flex items-center gap-2 mb-4 flex-wrap">
+                        <span className="font-bold text-sm text-gray-600">분</span>
+                        <button
+                            type="button"
+                            onClick={() => setSelectedMinute('00')}
+                            className={`rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${selectedMinute === '00' ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
+                        >
+                            정시
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setSelectedMinute('30')}
+                            className={`rounded-lg px-3 py-1.5 text-xs font-bold transition-colors ${selectedMinute === '30' ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
+                        >
+                            30분
+                        </button>
                         <input
-                            type="radio"
-                            name="minute"
-                            className="radio radio-sm radio-primary"
-                            checked={selectedMinute === '00'}
-                            onChange={() => setSelectedMinute('00')}
+                            type="text"
+                            inputMode="numeric"
+                            value={selectedMinute}
+                            onChange={(e) => setSelectedMinute(e.target.value.replace(/\D/g, '').slice(0, 2))}
+                            onBlur={() =>
+                                setSelectedMinute(
+                                    String(Math.min(59, Math.max(0, Number(selectedMinute) || 0))).padStart(2, '0')
+                                )
+                            }
+                            className="input input-sm w-14 border-gray-200 bg-white text-center"
+                            placeholder="분"
+                            aria-label="분 직접 입력"
                         />
-                        <span className="font-bold">00분 (정각)</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                        <input
-                            type="radio"
-                            name="minute"
-                            className="radio radio-sm radio-primary"
-                            checked={selectedMinute === '30'}
-                            onChange={() => setSelectedMinute('30')}
-                        />
-                        <span className="font-bold">30분</span>
-                    </label>
-                </div>
+                        <span className="text-xs text-gray-400">직접입력</span>
+                    </div>
+                ) : (
+                    // 레슨: 정시 / 30분
+                    <div className="flex gap-4 mb-4">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                                type="radio"
+                                name="minute"
+                                className="radio radio-sm radio-primary"
+                                checked={selectedMinute === '00'}
+                                onChange={() => setSelectedMinute('00')}
+                            />
+                            <span className="font-bold">00분 (정각)</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                            <input
+                                type="radio"
+                                name="minute"
+                                className="radio radio-sm radio-primary"
+                                checked={selectedMinute === '30'}
+                                onChange={() => setSelectedMinute('30')}
+                            />
+                            <span className="font-bold">30분</span>
+                        </label>
+                    </div>
+                )}
 
                 {/* [NEW] Master 30분 진행 체크박스 (Master 그리드일 때만 노출) */}
                 {scheduleForm.gridType === 'master' && (

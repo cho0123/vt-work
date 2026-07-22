@@ -1624,6 +1624,8 @@ function App() {
                 isFixed: false,
                 recurrence: 'weekly',
             }));
+            // 레슨은 정시/30분만 쓴다. 개인일정에서 세밀한 분(예: 20)을 골랐다면 정시로 되돌린다.
+            setSelectedMinute((prev) => (prev === '00' || prev === '30' ? prev : '00'));
         }
     };
 

@@ -236,11 +236,43 @@ export function ScheduleTab({
                                             return merged;
                                         };
 
+                                        // [NEW] 정시/30분이 아닌 세밀한 시간(개인일정 등)도 이 시간대(hour) 칸에 함께 표시
+                                        const getExtraItems = () => {
+                                            const inHour = (t) => {
+                                                const [h, m] = (t || '').split(':');
+                                                return Number(h) === hour && m !== '00' && m !== '30';
+                                            };
+                                            const normal = schedules.filter(
+                                                (s) =>
+                                                    s.date === dateStr &&
+                                                    (s.gridType || 'master') === gType &&
+                                                    inHour(s.time)
+                                            );
+                                            const fixed = fixedSchedules.filter(
+                                                (s) =>
+                                                    fixedScheduleOccursOn(s, day) &&
+                                                    (s.gridType || 'master') === gType &&
+                                                    inHour(s.time) &&
+                                                    (!s.fixedStartDate || s.fixedStartDate <= dateStr) &&
+                                                    (!s.fixedEndDate || s.fixedEndDate >= dateStr) &&
+                                                    !cancelledKeys.has(`${dateStr}|${s.time}|${s.studentId}`)
+                                            );
+                                            const merged = [...normal];
+                                            fixed.forEach((f) => {
+                                                if (!merged.some((n) => n.time === f.time)) merged.push(f);
+                                            });
+                                            return merged;
+                                        };
+
                                         const real00 = getRealItems(`${hour}:00`);
                                         const real30 = getRealItems(`${hour}:30`);
-                                        const hasReal = real00.length > 0 || real30.length > 0;
+                                        const realExtra = getExtraItems();
+                                        const hasReal = real00.length > 0 || real30.length > 0 || realExtra.length > 0;
 
-                                        let items = [...real00, ...real30];
+                                        // 시간순 정렬 (예: 5:00 → 5:20 → 5:30)
+                                        let items = [...real00, ...real30, ...realExtra].sort((a, b) =>
+                                            (a.time || '').localeCompare(b.time || '')
+                                        );
 
                                         // [수정] 해당 시간대(Hour)에 실제 스케줄이 하나라도 있으면 예정(Ghost)은 표시하지 않음
                                         if (!hasReal) {
@@ -372,7 +404,7 @@ export function ScheduleTab({
                                                         }}
                                                         className={`w-full rounded-md p-1 text-[12px] flex items-center gap-1 shadow-sm border overflow-hidden shrink-0 transition-all ${statusStyle}`}
                                                     >
-                                                        {item.time.endsWith(':30') && (
+                                                        {itemMinute !== '00' && (
                                                             <span
                                                                 className={`px-1 rounded text-[10px] font-bold shrink-0 ${
                                                                     item.status === 'completed'
@@ -380,7 +412,7 @@ export function ScheduleTab({
                                                                         : 'bg-pink-100 text-pink-600'
                                                                 }`}
                                                             >
-                                                                30
+                                                                {itemMinute}
                                                             </span>
                                                         )}
 
