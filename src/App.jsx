@@ -37,7 +37,7 @@ import {
     FaCalendarAlt,
     FaList,
 } from 'react-icons/fa';
-import { auth, db, storage } from './firebase';
+import { auth, db } from './firebase';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import {
     collection,
@@ -56,7 +56,7 @@ import {
     writeBatch,
     runTransaction,
 } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL, uploadString } from 'firebase/storage';
+import { backupToFirestore } from './utils/backup.js';
 import {
     formatDateLocal,
     formatMonthDay,
@@ -2192,6 +2192,17 @@ function App() {
 
         await setDoc(doc(db, 'weekly_locks', startStr), { locked: newStatus }, { merge: true });
         setIsWeekLocked(newStatus);
+
+        // 최종 마감 시 데이터 스냅샷을 클라우드에 백업한다(안전장치).
+        // 마감을 막지 않도록 배경에서 진행하고, 끝나면 결과만 알린다.
+        if (newStatus) {
+            backupToFirestore(db, '주간마감')
+                .then(({ count }) => alert(`백업 완료 (${count}건 저장됨).`))
+                .catch((e) => {
+                    console.error('데이터 백업 실패', e);
+                    alert('주간 마감은 완료되었습니다.\n다만 데이터 백업에 실패했습니다(데이터에는 이상 없음).');
+                });
+        }
     };
 
     const handleNextDueDateChange = async (sid, date) =>
@@ -2684,12 +2695,12 @@ function App() {
                                     <button
                                         onClick={handleToggleWeekLock}
                                         disabled={!isWeekLocked && !isAllProcessed}
-                                        className={`btn btn-sm border-none gap-2 font-bold rounded-2xl shadow-md transition-all px-6 ${
+                                        className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs md:text-sm font-semibold shadow-sm transition-all active:scale-95 ${
                                             isWeekLocked
-                                                ? 'bg-orange-100 text-orange-600 hover:bg-orange-200 hover:shadow-lg'
+                                                ? 'bg-orange-500 text-white hover:bg-orange-600'
                                                 : isAllProcessed
-                                                  ? 'bg-black text-white hover:bg-gray-800 hover:shadow-lg'
-                                                  : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                                                  ? 'bg-gray-900 text-white hover:bg-gray-700'
+                                                  : 'cursor-not-allowed bg-gray-100 text-gray-300 shadow-none active:scale-100'
                                         }`}
                                     >
                                         {isWeekLocked ? (
@@ -2707,10 +2718,10 @@ function App() {
                         {activeTab === 'schedule' && (
                             <button
                                 onClick={() => setIsScheduleLocked(!isScheduleLocked)}
-                                className={`btn btn-sm border-none gap-2 font-bold rounded-2xl shadow-md transition-all px-6 ${
+                                className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs md:text-sm font-semibold shadow-sm transition-all active:scale-95 ${
                                     isScheduleLocked
-                                        ? 'bg-red-100 text-red-600 hover:bg-red-200 hover:shadow-lg'
-                                        : 'bg-gray-100 text-gray-500 hover:bg-black hover:text-white hover:shadow-lg'
+                                        ? 'bg-red-500 text-white hover:bg-red-600'
+                                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                                 }`}
                             >
                                 {isScheduleLocked ? (

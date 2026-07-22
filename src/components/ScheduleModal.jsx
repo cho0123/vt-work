@@ -464,7 +464,7 @@ export function ScheduleModal({
                                                         status: prev.status === 'completed' ? '' : 'completed',
                                                     }))
                                                 }
-                                                className={`btn btn-xs h-8 border-none disabled:bg-gray-100 disabled:text-gray-300 disabled:cursor-not-allowed ${scheduleForm.status === 'completed' ? 'bg-green-600 text-white' : 'bg-green-50 text-green-600'}`}
+                                                className={`flex h-9 items-center justify-center gap-1 rounded-lg text-xs font-bold transition-all active:scale-95 disabled:cursor-not-allowed disabled:border-none disabled:bg-gray-100 disabled:text-gray-300 disabled:active:scale-100 ${scheduleForm.status === 'completed' ? 'bg-green-600 text-white shadow-sm' : 'border-2 border-green-500 bg-green-50 text-green-700 hover:bg-green-100'}`}
                                             >
                                                 {scheduleForm.status === 'completed' && <FaCheckCircle />} 완료
                                             </button>
@@ -482,7 +482,7 @@ export function ScheduleModal({
                                                                     : 'reschedule',
                                                         }))
                                                     }
-                                                    className={`btn btn-xs h-8 border-none ${scheduleForm.status === 'reschedule' || scheduleForm.status === 'reschedule_assigned' ? 'bg-yellow-500 text-white' : 'bg-yellow-50 text-yellow-600'}`}
+                                                    className={`flex h-9 items-center justify-center gap-1 rounded-lg text-xs font-bold transition-all active:scale-95 ${scheduleForm.status === 'reschedule' || scheduleForm.status === 'reschedule_assigned' ? 'bg-yellow-500 text-white shadow-sm' : 'bg-yellow-50 text-yellow-600 hover:bg-yellow-100'}`}
                                                 >
                                                     {(scheduleForm.status === 'reschedule' ||
                                                         scheduleForm.status === 'reschedule_assigned') && (
@@ -501,7 +501,7 @@ export function ScheduleModal({
                                                         status: prev.status === 'absent' ? '' : 'absent',
                                                     }))
                                                 }
-                                                className={`btn btn-xs h-8 border-none disabled:bg-gray-100 disabled:text-gray-300 disabled:cursor-not-allowed ${scheduleForm.status === 'absent' ? 'bg-red-500 text-white' : 'bg-red-50 text-red-600'}`}
+                                                className={`flex h-9 items-center justify-center gap-1 rounded-lg text-xs font-bold transition-all active:scale-95 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-300 disabled:active:scale-100 ${scheduleForm.status === 'absent' ? 'bg-red-500 text-white shadow-sm' : 'bg-red-50 text-red-600 hover:bg-red-100'}`}
                                             >
                                                 {scheduleForm.status === 'absent' && <FaTimesCircle />} 결석
                                             </button>
@@ -512,72 +512,74 @@ export function ScheduleModal({
                         </div>
                     )}
 
-                    <div className="flex gap-2 mt-4">
-                        {/* 1. 삭제 버튼 (ID가 있을 때만) */}
-                        {selectedSlot.id && (
-                            <button
-                                onClick={handleScheduleDelete}
-                                disabled={isWeekLocked || isScheduleLocked}
-                                className="btn btn-sm bg-red-500 text-white hover:bg-red-600 flex-1 border-none disabled:bg-gray-200 disabled:text-gray-400"
-                            >
-                                삭제
-                            </button>
-                        )}
-
-                        {/* 2. 멈춤 vs 이동 버튼 (ID가 있을 때만) */}
-                        {selectedSlot.id && (
-                            <>
-                                {!!scheduleForm.isFixed ? (
+                    <div className="mt-4 flex flex-col gap-2">
+                        {/* 보조 액션 줄: 삭제 / 이동·멈춤 / 취소 (해당될 때만 표시) */}
+                        {(selectedSlot.id || !!scheduleForm.isFixed) && (
+                            <div className="flex gap-2">
+                                {/* 삭제 (ID가 있을 때만) */}
+                                {selectedSlot.id && (
                                     <button
-                                        onClick={handleStopFixedSchedule}
+                                        onClick={handleScheduleDelete}
                                         disabled={isWeekLocked || isScheduleLocked}
-                                        className="btn btn-sm bg-orange-600 text-white hover:bg-orange-700 flex-1 border-none disabled:bg-gray-200 disabled:text-gray-400"
+                                        className="flex-1 rounded-xl bg-red-500 px-3 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-red-600 active:scale-95 disabled:bg-gray-200 disabled:text-gray-400 disabled:shadow-none disabled:active:scale-100"
                                     >
-                                        멈춤
-                                    </button>
-                                ) : (
-                                    <button
-                                        onClick={() => {
-                                            setMovingSchedule({
-                                                ...scheduleForm,
-                                                id: selectedSlot.id,
-                                                status: scheduleForm.status,
-                                            });
-                                            setIsScheduleModalOpen(false);
-                                        }}
-                                        disabled={isWeekLocked || isScheduleLocked}
-                                        className="btn btn-sm bg-orange-400 text-white hover:bg-orange-500 flex-1 border-none disabled:bg-gray-200 disabled:text-gray-400"
-                                    >
-                                        이동
+                                        삭제
                                     </button>
                                 )}
-                            </>
+
+                                {/* 멈춤(고정) vs 이동 (ID가 있을 때만) */}
+                                {selectedSlot.id &&
+                                    (!!scheduleForm.isFixed ? (
+                                        <button
+                                            onClick={handleStopFixedSchedule}
+                                            disabled={isWeekLocked || isScheduleLocked}
+                                            className="flex-1 rounded-xl bg-orange-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-orange-700 active:scale-95 disabled:bg-gray-200 disabled:text-gray-400 disabled:shadow-none disabled:active:scale-100"
+                                        >
+                                            멈춤
+                                        </button>
+                                    ) : (
+                                        <button
+                                            onClick={() => {
+                                                setMovingSchedule({
+                                                    ...scheduleForm,
+                                                    id: selectedSlot.id,
+                                                    status: scheduleForm.status,
+                                                });
+                                                setIsScheduleModalOpen(false);
+                                            }}
+                                            disabled={isWeekLocked || isScheduleLocked}
+                                            className="flex-1 rounded-xl bg-orange-400 px-3 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-orange-500 active:scale-95 disabled:bg-gray-200 disabled:text-gray-400 disabled:shadow-none disabled:active:scale-100"
+                                        >
+                                            이동
+                                        </button>
+                                    ))}
+
+                                {/* 취소 (이미 생성된 고정 스케줄의 일회성 취소) */}
+                                {!!scheduleForm.isFixed && (
+                                    <button
+                                        onClick={handleCancelFixedOneTime}
+                                        disabled={isWeekLocked || isScheduleLocked}
+                                        className="flex-1 rounded-xl bg-green-500 px-3 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-green-600 active:scale-95 disabled:bg-gray-200 disabled:text-gray-400 disabled:shadow-none disabled:active:scale-100"
+                                    >
+                                        취소
+                                    </button>
+                                )}
+                            </div>
                         )}
 
-                        {/* 3. 취소 버튼 (이미 생성된 고정 스케줄의 일회성 취소) */}
-                        {!!scheduleForm.isFixed && (
-                            <button
-                                onClick={handleCancelFixedOneTime}
-                                disabled={isWeekLocked || isScheduleLocked}
-                                className="btn btn-sm bg-green-500 text-white hover:bg-green-600 flex-1 border-none disabled:bg-gray-200 disabled:text-gray-400"
-                            >
-                                취소
-                            </button>
-                        )}
-
-                        {/* 4. 저장 / 이동완료 버튼 */}
+                        {/* 주 액션 줄: 저장 or 이동완료 (항상 한 줄 전체 폭) */}
                         {movingSchedule ? (
-                            <div className="flex-[2] flex gap-2">
+                            <div className="flex gap-2">
                                 <button
                                     onClick={() => setMovingSchedule(null)}
-                                    className="btn btn-sm bg-gray-400 text-white flex-1 border-none"
+                                    className="flex-1 rounded-xl bg-gray-100 px-3 py-2.5 text-sm font-semibold text-gray-600 transition-all hover:bg-gray-200 active:scale-95"
                                 >
                                     이동 취소
                                 </button>
                                 <button
                                     onClick={handleMoveSchedule}
                                     disabled={isWeekLocked || isScheduleLocked}
-                                    className="btn btn-sm bg-blue-600 text-white flex-[2] border-none disabled:bg-gray-200 disabled:text-gray-400"
+                                    className="flex-[2] rounded-xl bg-blue-600 px-3 py-2.5 text-sm font-bold text-white shadow-sm transition-all hover:bg-blue-700 active:scale-95 disabled:bg-gray-200 disabled:text-gray-400 disabled:shadow-none disabled:active:scale-100"
                                 >
                                     이동 완료
                                 </button>
@@ -586,7 +588,7 @@ export function ScheduleModal({
                             <button
                                 onClick={handleScheduleSave}
                                 disabled={isWeekLocked || isScheduleLocked}
-                                className="btn btn-sm bg-black text-white flex-[2] border-none disabled:bg-gray-200 disabled:text-gray-400"
+                                className="w-full rounded-xl bg-gray-900 px-3 py-2.5 text-sm font-bold text-white shadow-sm transition-all hover:bg-gray-700 active:scale-95 disabled:bg-gray-200 disabled:text-gray-400 disabled:shadow-none disabled:active:scale-100"
                             >
                                 저장
                             </button>

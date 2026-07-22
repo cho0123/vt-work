@@ -161,6 +161,29 @@ npm run verify-student-edit  # 학생 수정이 결제 결과를 덮지 않는�
 개발/배포엔 무관(배포는 Netlify 리눅스 빌드). dev 서버는 정상.
   (참고: 회사 PC에서는 `npm run build` 정상 작동함 — 집 PC 환경 문제로 추정)
 
+### 2026-07-22 추가 (스케쥴 UI 통일 + 데이터 백업)
+
+- **데이터 백업 (양방향)** — `src/utils/backup.js`.
+  - `backupToFirestore(db, reason)`: 전체 데이터(영수증 이미지 `payments.imageUrl` 제외)를
+    같은 프로젝트 `backups` 컬렉션에 스냅샷 저장. 1MB 한도 때문에 문자열로 청크 분할
+    (`backups/{id}` 메타 + `backups/{id}/chunks/{n}` = `{json}`). 최근 20개만 유지.
+    **스케쥴 '최종'(주간마감) 버튼**에 연결됨(`handleToggleWeekLock`, 배경 실행·실패해도 마감은 유지).
+  - `backupToLocalFile(db)`: 전체 데이터를 JSON 파일로 다운로드(로컬). **나중에 만들 학생관리
+    '입금정리' 버튼**(PC 전용)에 붙일 예정 — 아직 미연결.
+  - 왜 이 방식: Firebase **Storage 는 유료(Blaze) 전환 필요** → 무료(Spark)로 쓰려고 Firestore 에 저장.
+    기존 firestore.rules(`match /{document=**}`)가 backups 도 허용 UID 만 접근하게 이미 막아줌(추가 규칙 불필요).
+  - ⚠️ 백업 1회 = 약 4,620 읽기. **운영이 Spark 면** 바쁜 날 한도(5만) 압박 가능 → 운영 요금제 확인 필요.
+    (실제로 이 작업 중 개발DB 일일 읽기 한도 소진됨. 한도 리셋 = **태평양 자정 = 한국시간 오후 4시경**.)
+  - ⚠️ 브라우저는 컬렉션 목록 자동조회 불가 → backup.js 의 `TOP_LEVEL_COLLECTIONS` 에 컬렉션을
+    직접 나열. 새 컬렉션 추가 시 여기도 갱신할 것.
+- **스케쥴탭 UI 를 공통 pill 스타일로 통일** — 상단 최종/편집, 오늘, 일괄완료, 팝업 버튼 전부
+  `rounded-full`/`rounded-xl` + 부드러운 그림자 + hover 진해짐 + `active:scale-95`.
+- **팝업 하단 버튼 2줄 재배치** — 보조(삭제·이동/멈춤·취소) 윗줄, 주 액션(저장/이동완료) 아랫줄 전체폭.
+  이동 모드에서 '이동취소'가 껴도 안 몰림.
+- **팝업 완료 버튼 강조** — 아직 안 누른 상태에 초록 테두리(가장 많이 쓰는 버튼).
+- 스케쥴 상단 년/월/주차: 월=주황 배지, select 불투명 배경으로 드롭다운 비침 버그 수정.
+- (정리) 미사용 `firebase/storage` import 제거.
+
 ### 끝난 것
 
 - `src/App.jsx` 6,653줄 → 2,689줄 + 16개 파일로 분리
