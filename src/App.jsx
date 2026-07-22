@@ -56,7 +56,8 @@ import {
     writeBatch,
     runTransaction,
 } from 'firebase/firestore';
-import { backupToFirestore } from './utils/backup.js';
+import { backupToFirestore, backupToLocalFile, getLastBackup } from './utils/backup.js';
+import { bulkCompleteTargets } from './domain/bulkComplete.js';
 import {
     formatDateLocal,
     formatMonthDay,
@@ -94,6 +95,53 @@ import {
     sortByDateTime,
 } from './domain/rotation.js';
 import { fixedScheduleOccursOn } from './domain/fixedRecurrence.js';
+
+const WEEKDAY_LABELS = ['일', '월', '화', '수', '목', '금', '토'];
+
+/** 화면에 보여줄 날짜/시각 (예: 7월 22일(수) 오후 06:40). 값이 없으면 null. */
+function formatWhen(value) {
+    if (!value) return null;
+    const d = value instanceof Date ? value : new Date(value);
+    if (isNaN(d.getTime())) return null;
+    const time = d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+    return `${d.getMonth() + 1}월 ${d.getDate()}일(${WEEKDAY_LABELS[d.getDay()]}) ${time}`;
+}
+
+/** 하루(24시간) 안에 있었던 일인지. 백업을 또 할지 말지 판단하는 공통 기준. */
+function isWithin24h(value) {
+    if (!value) return false;
+    const d = value instanceof Date ? value : new Date(value);
+    return !isNaN(d.getTime()) && Date.now() - d.getTime() < 24 * 60 * 60 * 1000;
+}
+
+/** 파일 다운로드가 마땅치 않은 기기(핸드폰·태블릿)인지. 로컬 백업을 건너뛸 때 쓴다. */
+function isMobileDevice() {
+    return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+}
+
+/**
+ * 학생 한 명의 로테이션 시작일(재등록 시점) 집합.
+ *
+ * 원래는 학생마다 전체 스케쥴(3,000건 이상)을 처음부터 훑었다. 학생관리 탭은 한 화면에
+ * 30명이라 한 번 그릴 때마다 10만 번을 돌았고, 검색어를 한 글자 칠 때마다 그게 다시 돌았다.
+ * 그래서 완료·결석 수업을 학생별로 미리 묶어둔 Map 을 받아 쓴다. 계산 내용은 그대로다.
+ *
+ * @param schedsByStudent  학생ID -> 완료·결석 수업 배열 (App 안에서 useMemo 로 만든다)
+ */
+function rotationStartsFor(student, schedsByStudent) {
+    const { reqM, reqV } = computeRequirement(student);
+    if (reqM === 0 && reqV === 0) return new Set();
+
+    // 전체 수강생 목록에서 '재등록 요망' 뱃지를 띄우기 위한 진성 신규 학생 판별(동기식)
+    const isNewNoPayment =
+        student.hasPayment === false || (student.hasPayment === undefined && student.lastDate <= student.firstDate);
+    const anchorDate = resolveAnchorDate(student, isNewNoPayment, formatDateLocal);
+
+    const bufferDateStr = rotationBufferDate(student.firstDate, formatDateLocal);
+    const scheds = sortByDateTime((schedsByStudent.get(student.id) || []).filter((s) => s.date >= bufferDateStr));
+
+    return findRotationStarts(scheds, { reqM, reqV, anchorDate });
+}
 
 function App() {
     const [user, setUser] = useState(null);
@@ -355,6 +403,10 @@ function App() {
     const [expenses, setExpenses] = useState([]);
     const [settlementMemo, setSettlementMemo] = useState('');
     const [studentMemo, setStudentMemo] = useState(''); // [NEW] 학생관리 탭 메모
+    // 입금확인 처리 시점 / 그때 받은 로컬 백업 시점. 학생관리 탭 설정 문서에 같이 들어 있다.
+    const [paymentCheckedAt, setPaymentCheckedAt] = useState(null);
+    const [localBackupAt, setLocalBackupAt] = useState(null);
+    const [paymentCheckBusy, setPaymentCheckBusy] = useState(false);
 
     // [NEW] 학생관리 탭 메모 로딩 & 저장 (TDZ 방지를 위해 State 선언 후 위치)
     useEffect(() => {
@@ -364,7 +416,10 @@ function App() {
                 const docRef = doc(db, 'site_settings', 'student_tab');
                 const docSnap = await getDoc(docRef);
                 if (docSnap.exists()) {
-                    setStudentMemo(docSnap.data().memo || '');
+                    const data = docSnap.data();
+                    setStudentMemo(data.memo || '');
+                    setPaymentCheckedAt(data.paymentCheckedAt || null);
+                    setLocalBackupAt(data.localBackupAt || null);
                 }
             } catch (e) {
                 console.error('학생 메모 로딩 실패', e);
@@ -372,6 +427,53 @@ function App() {
         };
         fetchStudentMemo();
     }, [user, activeTab]);
+
+    /**
+     * '입금확인 처리' — 여기까지 입금을 다 확인했다는 시점을 남기고,
+     * 겸사겸사 데이터를 이 컴퓨터에 파일로 백업한다(주간마감의 클라우드 백업과 짝).
+     *
+     * 백업을 건너뛰는 경우:
+     *   - 핸드폰·태블릿: 파일 다운로드가 마땅치 않다
+     *   - 24시간 안에 이미 받은 적이 있다: 전체 읽기가 4,600여 건이라 무료 한도를 아낀다
+     * 어느 경우든 '확인 시점' 기록은 그대로 남는다.
+     */
+    const handlePaymentCheckDone = async () => {
+        if (paymentCheckBusy) return;
+        if (!window.confirm('지금까지의 입금 내역을 모두 확인한 것으로 처리할까요?\n확인 시점이 기록됩니다.')) return;
+
+        setPaymentCheckBusy(true);
+        try {
+            const now = new Date();
+            const patch = { paymentCheckedAt: now.toISOString() };
+            let note = '';
+
+            if (isMobileDevice()) {
+                note = '\n(핸드폰에서는 파일 백업을 건너뜁니다. PC 에서 누르면 파일로 받습니다)';
+            } else if (isWithin24h(localBackupAt)) {
+                note = `\n(${formatWhen(localBackupAt)} 에 파일로 받아둬서 이번엔 백업을 건너뜁니다)`;
+            } else {
+                try {
+                    const { count } = await backupToLocalFile(db);
+                    patch.localBackupAt = now.toISOString();
+                    note = `\n데이터 ${count.toLocaleString()}건을 파일로 내려받았습니다.`;
+                } catch (e) {
+                    console.error('로컬 백업 실패', e);
+                    note = '\n(다만 파일 백업에는 실패했습니다. 데이터에는 이상 없습니다)';
+                }
+            }
+
+            await setDoc(doc(db, 'site_settings', 'student_tab'), patch, { merge: true });
+            setPaymentCheckedAt(patch.paymentCheckedAt);
+            if (patch.localBackupAt) setLocalBackupAt(patch.localBackupAt);
+
+            alert(`입금확인 처리했습니다. (${formatWhen(now)})${note}`);
+        } catch (e) {
+            console.error('입금확인 처리 실패', e);
+            alert('입금확인 처리에 실패했습니다. 다시 시도해 주세요.');
+        } finally {
+            setPaymentCheckBusy(false);
+        }
+    };
 
     /**
      * 학생 문서를 트랜잭션 안에서 갱신한다.
@@ -1656,9 +1758,7 @@ function App() {
             return;
         }
 
-        const targets = schedules.filter(
-            (s) => s.date === dateStr && s.studentId && !s.status && !s.isGhost && !s.isFixed
-        );
+        const targets = bulkCompleteTargets(schedules, dateStr);
 
         if (targets.length === 0) {
             alert('완료 처리할 미처리 수업이 없습니다.');
@@ -2192,12 +2292,36 @@ function App() {
             return;
         if (!newStatus && !window.confirm('마감을 해제하시겠습니까?')) return;
 
+        // 마감할 때는 데이터 스냅샷을 클라우드에 백업한다(안전장치).
+        // 단, 최근(24시간 이내)에 백업한 적이 있으면 백업은 건너뛰고 마감만 한다.
+        // (마감을 풀었다 다시 누를 때 같은 데이터가 두 번 쌓이는 걸 막기 위함.
+        //  백업 1회 = 4,600여 읽기라 무료 한도도 아낀다)
+        let skipBackup = false;
+        if (newStatus) {
+            let last = null;
+            try {
+                last = await getLastBackup(db);
+            } catch (e) {
+                // 조회 실패는 안전장치일 뿐이라, 그냥 백업을 진행한다.
+                console.error('최근 백업 조회 실패', e);
+            }
+
+            if (isWithin24h(last?.at)) {
+                skipBackup = true;
+                const when = formatWhen(last.at);
+                alert(
+                    `마지막 백업: ${when}${last.reason ? ` (${last.reason})` : ''}\n` +
+                        `${last.docCount ? `${last.docCount.toLocaleString()}건 저장됨\n` : ''}` +
+                        `\n최근에 이미 백업했습니다.\n이번에는 백업 없이 마감만 진행합니다.`
+                );
+            }
+        }
+
         await setDoc(doc(db, 'weekly_locks', startStr), { locked: newStatus }, { merge: true });
         setIsWeekLocked(newStatus);
 
-        // 최종 마감 시 데이터 스냅샷을 클라우드에 백업한다(안전장치).
-        // 마감을 막지 않도록 배경에서 진행하고, 끝나면 결과만 알린다.
-        if (newStatus) {
+        // 마감을 막지 않도록 백업은 배경에서 진행하고, 끝나면 결과만 알린다.
+        if (newStatus && !skipBackup) {
             backupToFirestore(db, '주간마감')
                 .then(({ count }) => alert(`백업 완료 (${count}건 저장됨).`))
                 .catch((e) => {
@@ -2549,27 +2673,32 @@ function App() {
         }
     };
 
-    // 학생별 로테이션 시작일 계산 (M/V 중 '먼저' 시작하는 수업 기준)
+    // 완료·결석 수업을 학생별로 한 번만 묶어둔다. (스케쥴이 바뀔 때만 다시 만든다)
+    const attSchedulesByStudent = useMemo(() => {
+        const m = new Map();
+        for (const s of attSchedules) {
+            if (s.status !== 'completed' && s.status !== 'absent') continue;
+            const arr = m.get(s.studentId);
+            if (arr) arr.push(s);
+            else m.set(s.studentId, [s]);
+        }
+        return m;
+    }, [attSchedules]);
+
+    // 학생별 로테이션 시작일을 미리 계산해 둔다.
+    // 학생 목록이나 스케쥴이 실제로 바뀔 때만 돌기 때문에, 검색어를 치거나 다른 곳을
+    // 눌러 화면이 다시 그려지는 것만으로는 재계산되지 않는다.
+    const rotationStartsCache = useMemo(() => {
+        const m = new Map();
+        for (const st of students) m.set(st.id, rotationStartsFor(st, attSchedulesByStudent));
+        return m;
+    }, [students, attSchedulesByStudent]);
+
+    // 학생별 로테이션 시작일 (M/V 중 '먼저' 시작하는 수업 기준)
+    // 목록에 없는 학생(예: 방금 지운 학생)이 들어와도 안전하도록 그때만 직접 계산한다.
     const calculateRotationStarts = (student) => {
-        const { reqM, reqV } = computeRequirement(student);
-        if (reqM === 0 && reqV === 0) return new Set();
-
-        // 전체 수강생 목록에서 '재등록 요망' 뱃지를 띄우기 위한 진성 신규 학생 판별(동기식)
-        const isNewNoPayment =
-            student.hasPayment === false || (student.hasPayment === undefined && student.lastDate <= student.firstDate);
-        const anchorDate = resolveAnchorDate(student, isNewNoPayment, formatDateLocal);
-
-        const bufferDateStr = rotationBufferDate(student.firstDate, formatDateLocal);
-        const scheds = sortByDateTime(
-            attSchedules.filter(
-                (s) =>
-                    s.studentId === student.id &&
-                    s.date >= bufferDateStr &&
-                    (s.status === 'completed' || s.status === 'absent')
-            )
-        );
-
-        return findRotationStarts(scheds, { reqM, reqV, anchorDate });
+        if (!student) return new Set();
+        return rotationStartsCache.get(student.id) ?? rotationStartsFor(student, attSchedulesByStudent);
     };
 
     // 로테이션 정보 계산 (시각화용, M/V 독립 카운트 방식)
@@ -2652,7 +2781,7 @@ function App() {
                         VT<span className="text-orange-500">Work</span>
                     </div>
                     <nav className="flex p-1 bg-gray-100/50 rounded-full">
-                        {['schedule', 'attendance', 'students', 'settlement'].map((tab) => (
+                        {['schedule', 'students', 'attendance', 'settlement'].map((tab) => (
                             <button
                                 key={tab}
                                 onClick={() => {
@@ -2813,6 +2942,10 @@ function App() {
                             setSearchTerm={setSearchTerm}
                             studentMemo={studentMemo}
                             handleStudentMemoSave={handleStudentMemoSave}
+                            paymentCheckedAt={paymentCheckedAt}
+                            paymentCheckBusy={paymentCheckBusy}
+                            handlePaymentCheckDone={handlePaymentCheckDone}
+                            formatWhen={formatWhen}
                             expandedStudentId={expandedStudentId}
                             setExpandedStudentId={setExpandedStudentId}
                             setViewingStudentAtt={setViewingStudentAtt}

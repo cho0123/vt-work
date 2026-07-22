@@ -13,9 +13,10 @@ import { FaSave } from 'react-icons/fa';
  * @param placeholder  안내 문구
  * @param icon         왼쪽 아이콘 노드
  * @param label        아이콘 옆 라벨
- * @param compact      저장 버튼을 아이콘만 있는 원형으로 (학생관리 탭 스타일)
+ *
+ * 저장 버튼은 앱 공통 pill 스타일 한 가지만 쓴다(스케쥴·학생관리 동일).
  */
-function MemoInputInner({ value, onSave, placeholder, icon, label, compact = false }) {
+function MemoInputInner({ value, onSave, placeholder, icon, label }) {
     const [draft, setDraft] = useState(value ?? '');
     const [saving, setSaving] = useState(false);
 
@@ -50,23 +51,14 @@ function MemoInputInner({ value, onSave, placeholder, icon, label, compact = fal
                     if (e.key === 'Enter') handleSave();
                 }}
             />
-            {compact ? (
-                <button
-                    onClick={handleSave}
-                    disabled={saving}
-                    className="btn btn-xs btn-circle bg-gray-900 text-white border-none shadow-md hover:scale-110 transition-transform"
-                >
-                    <FaSave />
-                </button>
-            ) : (
-                <button
-                    onClick={handleSave}
-                    disabled={saving}
-                    className="btn btn-xs bg-gray-100 text-gray-500 border-none hover:bg-black hover:text-white rounded-2xl shadow-md transition-all px-6 hover:shadow-lg"
-                >
-                    <FaSave className="mr-1" /> 저장
-                </button>
-            )}
+            <button
+                onClick={handleSave}
+                disabled={saving}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-gray-900 px-4 py-2 text-xs font-semibold text-white shadow-sm transition-all hover:bg-gray-700 active:scale-95 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-400 disabled:shadow-none disabled:active:scale-100"
+            >
+                <FaSave className="text-[11px]" />
+                <span>저장</span>
+            </button>
         </>
     );
 }

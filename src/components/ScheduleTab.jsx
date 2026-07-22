@@ -13,6 +13,7 @@ import { MemoInput } from './MemoInput.jsx';
 import { formatDateLocal, getStartOfWeek } from '../utils/date.js';
 import { getBadgeStyle } from '../utils/badgeStyle.js';
 import { fixedScheduleOccursOn } from '../domain/fixedRecurrence.js';
+import { bulkCompleteTargets } from '../domain/bulkComplete.js';
 
 /**
  * App.jsx 에서 그대로 옮긴 블록.
@@ -158,6 +159,9 @@ export function ScheduleTab({
                             const isToday = dateStr === formatDateLocal(new Date());
                             // 오늘 이전(지난 요일)에만 일괄 완료 버튼을 띄운다.
                             const isPastDay = dateStr < formatDateLocal(new Date());
+                            // 미처리 수업이 하나도 없으면 버튼을 비활성화한다.
+                            // 판정은 실제 완료 처리와 같은 함수를 쓴다(조건이 어긋나지 않도록).
+                            const pendingCount = isPastDay ? bulkCompleteTargets(schedules, dateStr).length : 0;
                             const dayColor =
                                 d.getDay() === 0
                                     ? 'text-red-500'
@@ -177,12 +181,21 @@ export function ScheduleTab({
                                     {isPastDay && handleBulkCompleteDay && (
                                         <button
                                             type="button"
+                                            disabled={pendingCount === 0}
                                             onClick={(e) => {
                                                 e.stopPropagation();
                                                 handleBulkCompleteDay(dateStr);
                                             }}
-                                            className="mt-1.5 inline-flex w-full items-center justify-center gap-1 rounded-full bg-green-600 px-2 py-1 text-[11px] font-semibold text-white shadow-sm transition-all hover:bg-green-700 active:scale-95"
-                                            title="이 날의 미처리 학생 수업을 한꺼번에 완료 처리"
+                                            className={`mt-1.5 inline-flex w-full items-center justify-center gap-1 rounded-full px-2 py-1 text-[11px] font-semibold shadow-sm transition-all ${
+                                                pendingCount === 0
+                                                    ? 'cursor-not-allowed bg-gray-100 text-gray-300 shadow-none'
+                                                    : 'bg-green-600 text-white hover:bg-green-700 active:scale-95'
+                                            }`}
+                                            title={
+                                                pendingCount === 0
+                                                    ? '이 날은 미처리 수업이 없습니다'
+                                                    : `이 날의 미처리 학생 수업 ${pendingCount}건을 한꺼번에 완료 처리`
+                                            }
                                         >
                                             <FaCheckCircle className="text-[9px]" />
                                             <span>일괄완료</span>

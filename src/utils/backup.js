@@ -106,9 +106,32 @@ export async function backupToLocalFile(db) {
     document.body.appendChild(a);
     a.click();
     a.remove();
-    URL.revokeObjectURL(url);
+    // 바로 해제하면 브라우저가 아직 파일을 다 쓰기 전이라 다운로드가 취소될 수 있다.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
 
     return { count: docs.length };
+}
+
+// 가장 최근 백업 1건의 정보를 가져온다. 백업이 하나도 없으면 null.
+// 호출부에서 "방금 백업했는데 또 할까요?" 를 물어볼 때 쓴다.
+//
+// 메타 문서만 읽는다(최대 KEEP_BACKUPS 개 = 20건). 오래된 백업 정리 쪽과 같은
+// 방식으로, id 가 시간순이라 사전순 정렬의 마지막이 최신이다.
+// 실패하면 예외를 던진다 — 물어볼지 말지는 호출부가 정한다.
+export async function getLastBackup(db) {
+    const snap = await getDocs(collection(db, 'backups'));
+    if (snap.empty) return null;
+
+    const latest = snap.docs.sort((a, b) => (a.id < b.id ? -1 : 1))[snap.docs.length - 1];
+    const data = latest.data();
+    const at = new Date(data.createdAt);
+    return {
+        id: latest.id,
+        createdAt: data.createdAt,
+        at: isNaN(at.getTime()) ? null : at,
+        reason: data.reason || '',
+        docCount: data.docCount ?? null,
+    };
 }
 
 const byteLen = (str) => new TextEncoder().encode(str).length;

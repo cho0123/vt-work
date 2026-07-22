@@ -46,6 +46,10 @@ export function StudentsTab({
     setSearchTerm,
     studentMemo,
     handleStudentMemoSave,
+    paymentCheckedAt,
+    paymentCheckBusy,
+    handlePaymentCheckDone,
+    formatWhen,
     expandedStudentId,
     setExpandedStudentId,
     setViewingStudentAtt,
@@ -89,7 +93,6 @@ export function StudentsTab({
                     onSave={handleStudentMemoSave}
                     placeholder="학생 관리 관련 메모를 입력하세요... (예: 대기자 명단 확인, 신규 문의 연락 등)"
                     label="학생관리 메모"
-                    compact
                     icon={
                         <div className="w-8 h-8 rounded-full bg-purple-50 flex items-center justify-center">
                             <FaStickyNote className="text-purple-500 text-sm" />
@@ -131,27 +134,47 @@ export function StudentsTab({
                         </button>
                     </div>
                 </div>
-                <div className="flex gap-2 w-full md:w-auto">
-                    <div className="relative group flex-1 md:flex-none">
-                        <FaSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
-                        <input
-                            type="text"
-                            placeholder="검색..."
-                            className="input w-full md:w-64 bg-gray-50 border-2 border-gray-100 pl-10 rounded-2xl h-12 outline-none font-medium"
-                            value={searchTerm}
-                            onChange={(e) => setSearchTerm(e.target.value)}
-                        />
+                <div className="flex w-full flex-col gap-2 md:w-auto">
+                    <div className="flex gap-2">
+                        <div className="relative group flex-1 md:flex-none">
+                            <FaSearch className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
+                            <input
+                                type="text"
+                                placeholder="검색..."
+                                className="input w-full md:w-64 bg-gray-50 border-2 border-gray-100 pl-10 rounded-2xl h-12 outline-none font-medium"
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                            />
+                        </div>
+                        <button
+                            onClick={() => {
+                                setEditingId(null);
+                                setFormData(initialFormState);
+                                setIsModalOpen(true);
+                            }}
+                            className="btn h-12 bg-gray-900 text-white border-none px-6 rounded-2xl font-bold shadow-lg flex items-center gap-2"
+                        >
+                            <FaPlus /> 등록
+                        </button>
                     </div>
-                    <button
-                        onClick={() => {
-                            setEditingId(null);
-                            setFormData(initialFormState);
-                            setIsModalOpen(true);
-                        }}
-                        className="btn h-12 bg-gray-900 text-white border-none px-6 rounded-2xl font-bold shadow-lg flex items-center gap-2"
-                    >
-                        <FaPlus /> 등록
-                    </button>
+
+                    {/* 입금확인 처리 — 누른 시점을 기록하고, PC 에서는 데이터를 파일로 받아둔다 */}
+                    <div className="flex items-center gap-2 md:justify-end">
+                        <button
+                            onClick={handlePaymentCheckDone}
+                            disabled={paymentCheckBusy}
+                            className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-emerald-600 px-3 py-1.5 text-[11px] font-bold text-white shadow-sm transition-all hover:bg-emerald-700 active:scale-95 disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-400 disabled:shadow-none disabled:active:scale-100"
+                            title="여기까지 입금을 모두 확인했다고 기록합니다 (PC 에서는 데이터도 파일로 백업)"
+                        >
+                            <FaCheckCircle className="text-[10px]" />
+                            <span>입금확인 처리</span>
+                        </button>
+                        <span className="truncate text-[11px] font-medium text-gray-400">
+                            {paymentCheckedAt
+                                ? `마지막 확인: ${formatWhen(paymentCheckedAt)}`
+                                : '아직 확인 기록이 없습니다'}
+                        </span>
+                    </div>
                 </div>
             </div>
             <div className="bg-gray-50 rounded-[1.5rem] md:rounded-[2.5rem] p-2 min-h-[600px] flex flex-col">
@@ -176,6 +199,13 @@ export function StudentsTab({
                                 const isExpanded = expandedStudentId === student.id;
                                 const isUnpaid = student.isPaid === false;
                                 const unpaidItems = student.unpaidList || [];
+                                // '클래스 상세'에서 주차 칸들의 줄을 맞추기 위해, 이 학생이 4주 중
+                                // 한 번이라도 쓰는 수업 종류를 미리 추린다. 안 쓰는 종류는 줄 자체를 안 만든다.
+                                const classRows = {
+                                    master: (student.schedule || []).some((w) => Number(w.master) > 0),
+                                    vocal: (student.schedule || []).some((w) => Number(w.vocal) > 0),
+                                    vocal30: (student.schedule || []).some((w) => Number(w.vocal30) > 0),
+                                };
                                 let displayedHistory = [];
                                 let historyTotalPages = 0;
                                 let totalPaidAmount = 0;
@@ -237,10 +267,10 @@ export function StudentsTab({
                                                             e.stopPropagation();
                                                             setViewingStudentAtt(student);
                                                         }}
-                                                        className="btn btn-sm btn-circle btn-ghost text-gray-400 hover:text-blue-600 hover:bg-blue-50 -ml-2"
+                                                        className="-ml-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-gray-50 text-gray-400 transition-all hover:bg-blue-50 hover:text-blue-600 active:scale-90"
                                                         title="전체 출석부 보기"
                                                     >
-                                                        <FaCalendarAlt className="text-lg" />
+                                                        <FaCalendarAlt className="text-sm" />
                                                     </button>
                                                     {/* 이름 및 아이콘 */}
                                                     <span className="font-bold text-gray-800 text-base md:text-lg">
@@ -253,35 +283,37 @@ export function StudentsTab({
                                                         <FaChevronDown className="text-gray-400 text-xs" />
                                                     )}
                                                 </div>
-                                                {/* 상태 뱃지들 (아래쪽) */}
-                                                {/* 상태 뱃지들 (아래쪽) - 디자인 통일 */}
-                                                <div className="flex gap-1.5 mt-1.5 flex-wrap items-center">
+                                                {/* 상태 뱃지 — 앱 공통 pill 스타일.
+                                                    테두리 대신 ring 을 써서 글자 위치가 흔들리지 않게 한다.
+                                                    가장 급한 '미결제'만 진한 색으로 눈에 띄게 둔다. */}
+                                                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                                                     <span
-                                                        className={`px-2 py-0.5 rounded-[4px] border text-[10px] font-bold leading-none ${student.isActive ? 'bg-green-50 text-green-600 border-green-200' : 'bg-gray-100 text-gray-500 border-gray-200'}`}
+                                                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold leading-none ring-1 ${student.isActive ? 'bg-emerald-50 text-emerald-600 ring-emerald-100' : 'bg-gray-100 text-gray-400 ring-gray-200'}`}
                                                     >
                                                         {student.isActive ? '수강' : '종료'}
                                                     </span>
                                                     {student.isMonthly && (
-                                                        <span className="px-2 py-0.5 rounded-[4px] border text-[10px] font-bold leading-none bg-indigo-50 text-indigo-600 border-indigo-100">
+                                                        <span className="inline-flex items-center rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-bold leading-none text-sky-600 ring-1 ring-sky-100">
                                                             월정산
                                                         </span>
                                                     )}
                                                     {!student.isMonthly &&
                                                         !student.isArtist &&
                                                         rotationStarts.size > 0 && (
-                                                            <span className="px-2 py-0.5 rounded-[4px] border text-[10px] font-bold leading-none bg-red-50 text-red-500 border-red-100 flex items-center gap-1">
-                                                                <FaExclamationCircle /> 재등록 요망
+                                                            <span className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-bold leading-none text-rose-600 ring-1 ring-rose-100">
+                                                                <FaExclamationCircle className="text-[9px]" />
+                                                                재등록 요망
                                                             </span>
                                                         )}
                                                     {isUnpaid && (
-                                                        <span className="px-2 py-0.5 rounded-[4px] border text-[10px] font-bold leading-none bg-red-50 text-red-600 border-red-100">
+                                                        <span className="inline-flex items-center rounded-full bg-red-500 px-2 py-0.5 text-[10px] font-bold leading-none text-white shadow-sm">
                                                             {unpaidItems.length}건 미결제
                                                         </span>
                                                     )}
                                                 </div>
                                             </td>
                                             <td className="hidden md:table-cell">
-                                                <div className="flex gap-2">
+                                                <div className="flex items-stretch gap-2">
                                                     {student.schedule?.map((w, i) => {
                                                         const hasAny =
                                                             Number(w.master) > 0 ||
@@ -295,19 +327,23 @@ export function StudentsTab({
                                                                 <span className="text-[10px] text-gray-400 font-bold">
                                                                     {i + 1}주
                                                                 </span>
-                                                                {Number(w.master) > 0 && (
+                                                                {/* 이 학생이 쓰는 수업 종류는 주마다 같은 줄에 오도록 자리를 비워둔다.
+                                                                    (예: 마스터가 2·4주에만 있어도 1·3주 칸의 보컬 줄 높이가 맞는다) */}
+                                                                {classRows.master && (
                                                                     <span className="text-[10px] text-orange-600 font-bold">
-                                                                        M({w.master})
+                                                                        {Number(w.master) > 0 ? `M(${w.master})` : ' '}
                                                                     </span>
                                                                 )}
-                                                                {Number(w.vocal) > 0 && (
+                                                                {classRows.vocal && (
                                                                     <span className="text-[10px] text-blue-600 font-bold">
-                                                                        V({w.vocal})
+                                                                        {Number(w.vocal) > 0 ? `V(${w.vocal})` : ' '}
                                                                     </span>
                                                                 )}
-                                                                {Number(w.vocal30) > 0 && (
+                                                                {classRows.vocal30 && (
                                                                     <span className="text-[10px] text-cyan-600 font-bold">
-                                                                        V30({w.vocal30})
+                                                                        {Number(w.vocal30) > 0
+                                                                            ? `V30(${w.vocal30})`
+                                                                            : ' '}
                                                                     </span>
                                                                 )}
                                                             </div>
