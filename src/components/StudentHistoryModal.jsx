@@ -131,7 +131,7 @@ export function StudentHistoryModal({
                                     !sch.status)
                         );
 
-                        return findRotationStarts(scheds, { reqM, reqV, anchorDate });
+                        return findRotationStarts(scheds, { reqM, reqV, anchorDate, student: s });
                     };
 
                     const localRotationStarts = calculateLocalStarts();

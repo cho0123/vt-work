@@ -220,6 +220,26 @@ npm run verify-student-edit  # 학생 수정이 결제 결과를 덮지 않는�
 - 날짜 표기 공용 함수 `formatWhen`(7월 22일(수) 오후 06:40) / `isWithin24h` / `isMobileDevice` 를
   `App.jsx` 상단에 둠. 주간마감 안내창도 같이 쓴다.
 
+### 2026-07-23 추가 (시점별 로테이션 설정 — 아직 화면 확인 전)
+
+- **배경 버그**: 학생 수업 설정을 도중에 바꾸면(예: M2+V4 → V4, master=0), 로테이션이 **현재 설정
+  하나로 전체 히스토리를 다시 계산**해서 과거 마스터가 전부 R1(같은 색)으로 뭉개졌다.
+  원인은 `getRotationInfo` 의 `reqM===0 → 전부 R1`. (전영림 학생 사례)
+- **해결(시점별 설정)**: 학생 문서에 `scheduleHistory = [{ from:'YYYY-MM-DD', schedule:[4주] }, ...]`
+  (from 오름차순). 각 수업은 그 날짜 구간 설정으로 회차·색을 계산.
+  - `src/domain/rotation.js`: `scheduleForDate`/`hasScheduleTimeline`(≥2구간)/`assignCycles`(날짜별
+    요구치로 사이클 분할, 나머지 이월로 상수구간은 기존 공식과 동일) 추가. `getRotationInfo`·
+    `findRotationStarts` 는 **이력 2구간 이상일 때만** 시점별 경로, 아니면 **기존 코드 그대로**(하위호환).
+    호출부 3곳(App `rotationStartsFor`, StudentHistoryModal, StudentRotationInfo)에 `student` 전달.
+  - **UI(정보수정 팝업)**: 원래 4주 표 유지(현재=마지막 구간 편집). 옆에 `[날짜]+[로테이션 변경]`
+    버튼 → 현재 표를 이전 구간으로 확정하고 새 구간 시작. 아래에 표기
+    `M2V4(90) → V4(50) (2026-07-10)`(금액=만원, 참고용, ✕로 삭제). `schedule`=최신 구간으로 동기화.
+    `handleSubmit` 에서 scheduleHistory 정리(정렬·적용일 검증)+최신구간을 schedule 로 저장.
+  - **하위호환**: 이력 1구간(=기존 학생 전원)이면 계산이 지금과 100% 동일. 엔진 단위테스트로 확인.
+    **화면 확인은 출근 후 전영림으로 예정.**
+  - ⚠️ 전영림처럼 이미 옛 설정이 덮여 사라진 학생은, 표에 옛 설정 재입력→[로테이션 변경]→새 설정
+    입력 순으로 이력을 복구해야 한다.
+
 ### 끝난 것
 
 - `src/App.jsx` 6,653줄 → 2,689줄 + 16개 파일로 분리

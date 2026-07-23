@@ -2,6 +2,8 @@
  * App.jsx 에서 그대로 옮긴 블록.
  * 본문 JSX 를 손대지 않기 위해 prop 이름도 원래 변수명을 유지한다.
  */
+import { useState } from 'react';
+
 export function StudentFormModal({
     isModalOpen,
     editingId,
@@ -11,10 +13,54 @@ export function StudentFormModal({
     handleChange,
     handlePhoneChange,
     handleRateChange,
-    handleScheduleChange,
     handleSubmit,
+    calculateTotalAmount,
 }) {
+    const [changeDate, setChangeDate] = useState('');
     if (!isModalOpen) return null;
+
+    // 로테이션 이력(구간). 없으면 현재 설정 하나. 그리드는 항상 '마지막(현재)' 구간을 편집한다.
+    const history =
+        Array.isArray(formData.scheduleHistory) && formData.scheduleHistory.length
+            ? formData.scheduleHistory
+            : [{ from: formData.firstDate || '', schedule: formData.schedule }];
+    const curIdx = history.length - 1;
+    const currentSchedule = history[curIdx].schedule || formData.schedule;
+
+    const syncHistory = (h) => setFormData({ ...formData, scheduleHistory: h, schedule: h[h.length - 1].schedule });
+    const editCell = (i, field, v) => {
+        const val = v.replace(/[^0-9.]/g, '');
+        syncHistory(
+            history.map((p, idx) =>
+                idx === curIdx
+                    ? { ...p, schedule: p.schedule.map((w, j) => (j === i ? { ...w, [field]: val } : w)) }
+                    : p
+            )
+        );
+    };
+    const applyRotationChange = () => {
+        if (!changeDate) return alert('변경 적용일을 먼저 선택하세요.');
+        const base = history.map((p, idx) => (idx === 0 && !p.from ? { ...p, from: formData.firstDate || '' } : p));
+        syncHistory([...base, { from: changeDate, schedule: base[base.length - 1].schedule.map((w) => ({ ...w })) }]);
+        setChangeDate('');
+    };
+    const removeRotationChange = (i) => syncHistory(history.filter((_, idx) => idx !== i));
+
+    const cfgLabel = (sch) => {
+        let m = 0;
+        let v = 0;
+        let v30 = 0;
+        (sch || []).forEach((w) => {
+            m += Number(w.master || 0);
+            v += Number(w.vocal || 0);
+            v30 += Number(w.vocal30 || 0);
+        });
+        return `M${m}V${v}${v30 ? `V30·${v30}` : ''}`;
+    };
+    const cfgAmt = (sch) => {
+        const a = calculateTotalAmount ? calculateTotalAmount({ ...formData, schedule: sch }) : 0;
+        return Math.round(a / 10000);
+    };
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto">
@@ -116,11 +162,26 @@ export function StudentFormModal({
                         </div>
                     </div>
 
-                    {/* 3. 수업 회차 설정 (표 형태) */}
+                    {/* 3. 수업 회차 설정 (표 형태) + 로테이션 변경 */}
                     <div>
-                        <div className="flex items-center gap-4 mb-2 mt-2 px-1">
-                            <h3 className="text-sm font-bold text-gray-900 ml-1">주차별 수업 설정</h3>
+                        <div className="flex items-center gap-2 mb-2 mt-2 px-1">
+                            <h3 className="text-sm font-bold text-gray-900 ml-1 whitespace-nowrap">주차별 수업 설정</h3>
                             <div className="h-[1px] flex-1 bg-gray-100"></div>
+                            {/* 이 날짜부터 아래 표 설정으로 바뀌었다고 기록 */}
+                            <input
+                                type="date"
+                                value={changeDate}
+                                onChange={(e) => setChangeDate(e.target.value)}
+                                title="변경 적용일"
+                                className="rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-orange-100"
+                            />
+                            <button
+                                type="button"
+                                onClick={applyRotationChange}
+                                className="rounded-full bg-gray-900 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:bg-gray-700 active:scale-95 whitespace-nowrap"
+                            >
+                                로테이션 변경
+                            </button>
                         </div>
 
                         <div className="bg-gray-50 p-5 rounded-[2rem] border border-gray-100">
@@ -140,9 +201,9 @@ export function StudentFormModal({
                                 </div>
                             </div>
 
-                            {/* 테이블 바디 */}
+                            {/* 테이블 바디 — 현재(마지막) 구간 설정을 편집 */}
                             <div className="space-y-2">
-                                {formData.schedule.map((week, idx) => (
+                                {currentSchedule.map((week, idx) => (
                                     <div key={idx} className="grid grid-cols-7 gap-3 items-center">
                                         <div className="col-span-1 flex justify-center">
                                             <span className="flex items-center justify-center w-7 h-7 rounded-lg bg-white border border-gray-200 text-xs font-bold text-gray-500">
@@ -155,7 +216,7 @@ export function StudentFormModal({
                                                 placeholder="-"
                                                 className="input input-sm w-full text-center bg-white border-transparent focus:border-orange-400 focus:ring-2 focus:ring-orange-100 rounded-xl font-bold text-gray-800 shadow-sm h-9"
                                                 value={week.master}
-                                                onChange={(e) => handleScheduleChange(idx, 'master', e.target.value)}
+                                                onChange={(e) => editCell(idx, 'master', e.target.value)}
                                             />
                                         </div>
                                         <div className="col-span-2">
@@ -164,7 +225,7 @@ export function StudentFormModal({
                                                 placeholder="-"
                                                 className="input input-sm w-full text-center bg-white border-transparent focus:border-blue-400 focus:ring-2 focus:ring-blue-100 rounded-xl font-bold text-gray-800 shadow-sm h-9"
                                                 value={week.vocal}
-                                                onChange={(e) => handleScheduleChange(idx, 'vocal', e.target.value)}
+                                                onChange={(e) => editCell(idx, 'vocal', e.target.value)}
                                             />
                                         </div>
                                         <div className="col-span-2">
@@ -173,13 +234,43 @@ export function StudentFormModal({
                                                 placeholder="-"
                                                 className="input input-sm w-full text-center bg-white border-transparent focus:border-cyan-400 focus:ring-2 focus:ring-cyan-100 rounded-xl font-bold text-gray-800 shadow-sm h-9"
                                                 value={week.vocal30}
-                                                onChange={(e) => handleScheduleChange(idx, 'vocal30', e.target.value)}
+                                                onChange={(e) => editCell(idx, 'vocal30', e.target.value)}
                                             />
                                         </div>
                                     </div>
                                 ))}
                             </div>
                         </div>
+
+                        {/* 로테이션 변경 이력 표기 (예: M2V4(90) → V4(50) (2026-07-10)) */}
+                        {history.length >= 2 && (
+                            <div className="mt-3 flex flex-col gap-1.5 px-1">
+                                <span className="text-[11px] font-bold text-gray-400">변경 이력</span>
+                                {history.slice(1).map((p, k) => {
+                                    const i = k + 1;
+                                    const prev = history[i - 1];
+                                    return (
+                                        <div key={i} className="flex items-center gap-2 text-xs">
+                                            <span className="font-semibold text-gray-600">
+                                                {cfgLabel(prev.schedule)}
+                                                <span className="text-gray-400">({cfgAmt(prev.schedule)})</span> →{' '}
+                                                {cfgLabel(p.schedule)}
+                                                <span className="text-gray-400">({cfgAmt(p.schedule)})</span>{' '}
+                                                <span className="font-bold text-orange-500">({p.from})</span>
+                                            </span>
+                                            <button
+                                                type="button"
+                                                onClick={() => removeRotationChange(i)}
+                                                className="text-red-300 hover:text-red-500"
+                                                title="이 변경 기록 삭제"
+                                            >
+                                                ✕
+                                            </button>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        )}
                     </div>
 
                     {/* 4. 마스터 / 보컬 단가 (0 비활성화 처리) */}

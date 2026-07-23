@@ -18,15 +18,78 @@
 
 const CONSULT_CATEGORY = '상담';
 
-/** 학생의 4주 설정에서 사이클당 필요 횟수를 합산한다. vocal30 은 vocal 쪽에 포함. */
-export function computeRequirement(student) {
+/** 4주 설정 배열에서 사이클당 필요 횟수를 합산한다. vocal30 은 vocal 쪽에 포함. */
+export function computeRequirementOf(schedule) {
     let reqM = 0;
     let reqV = 0;
-    (student?.schedule || []).forEach((w) => {
+    (schedule || []).forEach((w) => {
         reqM += Number(w.master || 0);
         reqV += Number(w.vocal || 0) + Number(w.vocal30 || 0);
     });
     return { reqM, reqV };
+}
+
+/** 학생의 '현재' 4주 설정에서 사이클당 필요 횟수. (기존 호출부 호환 — 항상 최신 설정) */
+export function computeRequirement(student) {
+    return computeRequirementOf(student?.schedule);
+}
+
+// ── 시점별 설정 이력(scheduleHistory) ─────────────────────────────
+// student.scheduleHistory = [{ from: 'YYYY-MM-DD', schedule: [4주] }, ...] (from 오름차순).
+// 예: [{from:'2025-01-03', schedule:M2+V4}, {from:'2026-07-10', schedule:V4}]
+// 없거나 1구간이면 기존과 동일하게 student.schedule 하나로 본다(기존 학생 100% 동일).
+
+/** 시점별 이력이 실제로 있는지(2구간 이상). 이게 false면 로테이션 계산은 기존 코드 경로를 탄다. */
+export function hasScheduleTimeline(student) {
+    return Array.isArray(student?.scheduleHistory) && student.scheduleHistory.length >= 2;
+}
+
+/** 특정 날짜에 적용되는 4주 설정. from <= 날짜 중 가장 늦은 구간. 이력 없으면 현재 설정. */
+export function scheduleForDate(student, dateStr) {
+    const hist = student?.scheduleHistory;
+    if (!Array.isArray(hist) || hist.length === 0) return student?.schedule || [];
+    let chosen = hist[0];
+    for (const h of hist) {
+        if (h.from && h.from <= dateStr) chosen = h;
+        else break; // from 오름차순이라 한 번 넘어가면 이후는 다 뒤 날짜
+    }
+    return chosen.schedule || [];
+}
+
+/** (dateStr) → 그 날짜 사이클의 요구 횟수(마스터 또는 보컬). */
+function reqAtFactory(student, isMaster) {
+    return (dateStr) => {
+        const { reqM, reqV } = computeRequirementOf(scheduleForDate(student, dateStr));
+        return isMaster ? reqM : reqV;
+    };
+}
+
+/**
+ * 한 종류(M or V)의 수업들을 사이클로 나눈다. reqAt(dateStr) 로 사이클마다 요구치를 읽는다.
+ * 요구치가 일정하면 기존 상수 공식(floor(누적/req))과 결과가 동일하도록 나머지를 이월(carry)한다.
+ * @returns { perLesson: Map(id -> {cycleIndex, posInCycle}), cycleStart: string[] }
+ */
+function assignCycles(typeScheds, reqAt) {
+    const perLesson = new Map();
+    const cycleStart = [];
+    let cycleIndex = 0;
+    let filled = 0;
+    let cycleReq = null;
+    for (const s of typeScheds) {
+        if (filled === 0) {
+            cycleReq = reqAt(s.date);
+            cycleStart[cycleIndex] = s.date;
+        }
+        perLesson.set(s.id, { cycleIndex, posInCycle: filled });
+        filled += s._weight;
+        if (cycleReq > 0 && filled >= cycleReq) {
+            filled -= cycleReq;
+            cycleIndex++;
+            cycleStart[cycleIndex] = s.date; // 이월분이 있으면 이 날짜부터, 없으면 다음 수업이 덮어씀
+            cycleReq = reqAt(s.date);
+        }
+    }
+    return { perLesson, cycleStart };
 }
 
 /**
@@ -95,8 +158,24 @@ export function getRotationInfo(scheds, targetSchedId, student, { excludeConsult
         return { index: idx ?? -1, label: target.rotationLabel };
     }
 
-    const { reqM, reqV } = computeRequirement(student);
     const isTargetMaster = isMasterSched(target);
+
+    // 시점별 설정 이력이 있으면 각 수업 날짜의 요구치로 사이클을 센다.
+    if (hasScheduleTimeline(student)) {
+        const { mScheds, vScheds } = splitByType(scheds, { excludeConsult });
+        const typeScheds = isTargetMaster ? mScheds : vScheds;
+        const reqAt = reqAtFactory(student, isTargetMaster);
+        const { perLesson } = assignCycles(typeScheds, reqAt);
+        const info = perLesson.get(targetSchedId);
+        if (!info) return { index: 0, label: 'R1' };
+        const cycleReq = reqAt(target.date);
+        const sub = cycleReq > 0 ? Math.floor(info.posInCycle % cycleReq) + 1 : Math.floor(info.posInCycle) + 1;
+        const label = withSubIndex ? `R${info.cycleIndex + 1}-${sub}` : `R${info.cycleIndex + 1}`;
+        return { index: info.cycleIndex, label };
+    }
+
+    // === 이력 없는 기존 학생: 기존 로직 그대로 (현재 설정 하나로 상수 req) ===
+    const { reqM, reqV } = computeRequirement(student);
     const limit = isTargetMaster ? reqM : reqV;
 
     // 해당 종류의 수업이 설정상 0회면 비교 기준이 없으므로 첫 사이클로 본다.
@@ -131,8 +210,28 @@ export function getRotationInfo(scheds, targetSchedId, student, { excludeConsult
  * @param anchorDate     이 날짜보다 뒤인 시작일만 채택 (마지막 결제/청구 기준일)
  * @returns Set<'YYYY-MM-DD'>
  */
-export function findRotationStarts(scheds, { reqM, reqV, anchorDate, excludeConsult = false }) {
+export function findRotationStarts(scheds, { reqM, reqV, anchorDate, excludeConsult = false, student = null }) {
     const startDates = new Set();
+
+    // 시점별 이력이 있으면 날짜별 요구치로 사이클 시작일을 구한다.
+    if (student && hasScheduleTimeline(student)) {
+        const { mScheds, vScheds } = splitByType(scheds, { excludeConsult });
+        const { cycleStart: mStarts } = assignCycles(mScheds, reqAtFactory(student, true));
+        const { cycleStart: vStarts } = assignCycles(vScheds, reqAtFactory(student, false));
+        const n = Math.max(mStarts.length, vStarts.length);
+        for (let i = 0; i <= n; i++) {
+            const mS = mStarts[i];
+            const vS = vStarts[i];
+            let trigger = null;
+            if (mS && vS) trigger = mS < vS ? mS : vS;
+            else if (mS) trigger = mS;
+            else if (vS) trigger = vS;
+            if (trigger && trigger > anchorDate) startDates.add(trigger);
+        }
+        return startDates;
+    }
+
+    // === 이력 없는 기존 학생: 기존 로직 그대로 ===
     if (reqM === 0 && reqV === 0) return startDates;
 
     const { mScheds, vScheds } = splitByType(scheds, { excludeConsult });

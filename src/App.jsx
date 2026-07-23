@@ -140,7 +140,7 @@ function rotationStartsFor(student, schedsByStudent) {
     const bufferDateStr = rotationBufferDate(student.firstDate, formatDateLocal);
     const scheds = sortByDateTime((schedsByStudent.get(student.id) || []).filter((s) => s.date >= bufferDateStr));
 
-    return findRotationStarts(scheds, { reqM, reqV, anchorDate });
+    return findRotationStarts(scheds, { reqM, reqV, anchorDate, student });
 }
 
 function App() {
@@ -619,6 +619,17 @@ function App() {
             { week: 2, master: '', vocal: '', vocal30: '' },
             { week: 3, master: '', vocal: '', vocal30: '' },
             { week: 4, master: '', vocal: '', vocal30: '' },
+        ],
+        scheduleHistory: [
+            {
+                from: '',
+                schedule: [
+                    { master: '', vocal: '', vocal30: '' },
+                    { master: '', vocal: '', vocal30: '' },
+                    { master: '', vocal: '', vocal30: '' },
+                    { master: '', vocal: '', vocal30: '' },
+                ],
+            },
         ],
         rates: { master: '', vocal: '' },
         unpaidList: [],
@@ -2507,11 +2518,6 @@ function App() {
         else if (v.length > 7) f = `${v.slice(0, 3)}-${v.slice(3, 7)}-${v.slice(7, 11)}`;
         setFormData({ ...formData, phone: f });
     };
-    const handleScheduleChange = (i, f, v) => {
-        const n = [...formData.schedule];
-        n[i][f] = v;
-        setFormData({ ...formData, schedule: n });
-    };
     const handleRateChange = (f, v) => {
         const r = v.replace(/,/g, '');
         if (!isNaN(r)) setFormData({ ...formData, rates: { ...formData.rates, [f]: r } });
@@ -2519,6 +2525,23 @@ function App() {
     const handleSubmit = async () => {
         if (!formData.name) return alert('이름을 입력해주세요.');
         if (!formData.firstDate) return alert('등록일을 입력해주세요.');
+
+        // 로테이션 변경 이력 정리 + '현재 설정'(최신 구간) 도출.
+        // 구간이 2개 이상이면 각 구간에 적용일이 있어야 하고, 적용일 순으로 정렬한다.
+        const rawPeriods = Array.isArray(formData.scheduleHistory) ? formData.scheduleHistory : [];
+        let normHistory = rawPeriods;
+        if (rawPeriods.length >= 2) {
+            if (rawPeriods.some((p) => !p.from)) return alert('로테이션 변경 이력의 각 구간에 "적용일"을 입력해주세요.');
+            const froms = rawPeriods.map((p) => p.from);
+            if (new Set(froms).size !== froms.length) return alert('로테이션 변경 이력의 적용일이 겹칩니다.');
+            normHistory = [...rawPeriods].sort((a, b) => (a.from < b.from ? -1 : 1));
+        }
+        const effSchedule =
+            normHistory.length && normHistory[normHistory.length - 1].schedule
+                ? normHistory[normHistory.length - 1].schedule
+                : formData.schedule;
+        // 아래 저장 로직들은 이 정리된 값을 기준으로 한다(현재 설정 = 최신 구간).
+        const formData2 = { ...formData, schedule: effSchedule, scheduleHistory: normHistory };
 
         try {
             if (editingId) {
@@ -2543,13 +2566,14 @@ function App() {
                     'firstDate',
                     'count',
                     'schedule',
+                    'scheduleHistory',
                     'rates',
                     'memo',
                     'cashReceiptMemo',
                 ];
                 const patch = {};
                 for (const k of EDITABLE) {
-                    const now = formData[k];
+                    const now = formData2[k];
                     const was = editingOriginal ? editingOriginal[k] : undefined;
                     if (JSON.stringify(now) !== JSON.stringify(was)) patch[k] = now;
                 }
@@ -2563,7 +2587,7 @@ function App() {
                     firstDateChanged &&
                     window.confirm('수강 시작일이 변경되었습니다.\n최초 미수금 내역의 날짜도 함께 변경하시겠습니까?');
 
-                const newAmount = calculateTotalAmount(formData); // 현재 단가 등 기준 재계산
+                const newAmount = calculateTotalAmount(formData2); // 현재 단가 등 기준 재계산
                 const movedUnpaidId = Date.now().toString();
 
                 const moved = await updateStudentTx(editingId, (sData) => {
@@ -2595,7 +2619,7 @@ function App() {
                 if (moved) alert('최초 미수금 내역이 갱신되었습니다.');
             } else {
                 // [신규 등록]
-                const amt = calculateTotalAmount(formData);
+                const amt = calculateTotalAmount(formData2);
 
                 // [NEW] 최초 등록 시 미수금 내역 자동 생성
                 const initialUnpaid = {
@@ -2607,8 +2631,8 @@ function App() {
                 };
 
                 const newStudentData = {
-                    ...formData,
-                    lastDate: formData.firstDate,
+                    ...formData2,
+                    lastDate: formData2.firstDate,
                     isActive: true,
                     isPaid: false,
                     unpaidList: [initialUnpaid], // 리스트에 추가
@@ -2631,7 +2655,34 @@ function App() {
     const handleEditClick = (s) => {
         setEditingId(s.id);
         const sch = (s.schedule || initialFormState.schedule).map((w) => ({ ...w, vocal30: w.vocal30 || '' }));
-        const filled = { ...initialFormState, ...s, schedule: sch, rates: s.rates || initialFormState.rates };
+        // 로테이션 변경 이력: 있으면 그대로, 없으면 현재 설정 하나(등록일부터)로 시작.
+        const history =
+            Array.isArray(s.scheduleHistory) && s.scheduleHistory.length
+                ? s.scheduleHistory.map((h) => ({
+                      from: h.from || '',
+                      schedule: (h.schedule || []).map((w) => ({
+                          master: w?.master ?? '',
+                          vocal: w?.vocal ?? '',
+                          vocal30: w?.vocal30 ?? '',
+                      })),
+                  }))
+                : [
+                      {
+                          from: s.firstDate || '',
+                          schedule: sch.map((w) => ({
+                              master: w.master ?? '',
+                              vocal: w.vocal ?? '',
+                              vocal30: w.vocal30 ?? '',
+                          })),
+                      },
+                  ];
+        const filled = {
+            ...initialFormState,
+            ...s,
+            schedule: sch,
+            scheduleHistory: history,
+            rates: s.rates || initialFormState.rates,
+        };
         setFormData(filled);
         setEditingOriginal(filled); // 저장 시 변경 여부 비교용
         setIsModalOpen(true);
@@ -3072,8 +3123,8 @@ function App() {
                     handleChange={handleChange}
                     handlePhoneChange={handlePhoneChange}
                     handleRateChange={handleRateChange}
-                    handleScheduleChange={handleScheduleChange}
                     handleSubmit={handleSubmit}
+                    calculateTotalAmount={calculateTotalAmount}
                 />
 
                 {/* 이미지 미리보기 모달 (모바일 개선) */}

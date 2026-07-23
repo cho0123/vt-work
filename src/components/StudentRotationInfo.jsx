@@ -153,7 +153,7 @@ export function StudentRotationInfo({ student, slotDate, slotId, onNameClick }) 
                 (s.status === 'completed' || s.status === 'absent' || s.status === 'pending' || !s.status)
         )
     );
-    const startDates = findRotationStarts(rotationScheds, { reqM, reqV, anchorDate });
+    const startDates = findRotationStarts(rotationScheds, { reqM, reqV, anchorDate, student });
     const isPaymentDay = !!slotDate && startDates.has(slotDate);
 
     const unpaidCount = (student.unpaidList || []).length;
