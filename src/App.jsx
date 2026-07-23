@@ -295,6 +295,8 @@ function App() {
     // --- [2] 데이터 상태 ---
     const [activeTab, setActiveTab] = useState('schedule');
     const [viewStatus, setViewStatus] = useState('active');
+    // 학생 목록 상단 빠른 필터: 'all' | 'unpaid'(미결제 있음) | 'reregister'(재등록 요망)
+    const [listFilter, setListFilter] = useState('all');
     const [students, setStudents] = useState([]);
     const [searchTerm, setSearchTerm] = useState('');
 
@@ -388,6 +390,8 @@ function App() {
     // 가려내는 기준으로 쓴다. (아래 handleSubmit 주석 참고)
     const [editingOriginal, setEditingOriginal] = useState(null);
     const [tempDates, setTempDates] = useState({});
+    // 누적 입금(부분결제 임시 보관) 입력칸. 학생ID -> { amount, date, memo }
+    const [tempDeposit, setTempDeposit] = useState({});
     const [paymentFile, setPaymentFile] = useState(null);
     const [previewImage, setPreviewImage] = useState(null);
 
@@ -597,6 +601,7 @@ function App() {
         paymentDate: formatDateLocal(new Date()),
         method: 'card',
         amount: '',
+        extraAmount: '', // 추가결제(초과분) — 저장 시 누적 입금(depositList)으로 자동 적립
         isCashReceipt: false,
         receiptMemo: '',
     };
@@ -2377,6 +2382,56 @@ function App() {
         }
         fetchSettlementData();
     };
+
+    // ── 누적 입금(부분결제 임시 보관) ────────────────────────────────
+    // 한 사이클 금액을 한 번에 못 내는 학생이 20만·100만씩 나눠 낼 때, 받은 만큼
+    // 여기에 쌓아둔다. 순수 메모라 매출·정산·회차·로테이션에는 전혀 잡히지 않는다.
+    // 모여서 한 사이클이 되면 원장이 평소처럼 '결제 처리'를 하고, 이 내역은 '비우기'로 지운다.
+    // 저장 위치: 학생 문서의 depositList = [{ id, amount, date, memo }]
+    const handleAddDeposit = async (s) => {
+        const t = tempDeposit[s.id] || {};
+        const amount = Number(t.amount);
+        if (!amount || amount <= 0) return alert('입금 금액을 입력해주세요.');
+        const item = {
+            id: Date.now().toString(),
+            amount,
+            date: t.date || formatDateLocal(new Date()),
+            memo: (t.memo || '').trim(),
+        };
+        await updateStudentTx(s.id, (sData) => {
+            const list = [...(sData.depositList || []), item].sort((a, b) => (a.date < b.date ? -1 : 1));
+            return { patch: { depositList: list } };
+        });
+        // 입력칸은 비우되 날짜는 오늘로 되돌린다
+        setTempDeposit((prev) => ({ ...prev, [s.id]: { amount: '', date: formatDateLocal(new Date()), memo: '' } }));
+    };
+
+    const handleDeleteDeposit = async (s, id) => {
+        // 추가결제로 자동 적립된 항목이면, 짝인 결제 기록의 배지(extraAmount)도 0으로 지운다.
+        const target = (s.depositList || []).find((i) => i.id === id);
+        if (target?.sourcePaymentId) {
+            try {
+                await updateDoc(doc(db, 'students', s.id, 'payments', target.sourcePaymentId), { extraAmount: 0 });
+            } catch (e) {
+                console.error('연결된 결제 배지 정리 실패', e);
+            }
+        }
+        await updateStudentTx(s.id, (sData) => {
+            const list = (sData.depositList || []).filter((i) => i.id !== id);
+            return { patch: { depositList: list } };
+        });
+    };
+
+    const handleClearDeposits = async (s) => {
+        const total = (s.depositList || []).reduce((acc, i) => acc + Number(i.amount || 0), 0);
+        if (
+            !window.confirm(
+                `누적 입금 내역을 모두 비웁니다.\n(누적 ${total.toLocaleString()}원 · 결제 처리와는 별개입니다)`
+            )
+        )
+            return;
+        await updateStudentTx(s.id, () => ({ patch: { depositList: [] } }));
+    };
     const handlePaymentSave = async (s) => {
         if (!paymentForm.amount) return alert('금액을 입력해주세요.');
         if (!window.confirm('결제를 처리하시겠습니까?')) return;
@@ -2404,30 +2459,56 @@ function App() {
                     return;
                 }
             }
-            const data = { ...paymentForm, paymentMethod: paymentForm.method, imageUrl: url, createdAt: new Date() };
+            // 추가결제(초과분)는 숫자로 정규화해 결제 문서에 남긴다(전체 내역 배지용).
+            const extra = Number(paymentForm.extraAmount) || 0;
+            const data = {
+                ...paymentForm,
+                extraAmount: extra,
+                paymentMethod: paymentForm.method,
+                imageUrl: url,
+                createdAt: new Date(),
+            };
             delete data.method;
             delete data.id;
 
             // alert("DB 저장 시도...");
+            let newPaymentId = null;
             if (paymentForm.id) await updateDoc(doc(db, 'students', s.id, 'payments', paymentForm.id), data);
-            else await addDoc(collection(db, 'students', s.id, 'payments'), data);
+            else {
+                const ref = await addDoc(collection(db, 'students', s.id, 'payments'), data);
+                newPaymentId = ref.id;
+            }
             // alert("DB 저장 완료");
 
             if (!paymentForm.id) {
                 // 최신 문서를 트랜잭션 안에서 다시 읽는다.
                 // 예전에는 화면에 그려질 때의 s.unpaidList / s.count 를 기준으로 덮어써서,
                 // 저장 연타나 다른 창에서의 동시 작업 시 미수금·회차가 유실될 수 있었다.
+                // 추가결제가 있으면 같은 트랜잭션에서 누적 입금(depositList)으로 적립한다.
+                // (신규 결제일 때만. 수정 시에는 중복 적립을 막으려 건드리지 않는다)
                 await updateStudentTx(s.id, (sData) => {
                     let list = sData.unpaidList || [];
                     if (selectedUnpaidId) list = list.filter((i) => i.id !== selectedUnpaidId);
                     const newCount = parseInt(sData.count || '0', 10) + 1;
-                    return {
-                        patch: {
-                            unpaidList: list,
-                            isPaid: list.length === 0,
-                            count: newCount,
-                        },
+                    const patch = {
+                        unpaidList: list,
+                        isPaid: list.length === 0,
+                        count: newCount,
                     };
+                    if (extra > 0) {
+                        const deposit = {
+                            id: `${Date.now()}-extra`,
+                            amount: extra,
+                            date: paymentForm.paymentDate || formatDateLocal(new Date()),
+                            memo: '추가결제',
+                            // 이 결제에서 자동 적립됐음을 표시 → 결제/누적 어느 쪽을 지워도 짝을 같이 지운다
+                            sourcePaymentId: newPaymentId,
+                        };
+                        patch.depositList = [...(sData.depositList || []), deposit].sort((a, b) =>
+                            a.date < b.date ? -1 : 1
+                        );
+                    }
+                    return { patch };
                 });
             }
             await updateStudentLastDate(s.id);
@@ -2484,6 +2565,12 @@ function App() {
     const handleDeletePayment = async (sid, pid) => {
         if (window.confirm('삭제하시겠습니까?')) {
             await deleteDoc(doc(db, 'students', sid, 'payments', pid));
+            // 이 결제에서 자동 적립된 누적 입금 항목이 있으면 같이 지운다.
+            await updateStudentTx(sid, (sData) => {
+                const list = sData.depositList || [];
+                const next = list.filter((i) => i.sourcePaymentId !== pid);
+                return next.length === list.length ? { patch: {} } : { patch: { depositList: next } };
+            });
             await updateStudentLastDate(sid);
             setTimeout(() => fetchSettlementData(), 500);
         }
@@ -2506,7 +2593,7 @@ function App() {
     };
     const handlePaymentFormChange = (e) => setPaymentForm((p) => ({ ...p, [e.target.name]: e.target.value }));
     const handleEditHistoryClick = (p) => {
-        setPaymentForm({ ...p, method: p.paymentMethod, receiptMemo: p.receiptMemo || '' });
+        setPaymentForm({ ...p, method: p.paymentMethod, receiptMemo: p.receiptMemo || '', extraAmount: p.extraAmount || '' });
         setPaymentFile(null);
         document.getElementById('payment-form-area')?.scrollIntoView({ behavior: 'smooth' });
     };
@@ -2803,6 +2890,15 @@ function App() {
         if (viewStatus === 'active') m = s.isActive;
         else if (viewStatus === 'inactive') m = !s.isActive;
         else if (viewStatus === 'artist') m = s.isArtist;
+
+        // 상단 빠른 필터. 재등록 판정은 화면 배지와 같은 캐시를 써서 어긋나지 않게 한다.
+        if (m && listFilter === 'unpaid') {
+            m = (s.unpaidList || []).length > 0;
+        } else if (m && listFilter === 'reregister') {
+            const starts = rotationStartsCache.get(s.id);
+            m = !s.isMonthly && !s.isArtist && !!starts && starts.size > 0;
+        }
+
         return m && ((s.name && s.name.includes(searchTerm)) || (s.phone && s.phone.includes(searchTerm)));
     });
     const currentItems = filteredStudents.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
@@ -2989,6 +3085,8 @@ function App() {
                             paginate={paginate}
                             viewStatus={viewStatus}
                             setViewStatus={setViewStatus}
+                            listFilter={listFilter}
+                            setListFilter={setListFilter}
                             searchTerm={searchTerm}
                             setSearchTerm={setSearchTerm}
                             studentMemo={studentMemo}
@@ -3012,6 +3110,11 @@ function App() {
                             setTempDates={setTempDates}
                             handleAddUnpaid={handleAddUnpaid}
                             handleDeleteUnpaid={handleDeleteUnpaid}
+                            tempDeposit={tempDeposit}
+                            setTempDeposit={setTempDeposit}
+                            handleAddDeposit={handleAddDeposit}
+                            handleDeleteDeposit={handleDeleteDeposit}
+                            handleClearDeposits={handleClearDeposits}
                             handleUnpaidChipClick={handleUnpaidChipClick}
                             selectedUnpaidId={selectedUnpaidId}
                             paymentForm={paymentForm}

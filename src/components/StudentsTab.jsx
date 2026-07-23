@@ -42,6 +42,8 @@ export function StudentsTab({
     paginate,
     viewStatus,
     setViewStatus,
+    listFilter,
+    setListFilter,
     searchTerm,
     setSearchTerm,
     studentMemo,
@@ -65,6 +67,11 @@ export function StudentsTab({
     setTempDates,
     handleAddUnpaid,
     handleDeleteUnpaid,
+    tempDeposit,
+    setTempDeposit,
+    handleAddDeposit,
+    handleDeleteDeposit,
+    handleClearDeposits,
     handleUnpaidChipClick,
     selectedUnpaidId,
     paymentForm,
@@ -158,8 +165,35 @@ export function StudentsTab({
                         </button>
                     </div>
 
-                    {/* 입금확인 처리 — 누른 시점을 기록하고, PC 에서는 데이터를 파일로 받아둔다 */}
-                    <div className="flex items-center gap-2 md:justify-end">
+                    {/* 빠른 필터 + 입금확인 처리 */}
+                    <div className="flex flex-wrap items-center gap-2 md:justify-end">
+                        {/* 전체 / 미결제 / 재등록 보기 */}
+                        <div className="flex items-center gap-1 rounded-full bg-gray-100 p-1">
+                            {[
+                                { key: 'all', label: '전체' },
+                                { key: 'unpaid', label: '미결제' },
+                                { key: 'reregister', label: '재등록' },
+                            ].map((f) => (
+                                <button
+                                    key={f.key}
+                                    onClick={() => {
+                                        setListFilter(f.key);
+                                        setCurrentPage(1);
+                                    }}
+                                    className={`rounded-full px-3 py-1 text-[11px] font-bold transition-all ${
+                                        listFilter === f.key
+                                            ? f.key === 'unpaid'
+                                                ? 'bg-red-500 text-white shadow-sm'
+                                                : f.key === 'reregister'
+                                                  ? 'bg-rose-500 text-white shadow-sm'
+                                                  : 'bg-gray-900 text-white shadow-sm'
+                                            : 'text-gray-500 hover:text-gray-700'
+                                    }`}
+                                >
+                                    {f.label}
+                                </button>
+                            ))}
+                        </div>
                         <button
                             onClick={handlePaymentCheckDone}
                             disabled={paymentCheckBusy}
@@ -453,7 +487,7 @@ export function StudentsTab({
                                                                     )}
                                                                 </div>
                                                             </h4>
-                                                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
+                                                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 items-start">
                                                                 <div className="form-control">
                                                                     <label className="label-text text-xs font-bold text-gray-500 mb-1">
                                                                         재등록일
@@ -491,6 +525,7 @@ export function StudentsTab({
                                                                         <option value="card">카드</option>
                                                                         <option value="transfer">이체</option>
                                                                         <option value="cash">현금</option>
+                                                                        <option value="deposit">누적금 사용</option>
                                                                     </select>
                                                                 </div>
                                                                 <div className="form-control">
@@ -502,6 +537,15 @@ export function StudentsTab({
                                                                         name="amount"
                                                                         className="input input-sm border-gray-200 bg-gray-50 font-bold"
                                                                         value={paymentForm.amount}
+                                                                        onChange={handlePaymentFormChange}
+                                                                    />
+                                                                    {/* 추가결제(초과분) — 저장하면 누적 입금으로 자동 적립(메모: 추가결제) */}
+                                                                    <input
+                                                                        type="number"
+                                                                        name="extraAmount"
+                                                                        placeholder="+ 추가결제(선택)"
+                                                                        className="input input-sm mt-1 border-sky-200 bg-sky-50 text-sky-700 font-bold placeholder:font-normal placeholder:text-sky-400"
+                                                                        value={paymentForm.extraAmount}
                                                                         onChange={handlePaymentFormChange}
                                                                     />
                                                                 </div>
@@ -609,6 +653,124 @@ export function StudentsTab({
                                                                 </div>
                                                             </div>
                                                         )}
+                                                        {/* 누적 입금 — 부분결제 임시 보관. 매출·회차와 무관한 순수 메모.
+                                                            모여서 한 사이클이 되면 위 '결제 처리'를 하고 '비우기'로 지운다. */}
+                                                        {(() => {
+                                                            const deposits = student.depositList || [];
+                                                            const depositTotal = deposits.reduce(
+                                                                (acc, i) => acc + Number(i.amount || 0),
+                                                                0
+                                                            );
+                                                            const dep = tempDeposit?.[student.id] || {};
+                                                            const setDep = (patch) =>
+                                                                setTempDeposit((prev) => ({
+                                                                    ...prev,
+                                                                    [student.id]: { ...(prev[student.id] || {}), ...patch },
+                                                                }));
+                                                            return (
+                                                                <div className="rounded-2xl border border-sky-100 bg-sky-50/60 p-4">
+                                                                    <div className="mb-3 flex items-center justify-between">
+                                                                        <h4 className="flex items-center gap-2 text-xs font-bold text-sky-700">
+                                                                            <FaCreditCard className="text-sky-500" />
+                                                                            누적 입금 (부분결제 임시 보관)
+                                                                        </h4>
+                                                                        <div className="flex items-center gap-2">
+                                                                            <span className="text-xs text-sky-600">
+                                                                                누적{' '}
+                                                                                <b className="text-sm text-sky-700">
+                                                                                    {formatCurrency(depositTotal)}원
+                                                                                </b>
+                                                                            </span>
+                                                                            {deposits.length > 0 && (
+                                                                                <button
+                                                                                    onClick={() =>
+                                                                                        handleClearDeposits(student)
+                                                                                    }
+                                                                                    className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-gray-500 ring-1 ring-gray-200 transition-all hover:bg-gray-100 active:scale-95"
+                                                                                >
+                                                                                    비우기
+                                                                                </button>
+                                                                            )}
+                                                                        </div>
+                                                                    </div>
+
+                                                                    {/* 입력 줄: 금액 + 날짜 + 메모 + 추가 */}
+                                                                    <div className="flex flex-wrap items-center gap-2">
+                                                                        <input
+                                                                            type="number"
+                                                                            placeholder="금액"
+                                                                            className="input input-sm w-28 border-sky-200 bg-white font-bold"
+                                                                            value={dep.amount || ''}
+                                                                            onChange={(e) =>
+                                                                                setDep({ amount: e.target.value })
+                                                                            }
+                                                                        />
+                                                                        <input
+                                                                            type="date"
+                                                                            className="input input-sm border-sky-200 bg-white"
+                                                                            value={dep.date || ''}
+                                                                            onChange={(e) =>
+                                                                                setDep({ date: e.target.value })
+                                                                            }
+                                                                        />
+                                                                        <input
+                                                                            type="text"
+                                                                            placeholder="메모 (예: 현금 일부)"
+                                                                            className="input input-sm min-w-[120px] flex-1 border-sky-200 bg-white"
+                                                                            value={dep.memo || ''}
+                                                                            onChange={(e) =>
+                                                                                setDep({ memo: e.target.value })
+                                                                            }
+                                                                            onKeyDown={(e) => {
+                                                                                if (e.key === 'Enter')
+                                                                                    handleAddDeposit(student);
+                                                                            }}
+                                                                        />
+                                                                        <button
+                                                                            onClick={() => handleAddDeposit(student)}
+                                                                            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-sky-600 px-3 py-2 text-xs font-bold text-white shadow-sm transition-all hover:bg-sky-700 active:scale-95"
+                                                                        >
+                                                                            <FaPlus className="text-[10px]" /> 추가
+                                                                        </button>
+                                                                    </div>
+
+                                                                    {/* 쌓인 입금 줄 목록 */}
+                                                                    {deposits.length > 0 && (
+                                                                        <div className="mt-3 flex flex-col gap-1.5">
+                                                                            {deposits.map((d) => (
+                                                                                <div
+                                                                                    key={d.id}
+                                                                                    className="flex items-center gap-2 rounded-lg bg-white px-3 py-1.5 text-xs ring-1 ring-sky-100"
+                                                                                >
+                                                                                    <span className="font-bold text-sky-700">
+                                                                                        {formatCurrency(d.amount)}원
+                                                                                    </span>
+                                                                                    <span className="text-gray-400">
+                                                                                        {d.date}
+                                                                                    </span>
+                                                                                    {d.memo && (
+                                                                                        <span className="truncate text-gray-500">
+                                                                                            · {d.memo}
+                                                                                        </span>
+                                                                                    )}
+                                                                                    <button
+                                                                                        onClick={() =>
+                                                                                            handleDeleteDeposit(
+                                                                                                student,
+                                                                                                d.id
+                                                                                            )
+                                                                                        }
+                                                                                        className="ml-auto text-gray-300 transition-colors hover:text-red-500"
+                                                                                    >
+                                                                                        <FaTimesCircle />
+                                                                                    </button>
+                                                                                </div>
+                                                                            ))}
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            );
+                                                        })()}
                                                         <div className="bg-white p-4 md:p-5 rounded-2xl shadow-sm border border-gray-100">
                                                             <div className="flex justify-between items-center mb-3">
                                                                 <h4 className="text-sm font-bold text-gray-700 flex items-center gap-2">
@@ -697,7 +859,10 @@ export function StudentsTab({
                                                                                       ? '이체'
                                                                                       : pay.paymentMethod === 'cash'
                                                                                         ? '현금'
-                                                                                        : pay.paymentMethod;
+                                                                                        : pay.paymentMethod === 'deposit'
+                                                                                          ? '누적금 사용'
+                                                                                          : pay.paymentMethod;
+                                                                            const extra = Number(pay.extraAmount) || 0;
                                                                             return (
                                                                                 <tr
                                                                                     key={
@@ -726,10 +891,22 @@ export function StudentsTab({
                                                                                         )}
                                                                                     </td>
                                                                                     <td>
-                                                                                        <span className="font-bold text-black">
-                                                                                            {formatCurrency(pay.amount)}
-                                                                                            원
-                                                                                        </span>
+                                                                                        <div className="flex items-center gap-1.5">
+                                                                                            <span className="font-bold text-black">
+                                                                                                {formatCurrency(
+                                                                                                    pay.amount
+                                                                                                )}
+                                                                                                원
+                                                                                            </span>
+                                                                                            {!isUnpaidItem && extra > 0 && (
+                                                                                                <span
+                                                                                                    className="inline-flex items-center rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold leading-none text-sky-700"
+                                                                                                    title="추가결제(누적 입금으로 적립됨)"
+                                                                                                >
+                                                                                                    +{formatCurrency(extra)}
+                                                                                                </span>
+                                                                                            )}
+                                                                                        </div>
                                                                                     </td>
                                                                                     <td>
                                                                                         {isUnpaidItem ? (
