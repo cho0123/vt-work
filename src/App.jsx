@@ -1,4 +1,4 @@
-import { useState, useEffect, Fragment, useMemo } from 'react';
+import { useState, useEffect, Fragment, useMemo, useRef } from 'react';
 import {
     FaPlus,
     FaSearch,
@@ -647,6 +647,16 @@ function App() {
     // --- [Data Fetching & Functions] ---
 
     // [수정] 정산 데이터 불러오기 (날짜 오버라이드 지원)
+    // [성능] 결제내역(payments 하위컬렉션)은 결제 추가/수정/삭제 때만 바뀐다.
+    // fetchSettlementData 는 17곳에서 불리는데, 매번 학생 전원의 결제 '전체'를 다시 읽으면
+    // (날짜 포맷 이슈로 기간 쿼리를 못 써서 전수 조회) 읽기 한도를 크게 먹는다.
+    // 그래서 원본 결제 문서를 메모리에 캐시하고, 월 필터/이름은 매 호출 때 최신 students 로 붙인다.
+    // 무효화(다시 읽기): 결제 저장/삭제 시 + 정산탭을 열 때(항상 최신 보장). 그 외(일정 저장 등)엔 캐시 재사용.
+    const paymentsCacheRef = useRef({ valid: false, byStudent: new Map() });
+    const invalidatePaymentsCache = () => {
+        paymentsCacheRef.current.valid = false;
+    };
+
     const fetchSettlementData = async (dateOverride = null) => {
         // [FIX] 데이터 로딩 중 기존 상태 유지 (UI 깜빡임 방지)
         // setSettlementIncome([]);
@@ -688,44 +698,45 @@ function App() {
   setExpenses(expenseList);
   */
 
-        const allPayments = [];
-        const allUnpaid = [];
-
-        if (students.length > 0) {
+        // 결제내역 캐시 채우기(무효화됐거나 아직 없을 때만 학생 전원 전수 조회).
+        // 학생이 아직 로드 안 된 상태(0명)면 캐시를 유효로 굳히지 않는다(다음 호출에서 다시 시도).
+        if (!paymentsCacheRef.current.valid && students.length > 0) {
             try {
-                // 학생별 결제 내역을 동시에 조회한다.
-                // 예전에는 순차 await 라서 학생 수만큼 왕복이 그대로 쌓였다(47명이면 47번).
-                const perStudent = await Promise.all(
+                const byStudent = new Map();
+                await Promise.all(
                     students.map(async (student) => {
-                        // [FIX] 날짜 포맷(. 또는 -) 이슈로 쿼리 누락 방지를 위해, 기간 필터 없이 전체 조회 후 메모리 필터링
+                        // 날짜 포맷(. 또는 -) 이슈로 기간 쿼리를 못 써서 전체 조회 후 메모리 필터링한다.
                         const paySnap = await getDocs(collection(db, 'students', student.id, 'payments'));
-                        const payments = [];
-                        paySnap.forEach((d) => {
-                            const data = d.data();
-                            // 메모리 필터링: YYYY-MM 또는 YYYY.MM 포함 여부 확인
-                            const normTDate = (data.targetDate || '').replace(/\./g, '-'); // 전부 대시로 통일
-                            if (normTDate.startsWith(yearMonth)) {
-                                payments.push({ ...data, studentName: student.name, studentId: student.id });
-                            }
-                        });
-
-                        const unpaid = (student.unpaidList || [])
-                            .filter((item) => item.targetDate && item.targetDate.startsWith(yearMonth))
-                            .map((item) => ({ ...item, studentName: student.name, studentId: student.id }));
-
-                        return { payments, unpaid };
+                        byStudent.set(
+                            student.id,
+                            paySnap.docs.map((d) => d.data())
+                        );
                     })
                 );
-
-                for (const r of perStudent) {
-                    allPayments.push(...r.payments);
-                    allUnpaid.push(...r.unpaid);
-                }
+                paymentsCacheRef.current = { valid: true, byStudent };
             } catch (e) {
                 console.error('Settlement Payments Fetch Error:', e);
                 return; // 부분 결과로 화면을 덮어쓰지 않는다
             }
         }
+
+        // 이달 결제/미수금 추출 — 현재 students 기준으로 캐시에서 뽑고, 이름 등은 최신값을 붙인다.
+        const byStudent = paymentsCacheRef.current.byStudent;
+        const allPayments = [];
+        const allUnpaid = [];
+        for (const student of students) {
+            const docs = byStudent.get(student.id) || [];
+            for (const data of docs) {
+                const normTDate = (data.targetDate || '').replace(/\./g, '-');
+                if (normTDate.startsWith(yearMonth)) {
+                    allPayments.push({ ...data, studentName: student.name, studentId: student.id });
+                }
+            }
+            (student.unpaidList || [])
+                .filter((item) => item.targetDate && item.targetDate.startsWith(yearMonth))
+                .forEach((item) => allUnpaid.push({ ...item, studentName: student.name, studentId: student.id }));
+        }
+
         allPayments.sort((a, b) => new Date(a.targetDate) - new Date(b.targetDate));
         allUnpaid.sort((a, b) => new Date(a.targetDate) - new Date(b.targetDate));
         setSettlementIncome(allPayments);
@@ -2512,6 +2523,7 @@ function App() {
                 });
             }
             await updateStudentLastDate(s.id);
+            invalidatePaymentsCache();
             fetchSettlementData();
             alert('결제 처리가 완료되었습니다.');
             resetPaymentForm(calculateTotalAmount(s));
@@ -2539,6 +2551,7 @@ function App() {
             await updateDoc(doc(db, 'students', sid, 'payments', pid), { imageUrl: dataUrl });
 
             alert('성공적으로 저장되었습니다!');
+            invalidatePaymentsCache();
             setTimeout(() => fetchSettlementData(), 500);
         } catch (e) {
             console.error(e);
@@ -2554,6 +2567,7 @@ function App() {
             await updateDoc(doc(db, 'students', previewImage.sid, 'payments', previewImage.pid), { imageUrl: null });
             alert('사진이 삭제되었습니다.');
             setPreviewImage(null);
+            invalidatePaymentsCache();
             setTimeout(() => fetchSettlementData(), 500);
         } catch (e) {
             console.error(e);
@@ -2572,6 +2586,7 @@ function App() {
                 return next.length === list.length ? { patch: {} } : { patch: { depositList: next } };
             });
             await updateStudentLastDate(sid);
+            invalidatePaymentsCache();
             setTimeout(() => fetchSettlementData(), 500);
         }
     };
@@ -2935,7 +2950,11 @@ function App() {
                                 key={tab}
                                 onClick={() => {
                                     setActiveTab(tab);
-                                    if (tab === 'settlement') fetchSettlementData();
+                                    // 정산탭을 열 때는 항상 최신(다른 기기 변경 포함)을 보장하려고 캐시를 비우고 새로 읽는다.
+                                    if (tab === 'settlement') {
+                                        invalidatePaymentsCache();
+                                        fetchSettlementData();
+                                    }
                                 }}
                                 className={`px-4 py-2 md:px-6 md:py-3 text-xs md:text-sm font-bold rounded-full ${activeTab === tab ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
                             >

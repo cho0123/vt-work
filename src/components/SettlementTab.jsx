@@ -44,7 +44,6 @@ export function SettlementTab({
     currentMonthTotalRevenue,
     currentMonthNetProfit,
     currentMonthRevenueBreakdown,
-    currentMonthPrefix,
     expenses,
     expenseForm,
     editingExpenseId,
@@ -55,7 +54,6 @@ export function SettlementTab({
     cancelExpenseEdit,
     handleGoToStudent,
     handleDeletePayment,
-    students,
 }) {
     return (
         <div className="flex flex-col gap-6 p-4 md:p-8 lg:px-12 pb-20 overflow-y-auto">
