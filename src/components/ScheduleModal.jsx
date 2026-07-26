@@ -634,7 +634,7 @@ export function ScheduleModal({
                 </div>
                 <button
                     onClick={() => setIsScheduleModalOpen(false)}
-                    className="btn btn-sm btn-circle btn-ghost absolute top-2 right-2"
+                    className="absolute top-2 right-2 grid h-9 w-9 place-items-center rounded-full text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
                 >
                     ✕
                 </button>

@@ -432,7 +432,7 @@ export function StudentsTab({
                                                     />
                                                     <button
                                                         onClick={() => handleAddUnpaid(student)}
-                                                        className="btn btn-xs btn-square bg-black text-white"
+                                                        className="btn btn-xs btn-square bg-black text-white hover:bg-gray-800 border-none rounded"
                                                     >
                                                         <FaPlus />
                                                     </button>
@@ -441,21 +441,21 @@ export function StudentsTab({
                                                     <button
                                                         title={student.isActive ? '비활성 전환' : '활성 전환'}
                                                         onClick={() => toggleStatus(student)}
-                                                        className="btn btn-sm btn-square border-none bg-gray-100 text-gray-400"
+                                                        className="grid h-9 w-9 place-items-center rounded-full bg-gray-100 text-gray-400 transition-all hover:bg-gray-200 hover:text-gray-600 active:scale-95"
                                                     >
                                                         {student.isActive ? <FaUserSlash /> : <FaUserCheck />}
                                                     </button>
                                                     <button
                                                         title="정보 수정"
                                                         onClick={() => handleEditClick(student)}
-                                                        className="btn btn-sm btn-square bg-gray-100 border-none text-gray-400 hover:text-orange-500"
+                                                        className="grid h-9 w-9 place-items-center rounded-full bg-gray-100 text-gray-400 transition-all hover:bg-gray-200 hover:text-orange-500 active:scale-95"
                                                     >
                                                         <FaEdit />
                                                     </button>
                                                     <button
                                                         title="삭제"
                                                         onClick={() => handleDelete(student.id, student.name)}
-                                                        className="btn btn-sm btn-square bg-gray-100 border-none text-gray-400 hover:text-red-500"
+                                                        className="grid h-9 w-9 place-items-center rounded-full bg-gray-100 text-gray-400 transition-all hover:bg-gray-200 hover:text-red-500 active:scale-95"
                                                     >
                                                         <FaTrash />
                                                     </button>
@@ -590,7 +590,7 @@ export function StudentsTab({
                                                                 <div className="flex gap-2 justify-end">
                                                                     {paymentForm.id && (
                                                                         <button
-                                                                            className="btn btn-sm btn-ghost text-gray-500"
+                                                                            className="btn btn-sm h-10 bg-gray-100 text-gray-500 border-none rounded-xl hover:bg-gray-200"
                                                                             onClick={() =>
                                                                                 resetPaymentForm(
                                                                                     calculateTotalAmount(student)
@@ -601,7 +601,7 @@ export function StudentsTab({
                                                                         </button>
                                                                     )}
                                                                     <button
-                                                                        className={`btn btn-sm px-6 h-10 border-none text-white ${paymentForm.id ? 'bg-blue-600' : 'bg-black'}`}
+                                                                        className={`btn btn-sm px-6 h-10 border-none rounded-xl text-white shadow-sm hover:shadow-md transition-all ${paymentForm.id ? 'bg-blue-600 hover:bg-blue-700' : 'bg-black hover:bg-gray-800'}`}
                                                                         onClick={() => handlePaymentSave(student)}
                                                                     >
                                                                         <FaCheckCircle className="mr-1" />{' '}
@@ -808,7 +808,7 @@ export function StudentsTab({
                                                                                     )
                                                                                 }
                                                                                 disabled={historyPage === 1}
-                                                                                className="btn btn-xs btn-circle btn-ghost"
+                                                                                className="grid h-7 w-7 place-items-center rounded-full text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 disabled:opacity-30 disabled:hover:bg-transparent"
                                                                             >
                                                                                 <FaChevronLeft />
                                                                             </button>
@@ -827,7 +827,7 @@ export function StudentsTab({
                                                                                 disabled={
                                                                                     historyPage === historyTotalPages
                                                                                 }
-                                                                                className="btn btn-xs btn-circle btn-ghost"
+                                                                                className="grid h-7 w-7 place-items-center rounded-full text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 disabled:opacity-30 disabled:hover:bg-transparent"
                                                                             >
                                                                                 <FaChevronRight />
                                                                             </button>
@@ -941,7 +941,7 @@ export function StudentsTab({
                                                                                                         pid: pay.id,
                                                                                                     })
                                                                                                 }
-                                                                                                className="btn btn-xs btn-square btn-ghost text-blue-500"
+                                                                                                className="grid h-6 w-6 place-items-center rounded-lg text-blue-500 transition-colors hover:bg-blue-50 active:scale-95"
                                                                                             >
                                                                                                 <FaImage />
                                                                                             </button>
@@ -1021,7 +1021,7 @@ export function StudentsTab({
                     <button
                         onClick={() => paginate(currentPage - 1)}
                         disabled={currentPage === 1}
-                        className="btn btn-circle btn-sm bg-white border-none shadow-sm disabled:text-gray-300"
+                        className="grid h-9 w-9 place-items-center rounded-full bg-white text-gray-500 shadow-sm transition-all hover:bg-gray-50 active:scale-95 disabled:text-gray-300 disabled:active:scale-100"
                     >
                         <FaChevronLeft />
                     </button>
@@ -1029,7 +1029,7 @@ export function StudentsTab({
                     <button
                         onClick={() => paginate(currentPage + 1)}
                         disabled={currentPage === totalPages}
-                        className="btn btn-circle btn-sm bg-white border-none shadow-sm disabled:text-gray-300"
+                        className="grid h-9 w-9 place-items-center rounded-full bg-white text-gray-500 shadow-sm transition-all hover:bg-gray-50 active:scale-95 disabled:text-gray-300 disabled:active:scale-100"
                     >
                         <FaChevronRight />
                     </button>

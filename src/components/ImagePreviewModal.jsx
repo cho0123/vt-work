@@ -27,7 +27,7 @@ export function ImagePreviewModal({ image, onClose, onDelete }) {
 
                 <button
                     onClick={onClose}
-                    className="absolute top-2 right-2 md:top-4 md:right-4 btn btn-circle btn-sm bg-black/50 text-white border-2 border-white/20 hover:bg-black hover:border-white shadow-lg z-50"
+                    className="absolute top-2 right-2 md:top-4 md:right-4 grid h-10 w-10 place-items-center rounded-full bg-black/50 text-white shadow-lg ring-1 ring-white/20 transition-all hover:bg-black hover:ring-white active:scale-95 z-50"
                 >
                     <FaTimesCircle className="text-xl" />
                 </button>
@@ -35,9 +35,9 @@ export function ImagePreviewModal({ image, onClose, onDelete }) {
                 {image.sid && (
                     <button
                         onClick={onDelete}
-                        className="absolute bottom-4 right-4 btn btn-error btn-sm text-white shadow-lg z-50 font-bold"
+                        className="absolute bottom-4 right-4 inline-flex items-center gap-1 rounded-full bg-red-500 px-4 py-2 text-sm font-bold text-white shadow-lg transition-all hover:bg-red-600 active:scale-95 z-50"
                     >
-                        <FaTrash className="mr-1" /> 삭제
+                        <FaTrash /> 삭제
                     </button>
                 )}
             </div>

@@ -30,7 +30,7 @@ export function StudentHistoryModal({
             {/* 상단 헤더 */}
             <div className="flex-none flex items-center justify-between p-4 md:p-6 border-b border-gray-100 bg-white shadow-sm">
                 <div className="flex items-center gap-4">
-                    <button onClick={closeStudentAttView} className="btn btn-circle btn-ghost text-gray-500">
+                    <button onClick={closeStudentAttView} className="grid h-10 w-10 place-items-center rounded-full text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700">
                         <FaChevronLeft className="text-xl" />
                     </button>
                     <div>
@@ -50,7 +50,7 @@ export function StudentHistoryModal({
                 </div>
                 <button
                     onClick={closeStudentAttView}
-                    className="btn btn-sm bg-gray-900 text-white border-none rounded-xl"
+                    className="rounded-full bg-gray-900 px-5 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-gray-700 active:scale-95"
                 >
                     닫기
                 </button>

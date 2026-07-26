@@ -60,35 +60,35 @@ export function SettlementTab({
             {/* 상단 컨트롤러 */}
             <div className="flex flex-col gap-2">
                 <div className="flex flex-col md:flex-row justify-between items-center gap-4">
-                    <div className="flex items-center bg-white px-4 py-2 rounded-2xl shadow-sm border border-gray-100">
-                        <button onClick={() => changeMonth(-1)} className="btn btn-circle btn-sm btn-ghost">
+                    <div className="flex items-center gap-1.5 rounded-2xl bg-white px-3 py-2 shadow-sm ring-1 ring-gray-100">
+                        <button onClick={() => changeMonth(-1)} className="grid h-8 w-8 place-items-center rounded-full text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700">
                             <FaChevronLeft />
                         </button>
-                        <div className="flex items-center mx-2">
-                            <select
-                                className="select select-sm bg-transparent border-none font-extrabold text-lg text-center w-24 focus:outline-none"
-                                value={currentDate.getFullYear()}
-                                onChange={handleYearChange}
-                            >
-                                {Array.from({ length: 10 }, (_, i) => new Date().getFullYear() - 5 + i).map((y) => (
-                                    <option key={y} value={y}>
-                                        {y}년
-                                    </option>
-                                ))}
-                            </select>
-                            <select
-                                className="select select-sm bg-transparent border-none font-extrabold text-lg text-center w-20 focus:outline-none"
-                                value={currentDate.getMonth() + 1}
-                                onChange={handleMonthChange}
-                            >
-                                {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
-                                    <option key={m} value={m}>
-                                        {m}월
-                                    </option>
-                                ))}
-                            </select>
-                        </div>
-                        <button onClick={() => changeMonth(1)} className="btn btn-circle btn-sm btn-ghost">
+                        {/* 년도: 옅은 회색 pill (드롭다운 배경이 비치지 않도록 불투명 bg) */}
+                        <select
+                            className="cursor-pointer appearance-none rounded-lg bg-gray-50 py-1.5 pl-2.5 pr-1 text-sm font-semibold text-gray-500 transition-colors hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-gray-200"
+                            value={currentDate.getFullYear()}
+                            onChange={handleYearChange}
+                        >
+                            {Array.from({ length: 10 }, (_, i) => new Date().getFullYear() - 5 + i).map((y) => (
+                                <option key={y} value={y} style={{ backgroundColor: '#ffffff', color: '#374151' }}>
+                                    {y}년
+                                </option>
+                            ))}
+                        </select>
+                        {/* 월: 주황 배지 pill */}
+                        <select
+                            className="cursor-pointer appearance-none rounded-full bg-orange-500 px-4 py-1.5 text-center text-sm font-bold text-white shadow-sm transition-colors hover:bg-orange-600 focus:outline-none focus:ring-2 focus:ring-orange-200"
+                            value={currentDate.getMonth() + 1}
+                            onChange={handleMonthChange}
+                        >
+                            {Array.from({ length: 12 }, (_, i) => i + 1).map((m) => (
+                                <option key={m} value={m} style={{ backgroundColor: '#ffffff', color: '#374151' }}>
+                                    {m}월
+                                </option>
+                            ))}
+                        </select>
+                        <button onClick={() => changeMonth(1)} className="grid h-8 w-8 place-items-center rounded-full text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700">
                             <FaChevronRight />
                         </button>
                     </div>
@@ -112,8 +112,8 @@ export function SettlementTab({
                         )}
                     </button>
                     <div className="flex-1"></div> {/* Spacer */}
-                    <button onClick={fetchSettlementData} className="btn btn-sm btn-ghost text-gray-400">
-                        <FaUndo className="mr-1" /> 새로고침
+                    <button onClick={fetchSettlementData} className="inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-sm font-semibold text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600">
+                        <FaUndo /> 새로고침
                     </button>
                 </div>
 
@@ -354,7 +354,7 @@ export function SettlementTab({
                         </div>
                         <div className="flex gap-2">
                             {editingExpenseId && (
-                                <button onClick={cancelExpenseEdit} className="btn btn-sm btn-ghost flex-1">
+                                <button onClick={cancelExpenseEdit} className="btn btn-sm flex-1 bg-gray-100 text-gray-500 border-none rounded-xl hover:bg-gray-200">
                                     취소
                                 </button>
                             )}

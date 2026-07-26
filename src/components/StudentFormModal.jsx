@@ -72,7 +72,7 @@ export function StudentFormModal({
                     </h2>
                     <button
                         onClick={closeModal}
-                        className="btn btn-sm btn-circle btn-ghost text-gray-400 hover:bg-gray-100"
+                        className="grid h-9 w-9 place-items-center rounded-full text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
                     >
                         ✕
                     </button>
