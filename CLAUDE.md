@@ -297,6 +297,18 @@ npm run verify-student-edit  # 학생 수정이 결제 결과를 덮지 않는�
   기존 수강중/종료/아티스트(`viewStatus`)와 **AND 로 같이** 걸린다.
 - (UI) 결제 폼 그리드 `items-end`→`items-start`(추가결제 칸이 금액 아래로 내려가도 금액이 안 밀리게).
 
+### 2026-07-23 추가 3 (출석부 탭 UI 통일 + 성능)
+
+- **UI 통일**: 보기모드/카테고리 탭을 daisyUI `tabs`→공통 pill 토글로, 월·12주 이동 화살표는
+  동그란 hover 버튼, 잠금·오늘 버튼 pill, 상태 배지(결제완료/청구중)는 테두리→ring. 색은 유지.
+- **월정산 기본 월별**: '월정산' 카테고리를 누르면 자동으로 월별 보기로 전환(12주 탭·월별 탭 둘 다).
+- **성능**: 출석부 렌더가 학생마다 전체 `attSchedules`(수천 건)를 훑던 3곳을 학생별 인덱스로.
+  - `AttendanceTab`: `schedsByStudentId`(useMemo, 전체 상태 포함) 만들어 weekSchedules·monthScheds 에 사용.
+  - App `getScheduleRotationInfo`: `attSchedulesByStudent`(완료/결석 인덱스) 사용, 대상이 pending 이면
+    함께 포함. 시그니처를 `(student, sched객체)` 로 바꿈(호출부 1곳). 결과 100% 동일, 렌더 ~40배↓.
+- (참고) 월정산 '청구하기'는 트랜잭션(서버 왕복)이라 버튼 반영에 약간 지연 있음 — 미수금 유실
+  방지용이라 그대로 둠. '결제완료' 배지는 금액 일치로 판정 → 결제 후 그달 수업 수 바뀌면 배지 사라질 수 있음(설계상).
+
 ### 끝난 것
 
 - `src/App.jsx` 6,653줄 → 2,689줄 + 16개 파일로 분리

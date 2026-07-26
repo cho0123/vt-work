@@ -2840,20 +2840,22 @@ function App() {
     };
 
     // 로테이션 정보 계산 (시각화용, M/V 독립 카운트 방식)
-    const getScheduleRotationInfo = (student, targetSchedId) => {
-        if (!student) return { index: -1, label: '' };
+    // targetSched: 대상 수업 객체(예전엔 id만 받았으나, pending 대상도 포함하려면 객체가 편하다).
+    // [성능] 전체 attSchedules 를 매번 훑지 않고, 미리 학생별로 묶어둔 완료/결석 인덱스
+    //        (attSchedulesByStudent)를 쓴다. 대상이 완료/결석이 아니면(그 인덱스에 없음) 직접 더한다.
+    //        결과는 기존 로직(studentId + 버퍼일 + (완료|결석|대상))과 동일하다.
+    const getScheduleRotationInfo = (student, targetSched) => {
+        if (!student || !targetSched) return { index: -1, label: '' };
+        const targetSchedId = targetSched.id;
 
         const bufferDateStr = rotationBufferDate(student.firstDate, formatDateLocal);
-        const scheds = sortByDateTime(
-            attSchedules.filter(
-                (s) =>
-                    s.studentId === student.id &&
-                    s.date >= bufferDateStr &&
-                    (s.status === 'completed' || s.status === 'absent' || s.id === targetSchedId)
-            )
-        );
+        const base = attSchedulesByStudent.get(student.id) || []; // 그 학생의 완료/결석 수업만
+        let list = base.filter((s) => s.date >= bufferDateStr);
+        if (targetSched.date >= bufferDateStr && !list.some((s) => s.id === targetSchedId)) {
+            list = [...list, targetSched];
+        }
 
-        return getRotationInfo(scheds, targetSchedId, student);
+        return getRotationInfo(sortByDateTime(list), targetSchedId, student);
     };
 
     // --- [기간제 출석 토글 핸들러] ---

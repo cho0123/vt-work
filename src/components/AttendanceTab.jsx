@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import {
     FaPlus,
     FaChevronLeft,
@@ -50,19 +51,31 @@ export function AttendanceTab({
     handleRegisterRotation,
     handleMonthlySettlementRequest,
 }) {
+    // [성능] 렌더 루프가 학생마다 전체 스케쥴(수천 건)을 훑지 않도록, 학생ID별로 한 번만 묶어둔다.
+    // (아래 weekSchedules 계산에서 학생 것만 바로 꺼내 쓴다 — 결과는 동일)
+    const schedsByStudentId = useMemo(() => {
+        const m = new Map();
+        for (const s of attSchedules) {
+            const arr = m.get(s.studentId);
+            if (arr) arr.push(s);
+            else m.set(s.studentId, [s]);
+        }
+        return m;
+    }, [attSchedules]);
+
     return (
         // [수정] pb-20 추가
         <div className="flex flex-col gap-4 h-full p-4 md:p-8 lg:px-12 pb-20 overflow-y-auto">
             {/* 상단 컨트롤 */}
             <div className="flex-none flex flex-col md:flex-row justify-between items-center gap-4 bg-white p-4 rounded-[2rem] shadow-sm border border-gray-100">
                 {/* 보기 모드 토글 + 초기화 로직 추가 */}
-                <div className="flex bg-gray-100 p-1 rounded-xl">
+                <div className="flex items-center gap-1 rounded-full bg-gray-100 p-1">
                     <button
                         onClick={() => {
                             setAttViewMode('12weeks');
                             setAttCategory('basic'); // 12주 보기 기본값
                         }}
-                        className={`px-4 py-2 rounded-lg text-sm font-bold ${attViewMode === '12weeks' ? 'bg-white shadow-sm text-black' : 'text-gray-400'}`}
+                        className={`rounded-full px-4 py-1.5 text-sm font-bold transition-all active:scale-95 ${attViewMode === '12weeks' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
                     >
                         12주 보기
                     </button>
@@ -71,7 +84,7 @@ export function AttendanceTab({
                             setAttViewMode('month');
                             setAttCategory('all'); // 월별 보기 기본값 (모든수강생)
                         }}
-                        className={`px-4 py-2 rounded-lg text-sm font-bold ${attViewMode === 'month' ? 'bg-white shadow-sm text-black' : 'text-gray-400'}`}
+                        className={`rounded-full px-4 py-1.5 text-sm font-bold transition-all active:scale-95 ${attViewMode === 'month' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
                     >
                         월별 보기
                     </button>
@@ -79,67 +92,75 @@ export function AttendanceTab({
 
                 {/* 모드에 따른 탭 구성 변경 */}
                 {attViewMode === '12weeks' ? (
-                    <div className="tabs tabs-boxed bg-gray-100 p-1 rounded-full">
-                        <a
-                            className={`tab rounded-full ${attCategory === 'basic' ? 'tab-active bg-black text-white' : ''}`}
+                    <div className="flex items-center gap-1 rounded-full bg-gray-100 p-1">
+                        <button
+                            className={`rounded-full px-4 py-1.5 text-sm font-bold transition-all active:scale-95 ${attCategory === 'basic' ? 'bg-gray-900 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
                             onClick={() => setAttCategory('basic')}
                         >
                             기본 수강생
-                        </a>
-                        <a
-                            className={`tab rounded-full ${attCategory === 'monthly' ? 'tab-active bg-blue-600 text-white' : ''}`}
-                            onClick={() => setAttCategory('monthly')}
+                        </button>
+                        <button
+                            className={`rounded-full px-4 py-1.5 text-sm font-bold transition-all active:scale-95 ${attCategory === 'monthly' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                            onClick={() => {
+                                setAttViewMode('month');
+                                setAttCategory('monthly');
+                            }}
                         >
                             월정산
-                        </a>
-                        <a
-                            className={`tab rounded-full ${attCategory === 'artist' ? 'tab-active bg-purple-600 text-white' : ''}`}
+                        </button>
+                        <button
+                            className={`rounded-full px-4 py-1.5 text-sm font-bold transition-all active:scale-95 ${attCategory === 'artist' ? 'bg-purple-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
                             onClick={() => setAttCategory('artist')}
                         >
                             아티스트
-                        </a>
-                        <a
-                            className={`tab rounded-full ${attCategory === 'inactive' ? 'tab-active bg-gray-500 text-white' : ''}`}
+                        </button>
+                        <button
+                            className={`rounded-full px-4 py-1.5 text-sm font-bold transition-all active:scale-95 ${attCategory === 'inactive' ? 'bg-gray-500 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
                             onClick={() => setAttCategory('inactive')}
                         >
                             비활성
-                        </a>
+                        </button>
                     </div>
                 ) : (
                     /* 월별 보기일 때: 날짜 네비게이션 + [모든수강생/월정산] 탭 */
                     <div className="flex items-center gap-4">
-                        <div className="flex items-center gap-2 bg-gray-100 px-3 py-1.5 rounded-xl">
+                        <div className="flex items-center gap-1 rounded-full bg-gray-100 px-2 py-1">
                             <button
                                 onClick={() => setAttMonth(shiftMonth(attMonth, -1))}
-                                className="btn btn-xs btn-circle btn-ghost"
+                                aria-label="이전 달"
+                                className="grid h-7 w-7 place-items-center rounded-full text-gray-400 transition-colors hover:bg-white hover:text-gray-700"
                             >
-                                <FaChevronLeft />
+                                <FaChevronLeft className="text-xs" />
                             </button>
-                            <span className="text-sm font-bold text-gray-700 min-w-[80px] text-center">
+                            <span className="min-w-[70px] text-center text-sm font-bold text-gray-700">
                                 {attMonth.getFullYear()}.{String(attMonth.getMonth() + 1).padStart(2, '0')}
                             </span>
                             <button
                                 onClick={() => setAttMonth(shiftMonth(attMonth, 1))}
-                                className="btn btn-xs btn-circle btn-ghost"
+                                aria-label="다음 달"
+                                className="grid h-7 w-7 place-items-center rounded-full text-gray-400 transition-colors hover:bg-white hover:text-gray-700"
                             >
-                                <FaChevronRight />
+                                <FaChevronRight className="text-xs" />
                             </button>
                         </div>
 
                         {/* 월별 보기용 탭 */}
-                        <div className="tabs tabs-boxed bg-gray-100 p-1 rounded-full">
-                            <a
-                                className={`tab rounded-full px-4 ${attCategory === 'all' ? 'tab-active bg-black text-white' : ''}`}
+                        <div className="flex items-center gap-1 rounded-full bg-gray-100 p-1">
+                            <button
+                                className={`rounded-full px-4 py-1.5 text-sm font-bold transition-all active:scale-95 ${attCategory === 'all' ? 'bg-gray-900 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
                                 onClick={() => setAttCategory('all')}
                             >
                                 모든수강생
-                            </a>
-                            <a
-                                className={`tab rounded-full px-4 ${attCategory === 'monthly' ? 'tab-active bg-blue-600 text-white' : ''}`}
-                                onClick={() => setAttCategory('monthly')}
+                            </button>
+                            <button
+                                className={`rounded-full px-4 py-1.5 text-sm font-bold transition-all active:scale-95 ${attCategory === 'monthly' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                                onClick={() => {
+                                    setAttViewMode('month');
+                                    setAttCategory('monthly');
+                                }}
                             >
                                 월정산
-                            </a>
+                            </button>
                         </div>
                     </div>
                 )}
@@ -162,7 +183,7 @@ export function AttendanceTab({
                     )}
 
                     <button
-                        className={`btn btn-sm gap-2 ${isAttendanceLocked ? 'btn-ghost text-gray-400' : 'bg-red-100 text-red-500 border-none'}`}
+                        className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-semibold shadow-sm transition-all active:scale-95 ${isAttendanceLocked ? 'bg-gray-100 text-gray-500 hover:bg-gray-200' : 'bg-red-500 text-white hover:bg-red-600'}`}
                         onClick={() => setIsAttendanceLocked(!isAttendanceLocked)}
                     >
                         {isAttendanceLocked ? (
@@ -180,14 +201,15 @@ export function AttendanceTab({
                         <>
                             <div className="w-[1px] h-6 bg-gray-200 mx-2"></div>
                             <button
-                                className="btn btn-sm btn-circle btn-ghost"
+                                aria-label="이전 12주"
+                                className="grid h-8 w-8 place-items-center rounded-full text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
                                 onClick={() => {
                                     const d = new Date(attBaseDate);
                                     d.setDate(d.getDate() - 7 * 12);
                                     setAttBaseDate(d);
                                 }}
                             >
-                                <FaChevronLeft />
+                                <FaChevronLeft className="text-xs" />
                             </button>
 
                             <div className="text-center flex flex-col items-center justify-center min-w-[140px]">
@@ -209,18 +231,19 @@ export function AttendanceTab({
                             </div>
 
                             <button
-                                className="btn btn-sm btn-circle btn-ghost"
+                                aria-label="다음 12주"
+                                className="grid h-8 w-8 place-items-center rounded-full text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
                                 onClick={() => {
                                     const d = new Date(attBaseDate);
                                     d.setDate(d.getDate() + 7 * 12);
                                     setAttBaseDate(d);
                                 }}
                             >
-                                <FaChevronRight />
+                                <FaChevronRight className="text-xs" />
                             </button>
 
                             <button
-                                className="btn btn-sm btn-ghost text-xs"
+                                className="rounded-full bg-gray-900 px-4 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:bg-gray-700 active:scale-95"
                                 onClick={() => setAttBaseDate(getStartOfWeek(new Date()))}
                             >
                                 오늘
@@ -354,10 +377,11 @@ export function AttendanceTab({
                                                     const mEnd = weeks[weeks.length - 1].endStr;
                                                     const targetYearMonth = `${attMonth.getFullYear()}.${attMonth.getMonth() + 1}`; // 현재 보고 있는 월
 
-                                                    const monthScheds = attSchedules.filter((s) => {
+                                                    const monthScheds = (
+                                                        schedsByStudentId.get(student.id) || []
+                                                    ).filter((s) => {
                                                         const sDate = new Date(s.date);
                                                         return (
-                                                            s.studentId === student.id &&
                                                             s.date >= mStart &&
                                                             s.date <= mEnd &&
                                                             s.status !== 'reschedule' &&
@@ -592,24 +616,25 @@ export function AttendanceTab({
                                                 Number(weekConfig?.vocal || 0) + Number(weekConfig?.vocal30 || 0);
 
                                             /* 수정 후 (월 검증 추가) */
-                                            const weekSchedules = attSchedules.filter((s) => {
-                                                const sDate = new Date(s.date);
-                                                return (
-                                                    s.studentId === student.id &&
-                                                    s.date >= w.startStr &&
-                                                    s.date <= w.endStr &&
-                                                    (!s.memo ||
-                                                        !s.memo.includes('보강(') ||
-                                                        s.status === 'completed' ||
-                                                        s.status === 'reschedule' ||
-                                                        s.status === 'reschedule_assigned') &&
-                                                    // [핵심 추가] 월별 보기 모드일 때만 날짜 엄격 검증
-                                                    (attViewMode === 'month'
-                                                        ? sDate.getMonth() === attMonth.getMonth() &&
-                                                          sDate.getFullYear() === attMonth.getFullYear()
-                                                        : true)
-                                                );
-                                            });
+                                            const weekSchedules = (schedsByStudentId.get(student.id) || []).filter(
+                                                (s) => {
+                                                    const sDate = new Date(s.date);
+                                                    return (
+                                                        s.date >= w.startStr &&
+                                                        s.date <= w.endStr &&
+                                                        (!s.memo ||
+                                                            !s.memo.includes('보강(') ||
+                                                            s.status === 'completed' ||
+                                                            s.status === 'reschedule' ||
+                                                            s.status === 'reschedule_assigned') &&
+                                                        // [핵심 추가] 월별 보기 모드일 때만 날짜 엄격 검증
+                                                        (attViewMode === 'month'
+                                                            ? sDate.getMonth() === attMonth.getMonth() &&
+                                                              sDate.getFullYear() === attMonth.getFullYear()
+                                                            : true)
+                                                    );
+                                                }
+                                            );
 
                                             const extraMCount = weekSchedules
                                                 .filter(
@@ -685,7 +710,7 @@ export function AttendanceTab({
                                                 // ... (기존 로테이션 및 스타일 로직 동일)
                                                 let rotationInfo = { index: -1, label: '' };
                                                 if (sched) {
-                                                    rotationInfo = getScheduleRotationInfo(student, sched.id);
+                                                    rotationInfo = getScheduleRotationInfo(student, sched);
                                                 }
                                                 // ... (이하 동일)
                                                 const manualKey = `${student.id}_${w.startStr}_${type}_${index}`;
@@ -858,7 +883,7 @@ export function AttendanceTab({
                                                     {/* [FIX] 상태에 따른 UI 렌더링 (결제완료 > 청구중 > 재등록버튼) */}
                                                     {uiState === 'paid' && (
                                                         <div className="absolute top-0 right-0 left-0 -mt-3 flex justify-center z-10">
-                                                            <span className="text-[9px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-bold border border-green-200 flex items-center gap-0.5">
+                                                            <span className="text-[9px] bg-green-100 text-green-700 px-1.5 py-0.5 rounded-full font-bold ring-1 ring-inset ring-green-200 flex items-center gap-0.5">
                                                                 <FaCheckCircle className="text-[7px]" />{' '}
                                                                 {targetUiDate.substring(5).replace('-', '.')} 결제완료
                                                             </span>
@@ -867,7 +892,7 @@ export function AttendanceTab({
 
                                                     {uiState === 'billed' && (
                                                         <div className="absolute top-0 right-0 left-0 -mt-3 flex justify-center z-10">
-                                                            <span className="text-[9px] bg-red-100 text-red-500 px-1.5 py-0.5 rounded-full font-bold border border-red-200 animate-pulse">
+                                                            <span className="text-[9px] bg-red-100 text-red-500 px-1.5 py-0.5 rounded-full font-bold ring-1 ring-inset ring-red-200 animate-pulse">
                                                                 {targetUiDate.substring(5).replace('-', '.')} 청구중
                                                             </span>
                                                         </div>
