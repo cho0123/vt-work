@@ -117,6 +117,42 @@ npm run verify-student-edit  # 학생 수정이 결제 결과를 덮지 않는�
 
 ---
 
+## 배포 절차 (회사 PC에서 — 2026-07-23 기준 준비 완료, 아직 미배포)
+
+**배포 = `refactor/split-app` → `main` 병합 → push → Netlify 자동 배포(운영 `vt-schedule-12568`).**
+현재 `main`은 리팩터링 전 옛 코드(HEAD `1c5d513`), `main..refactor` 로 **미배포 커밋 37개**.
+사용자가 배포 승인함(원래는 "기능 다 된 뒤 배포" 조건이었으나 해제됨). **집 PC엔 운영 키가 없어
+백업·규칙배포·검증이 안 되므로 회사 PC에서 진행할 것.**
+
+### ⚠️ 배포 전 반드시 확인 (연결 안 되면 앱이 통째로 안 뜸)
+
+- `src/firebase.js` 는 `import.meta.env.VITE_*` 로 설정을 읽는다. **옛 `main` 에는 `.env`(운영 설정)가
+  커밋돼 있었지만, `refactor` 는 `.env` 를 `.gitignore`(16~17줄) 해서 추적 안 한다.**
+  → 그냥 병합하면 `.env` 가 사라져 배포된 앱이 운영 DB에 **연결 안 될 수 있다.** 둘 중 하나 필요:
+  1. **Netlify 사이트 설정 → 환경변수**에 운영 `VITE_*` 6개가 있는지 확인(있으면 그대로 OK), 또는
+  2. 없으면 배포 브랜치에 `.env`(운영 설정)를 넣기. 값은 `git show main:.env` 에 그대로 있음
+     (Firebase 웹 설정은 공개값이라 비밀 아님). `.env.example` 에 항목 목록.
+- 로컬 `npm run build` 는 집 PC에서 네이티브 크래시(환경 문제)지만 회사 PC·Netlify 는 정상.
+
+### 순서 (회사 PC)
+
+1. **운영 데이터 백업**: `npm run backup` (key-A.json 필요). → `backup/prod-*.json`.
+2. **코드 롤백 지점**: 현재 `main` 태그. 예 `git tag prod-before-refactor-deploy main && git push origin --tags`.
+3. 위 ⚠️ **Netlify 환경변수 확인**(또는 `.env` 준비).
+4. **병합·배포**: `git checkout main && git merge refactor/split-app && git push origin main` → Netlify 빌드.
+5. **배포 후 검증**: 라이브 URL 로그인 → 탭 제목에 `⚠️운영DB⚠️` 경고 **안 뜨고** 정상 데이터 보이는지.
+   전영림 로테이션 색/월간고정/백업 등 핵심 동작 확인.
+6. **보안규칙**: `node scripts/deploy-rules.js key-A.json` 로 `firestore.rules` 를 운영에 배포(허용 UID 제한).
+   앱 동작엔 안 막히지만(현재 규칙이 더 느슨해도 owner 는 되므로) 보안상 함께 해야 함.
+
+### 배포 후 방향
+
+배포로 v1 운영 시작 → 개발앱(`refactor/split-app` 계속 또는 새 브랜치)에서 개선 →
+완성되면 다시 `main` 병합해서 재배포(연속 배포). 데이터 변경은 전부 **덧붙이기(additive)**
+라 옛 운영 데이터와 호환되고, 배포 자체가 데이터를 지우거나 변형하지 않는다(롤백 시 코드만 되돌리면 됨).
+
+---
+
 ## 현재 상태 (2026-07-21 기준)
 
 작업 브랜치 `refactor/split-app`. **`main` 은 손대지 않았고 아직 배포 전.**
