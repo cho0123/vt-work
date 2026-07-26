@@ -43,6 +43,7 @@ export function StudentsTab({
     viewStatus,
     setViewStatus,
     listFilter,
+    reregisterCount,
     setListFilter,
     searchTerm,
     setSearchTerm,
@@ -172,7 +173,7 @@ export function StudentsTab({
                             {[
                                 { key: 'all', label: '전체' },
                                 { key: 'unpaid', label: '미결제' },
-                                { key: 'reregister', label: '재등록' },
+                                { key: 'reregister', label: `재등록 (${reregisterCount ?? 0})` },
                             ].map((f) => (
                                 <button
                                     key={f.key}

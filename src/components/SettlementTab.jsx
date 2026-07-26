@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
     FaEdit,
     FaTrash,
@@ -13,6 +14,9 @@ import {
     FaExternalLinkAlt,
     FaLock,
     FaLockOpen,
+    FaPlus,
+    FaCog,
+    FaThumbtack,
 } from 'react-icons/fa';
 import { collection, addDoc, doc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
@@ -20,6 +24,57 @@ import { MemoInput } from './MemoInput.jsx';
 import { formatDateLocal } from '../utils/date.js';
 import { formatCurrency } from '../utils/money.js';
 import { expenseDefaults } from '../constants/expenses.js';
+
+/**
+ * 고정항목 관리 편집창의 한 줄. 금액/변동여부를 로컬로 편집하고 '저장' 눌러야 반영.
+ */
+function FixedExpenseRow({ item, onSave, onDelete }) {
+    const [amount, setAmount] = useState(String(item.amount ?? ''));
+    const [variable, setVariable] = useState(!!item.variable);
+    const changed = variable !== !!item.variable || (!variable && String(item.amount ?? '') !== amount);
+
+    return (
+        <div className="flex items-center gap-2 py-1.5">
+            <span className="w-24 shrink-0 truncate font-bold text-gray-700" title={item.name}>
+                {item.name}
+            </span>
+            {variable ? (
+                <span className="flex-1 text-xs font-bold text-orange-500">금액 변동 (매달 입력필요)</span>
+            ) : (
+                <input
+                    type="number"
+                    value={amount}
+                    onChange={(e) => setAmount(e.target.value)}
+                    placeholder="금액"
+                    className="input input-xs w-28 border-gray-200 bg-white font-bold"
+                />
+            )}
+            <label className="flex shrink-0 cursor-pointer items-center gap-1 text-[11px] font-semibold text-gray-500">
+                <input
+                    type="checkbox"
+                    checked={variable}
+                    onChange={(e) => setVariable(e.target.checked)}
+                    className="checkbox checkbox-xs"
+                />
+                변동
+            </label>
+            <button
+                disabled={!changed}
+                onClick={() => onSave(item.id, variable ? { variable: true } : { variable: false, amount })}
+                className="rounded-lg bg-blue-50 px-2 py-1 text-[11px] font-bold text-blue-600 transition-all hover:bg-blue-100 active:scale-95 disabled:opacity-30"
+            >
+                저장
+            </button>
+            <button
+                onClick={() => onDelete(item.id, item.name)}
+                className="grid h-6 w-6 place-items-center rounded-lg text-gray-300 transition-colors hover:bg-red-50 hover:text-red-500"
+                title="삭제"
+            >
+                <FaTrash className="text-[11px]" />
+            </button>
+        </div>
+    );
+}
 
 /**
  * App.jsx 에서 그대로 옮긴 블록.
@@ -33,6 +88,9 @@ export function SettlementTab({
     fetchSettlementData,
     settlementStatus,
     handleToggleSettlementStatus,
+    pendingSettlementMonths,
+    unpaidMonths,
+    goToSettlementMonth,
     settlementMemo,
     handleSettlementMemoSave,
     settlementIncome,
@@ -54,7 +112,18 @@ export function SettlementTab({
     cancelExpenseEdit,
     handleGoToStudent,
     handleDeletePayment,
+    fixedExpenses = [],
+    handleAddFixedExpense,
+    handleUpdateFixedExpense,
+    handleDeleteFixedExpense,
+    handleLoadFixedExpensesForMonth,
 }) {
+    // 고정항목 관리 편집창 로컬 UI 상태
+    const [fixedMgrOpen, setFixedMgrOpen] = useState(false);
+    const [newFixedName, setNewFixedName] = useState('');
+    const [newFixedAmount, setNewFixedAmount] = useState('');
+    const [newFixedVariable, setNewFixedVariable] = useState(false);
+
     return (
         <div className="flex flex-col gap-6 p-4 md:p-8 lg:px-12 pb-20 overflow-y-auto">
             {/* 상단 컨트롤러 */}
@@ -116,6 +185,71 @@ export function SettlementTab({
                         <FaUndo /> 새로고침
                     </button>
                 </div>
+
+                {/* [NEW] 아직 정산완료(마감) 안 한 지난 달들 — 배지 클릭 시 그 달 정산으로 이동 */}
+                {pendingSettlementMonths !== null &&
+                    (pendingSettlementMonths.length > 0 ? (
+                        <div className="flex flex-wrap items-center gap-1.5 rounded-2xl bg-amber-50 px-3 py-2 ring-1 ring-amber-100">
+                            <span className="inline-flex items-center gap-1 text-[12px] font-bold text-amber-700">
+                                <FaLockOpen className="text-[11px]" /> 아직 정산 안 한 달 {pendingSettlementMonths.length}개
+                            </span>
+                            {pendingSettlementMonths.map((ym) => {
+                                const viewedYM = `${currentDate.getFullYear()}-${String(
+                                    currentDate.getMonth() + 1
+                                ).padStart(2, '0')}`;
+                                const active = ym === viewedYM;
+                                return (
+                                    <button
+                                        key={ym}
+                                        onClick={() => goToSettlementMonth(ym)}
+                                        title={`${ym.replace('-', '년 ')}월 정산 보기`}
+                                        className={`rounded-full px-2.5 py-1 text-[12px] font-bold shadow-sm transition-all active:scale-95 ${
+                                            active
+                                                ? 'bg-amber-500 text-white ring-1 ring-amber-500'
+                                                : 'bg-white text-amber-700 ring-1 ring-amber-200 hover:bg-amber-100'
+                                        }`}
+                                    >
+                                        {ym.replace('-', '.')}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    ) : (
+                        <div className="flex items-center gap-1.5 rounded-2xl bg-green-50 px-3 py-2 ring-1 ring-green-100">
+                            <span className="inline-flex items-center gap-1 text-[12px] font-bold text-green-600">
+                                <FaLock className="text-[11px]" /> 지난 달까지 모두 정산완료
+                            </span>
+                        </div>
+                    ))}
+
+                {/* [NEW] 미수금이 남아있는 달 — 배지 클릭 시 그 달 정산으로 이동 */}
+                {(unpaidMonths || []).length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1.5 rounded-2xl bg-red-50 px-3 py-2 ring-1 ring-red-100">
+                        <span className="inline-flex items-center gap-1 text-[12px] font-bold text-red-600">
+                            <FaExclamationCircle className="text-[11px]" /> 미수금 남은 달 {unpaidMonths.length}개
+                        </span>
+                        {unpaidMonths.map((ym) => {
+                            const viewedYM = `${currentDate.getFullYear()}-${String(
+                                currentDate.getMonth() + 1
+                            ).padStart(2, '0')}`;
+                            const active = ym === viewedYM;
+                            return (
+                                <button
+                                    key={ym}
+                                    onClick={() => goToSettlementMonth(ym)}
+                                    title={`${ym.replace('-', '년 ')}월 정산 보기`}
+                                    className={`rounded-full px-2.5 py-1 text-[12px] font-bold shadow-sm transition-all active:scale-95 ${
+                                        active
+                                            ? 'bg-red-500 text-white ring-1 ring-red-500'
+                                            : 'bg-white text-red-600 ring-1 ring-red-200 hover:bg-red-100'
+                                    }`}
+                                >
+                                    {ym.replace('-', '.')}
+                                </button>
+                            );
+                        })}
+                    </div>
+                )}
 
                 {/* 월별 메모 */}
                 <div className="bg-white px-4 py-2 rounded-xl shadow-sm border border-gray-100 flex items-center gap-3">
@@ -297,6 +431,97 @@ export function SettlementTab({
                         <span className="text-xs font-bold text-red-500 bg-red-50 px-2 py-1 rounded-lg">지출등록</span>
                     </div>
 
+                    {/* [NEW] 고정 지출 — 불러오기 / 항목 관리 */}
+                    <div className="px-4 pt-4">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <button
+                                onClick={handleLoadFixedExpensesForMonth}
+                                className="inline-flex items-center gap-1.5 rounded-full bg-gray-900 px-4 py-2 text-sm font-bold text-white shadow-sm transition-all hover:bg-gray-700 active:scale-95"
+                            >
+                                <FaThumbtack className="text-[11px]" /> 이달 고정지출 불러오기
+                            </button>
+                            <button
+                                onClick={() => setFixedMgrOpen((v) => !v)}
+                                className={`inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-bold shadow-sm transition-all active:scale-95 ${
+                                    fixedMgrOpen
+                                        ? 'bg-gray-200 text-gray-700'
+                                        : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                                }`}
+                            >
+                                <FaCog className="text-[11px]" /> 고정항목 관리 ({fixedExpenses.length})
+                            </button>
+                        </div>
+
+                        {fixedMgrOpen && (
+                            <div className="mt-2 rounded-2xl border border-gray-200 bg-gray-50 p-3">
+                                <p className="mb-2 text-[11px] font-semibold text-gray-400">
+                                    매달 '불러오기'로 등록할 항목입니다. 금액이 매달 바뀌는 항목은{' '}
+                                    <span className="font-bold text-orange-500">'변동'</span>으로 두면 불러올 때
+                                    금액을 <span className="font-bold text-orange-500">'입력필요'</span>로 남깁니다.
+                                </p>
+                                <div className="divide-y divide-gray-200">
+                                    {fixedExpenses.length === 0 ? (
+                                        <div className="py-3 text-center text-xs text-gray-300">
+                                            등록된 고정 항목이 없습니다.
+                                        </div>
+                                    ) : (
+                                        fixedExpenses.map((item) => (
+                                            <FixedExpenseRow
+                                                key={item.id}
+                                                item={item}
+                                                onSave={handleUpdateFixedExpense}
+                                                onDelete={handleDeleteFixedExpense}
+                                            />
+                                        ))
+                                    )}
+                                </div>
+                                {/* 새 항목 추가 */}
+                                <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-gray-200 pt-2">
+                                    <input
+                                        type="text"
+                                        value={newFixedName}
+                                        onChange={(e) => setNewFixedName(e.target.value)}
+                                        placeholder="항목명 (예: 청소비)"
+                                        className="input input-xs w-32 border-gray-200 bg-white"
+                                    />
+                                    {!newFixedVariable && (
+                                        <input
+                                            type="number"
+                                            value={newFixedAmount}
+                                            onChange={(e) => setNewFixedAmount(e.target.value)}
+                                            placeholder="금액"
+                                            className="input input-xs w-28 border-gray-200 bg-white font-bold"
+                                        />
+                                    )}
+                                    <label className="flex cursor-pointer items-center gap-1 text-[11px] font-semibold text-gray-500">
+                                        <input
+                                            type="checkbox"
+                                            checked={newFixedVariable}
+                                            onChange={(e) => setNewFixedVariable(e.target.checked)}
+                                            className="checkbox checkbox-xs"
+                                        />
+                                        변동(입력필요)
+                                    </label>
+                                    <button
+                                        onClick={async () => {
+                                            await handleAddFixedExpense(
+                                                newFixedName,
+                                                newFixedAmount,
+                                                newFixedVariable
+                                            );
+                                            setNewFixedName('');
+                                            setNewFixedAmount('');
+                                            setNewFixedVariable(false);
+                                        }}
+                                        className="inline-flex items-center gap-1 rounded-full bg-gray-900 px-3 py-1.5 text-[11px] font-bold text-white transition-all hover:bg-gray-700 active:scale-95"
+                                    >
+                                        <FaPlus className="text-[10px]" /> 추가
+                                    </button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
                     {/* 지출 입력 폼 */}
                     <div className="p-4 bg-gray-50 m-4 rounded-2xl border border-gray-200">
                         <div className="grid grid-cols-2 gap-2 mb-2">
@@ -384,7 +609,15 @@ export function SettlementTab({
                                     <tr key={item.id} className="border-b border-gray-50 last:border-none">
                                         <td className="text-gray-500">{item.date}</td>
                                         <td className="font-bold text-gray-700">{item.category}</td>
-                                        <td className="font-bold text-red-500">-{formatCurrency(item.amount)}</td>
+                                        <td className="font-bold text-red-500">
+                                            {!Number(item.amount) && item.memo === '입력필요' ? (
+                                                <span className="inline-flex items-center gap-1 rounded-full bg-orange-100 px-2 py-0.5 text-[11px] font-bold text-orange-600">
+                                                    <FaExclamationCircle className="text-[10px]" /> 입력필요
+                                                </span>
+                                            ) : (
+                                                <>-{formatCurrency(item.amount)}</>
+                                            )}
+                                        </td>
                                         <td className="text-xs text-gray-400">{item.memo}</td>
                                         <td className="text-right">
                                             <div className="flex justify-end gap-1">
@@ -569,15 +802,35 @@ export function SettlementTab({
                                                     )
                                                         return;
                                                     try {
-                                                        await addDoc(collection(db, 'expenses'), {
-                                                            date: formatDateLocal(currentDate), // [FIX] 현재 보고 있는 월의 날짜로 등록
+                                                        // '불러오기'로 만든 임금 입력필요 항목이 있으면
+                                                        // 새로 만들지 않고 그걸 채운다(중복 방지).
+                                                        const placeholder = expenses.find(
+                                                            (e) =>
+                                                                e.category === '임금' &&
+                                                                e.date &&
+                                                                e.date.startsWith(currentMonthPrefix) &&
+                                                                !e.isVocalWage &&
+                                                                (!Number(e.amount) || e.memo === '입력필요')
+                                                        );
+                                                        const payload = {
                                                             category: '임금',
                                                             amount: totalVocalWage,
                                                             memo: `${currentDate.getMonth() + 1}월 보컬 수업료 (${vocalCompletedEvents.length}건)`,
                                                             isVocalWage: true,
                                                             targetMonth: currentMonthPrefix,
-                                                            paidDate: null,
-                                                        });
+                                                        };
+                                                        if (placeholder) {
+                                                            await updateDoc(
+                                                                doc(db, 'expenses', placeholder.id),
+                                                                payload
+                                                            );
+                                                        } else {
+                                                            await addDoc(collection(db, 'expenses'), {
+                                                                date: formatDateLocal(currentDate), // [FIX] 현재 보고 있는 월의 날짜로 등록
+                                                                ...payload,
+                                                                paidDate: null,
+                                                            });
+                                                        }
                                                         fetchSettlementData();
                                                     } catch (e) {
                                                         console.error(e);

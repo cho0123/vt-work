@@ -217,6 +217,8 @@ function App() {
             try {
                 await setDoc(doc(db, 'settlement_memos', yearMonth), { status: 'completed' }, { merge: true });
                 setSettlementStatus('completed');
+                if (paymentsCacheRef.current.completed) paymentsCacheRef.current.completed.add(yearMonth);
+                setPendingSettlementMonths(computePendingMonths());
                 alert('정산이 마감되었습니다.');
             } catch (e) {
                 console.error(e);
@@ -234,6 +236,8 @@ function App() {
             try {
                 await setDoc(doc(db, 'settlement_memos', yearMonth), { status: 'pending' }, { merge: true });
                 setSettlementStatus('pending');
+                if (paymentsCacheRef.current.completed) paymentsCacheRef.current.completed.delete(yearMonth);
+                setPendingSettlementMonths(computePendingMonths());
                 alert("정산 상태가 '예정'으로 변경되었습니다.");
             } catch (e) {
                 console.error(e);
@@ -523,6 +527,10 @@ function App() {
     };
     const [expenseForm, setExpenseForm] = useState({ date: '', category: '기타', amount: '', memo: '' });
     const [editingExpenseId, setEditingExpenseId] = useState(null);
+    // [NEW] 고정 지출 항목 목록. { id, name, amount, variable }
+    //  - variable=false: 고정금액(불러오기 때 금액까지 등록)
+    //  - variable=true : 변동(불러오기 때 금액 0 + '입력필요' 표시 → 그 달 금액만 채움)
+    const [fixedExpenses, setFixedExpenses] = useState([]);
 
     // 스케쥴 관리
     const [scheduleDate, setScheduleDate] = useState(new Date());
@@ -643,6 +651,8 @@ function App() {
     };
     const [formData, setFormData] = useState(initialFormState);
     const [settlementStatus, setSettlementStatus] = useState('pending'); // [NEW] 정산 상태 (pending | completed)
+    // [NEW] 아직 '정산완료(마감)' 안 된 지난 달 목록('YYYY-MM' 오름차순). null=아직 계산 전.
+    const [pendingSettlementMonths, setPendingSettlementMonths] = useState(null);
 
     // --- [Data Fetching & Functions] ---
 
@@ -655,6 +665,40 @@ function App() {
     const paymentsCacheRef = useRef({ valid: false, byStudent: new Map() });
     const invalidatePaymentsCache = () => {
         paymentsCacheRef.current.valid = false;
+    };
+
+    // [NEW] '정산완료(마감)' 안 된 지난 달들 계산. 메모리 데이터만 사용해 추가 읽기가 없다.
+    // 데이터가 있는 달 = 결제(캐시) 또는 미수금(students.unpaidList)의 targetDate 가 그 달인 것.
+    // 완료 여부는 결제캐시 채울 때 함께 읽어둔 paymentsCacheRef.current.completed 집합을 쓴다.
+    // 이번 달(및 미래)은 아직 진행 중이라 제외한다.
+    const computePendingMonths = () => {
+        const byStudent = paymentsCacheRef.current.byStudent || new Map();
+        const completed = paymentsCacheRef.current.completed || new Set();
+        const dataMonths = new Set();
+        for (const student of students) {
+            for (const data of byStudent.get(student.id) || []) {
+                const ym = (data.targetDate || '').replace(/\./g, '-').slice(0, 7);
+                if (/^\d{4}-\d{2}$/.test(ym)) dataMonths.add(ym);
+            }
+            for (const item of student.unpaidList || []) {
+                const ym = (item.targetDate || '').replace(/\./g, '-').slice(0, 7);
+                if (/^\d{4}-\d{2}$/.test(ym)) dataMonths.add(ym);
+            }
+        }
+        const now = new Date();
+        const currentYM = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+        // 2026년 1월부터만 표시(그 이전 옛 달은 잠금 기록이 없어 너무 많음 → 상단 년/월로 직접 이동).
+        const FROM_YM = '2026-01';
+        return [...dataMonths]
+            .filter((ym) => ym >= FROM_YM && ym < currentYM && !completed.has(ym))
+            .sort();
+    };
+
+    // [NEW] 정산탭에서 특정 달로 이동(미마감 배지 클릭)
+    const goToSettlementMonth = (ym) => {
+        const [y, m] = ym.split('-').map(Number);
+        if (!y || !m) return;
+        setCurrentDate(new Date(y, m - 1, 1));
     };
 
     const fetchSettlementData = async (dateOverride = null) => {
@@ -713,7 +757,17 @@ function App() {
                         );
                     })
                 );
-                paymentsCacheRef.current = { valid: true, byStudent };
+                // [NEW] 정산완료(마감)된 월 집합도 함께 캐시(월 이동마다 다시 읽지 않도록 여기서 한 번만).
+                const completed = new Set();
+                try {
+                    const memosSnap = await getDocs(collection(db, 'settlement_memos'));
+                    memosSnap.forEach((d) => {
+                        if (d.data().status === 'completed') completed.add(d.id);
+                    });
+                } catch (e) {
+                    console.error('정산 마감상태 조회 실패:', e);
+                }
+                paymentsCacheRef.current = { valid: true, byStudent, completed };
             } catch (e) {
                 console.error('Settlement Payments Fetch Error:', e);
                 return; // 부분 결과로 화면을 덮어쓰지 않는다
@@ -741,9 +795,27 @@ function App() {
         allUnpaid.sort((a, b) => new Date(a.targetDate) - new Date(b.targetDate));
         setSettlementIncome(allPayments);
         setSettlementUnpaid(allUnpaid);
+
+        // [NEW] '미마감' 배너 갱신 — 정산탭에서만. 메모리 계산이라 읽기 비용 없음.
+        if (activeTab === 'settlement') {
+            setPendingSettlementMonths(computePendingMonths());
+        }
     };
 
     // --- [UseEffects] ---
+
+    // [NEW] 미수금이 남아있는 달 목록('YYYY-MM' 오름차순). 학생 unpaidList 만 쓰므로 추가 읽기 없음.
+    // 미마감 배너와 같은 하한(2025-01)만 적용하고, 이번 달도 포함한다(받을 돈은 이번 달도 표시).
+    const unpaidMonths = useMemo(() => {
+        const set = new Set();
+        for (const student of students) {
+            for (const item of student.unpaidList || []) {
+                const ym = (item.targetDate || '').replace(/\./g, '-').slice(0, 7);
+                if (/^\d{4}-\d{2}$/.test(ym) && ym >= '2025-01') set.add(ym);
+            }
+        }
+        return [...set].sort();
+    }, [students]);
 
     // [FIX] 정산 탭 계산 로직: 전역 expenses(전체역사)에서 현재 월 데이터만 필터링 및 계산
     const currentMonthPrefix = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
@@ -900,6 +972,136 @@ function App() {
         } catch (e) {
             console.error('항목 삭제 실패:', e);
             alert('항목 삭제에 실패했습니다: ' + e.message);
+        }
+    };
+
+    // ── 고정 지출 항목 (site_settings/fixed_expenses) ──────────────────
+    // 구독. 문서가 없으면 최초 1회 기존 하드코딩 기본값에서 seed 한다(임대료·통신료 등은 고정,
+    // 전기료·임금처럼 금액 0 이던 항목은 '변동(입력필요)'으로 넣는다).
+    useEffect(() => {
+        if (!user) return;
+        const ref = doc(db, 'site_settings', 'fixed_expenses');
+        const unsubscribe = onSnapshot(ref, (snap) => {
+            if (snap.exists()) {
+                const items = snap.data().items;
+                setFixedExpenses(Array.isArray(items) ? items : []);
+            } else {
+                const seed = Object.entries(expenseDefaults)
+                    .filter(([name]) => name !== '기타')
+                    .map(([name, amt], i) => ({
+                        id: `fx${i}`,
+                        name,
+                        amount: Number(amt) || 0,
+                        variable: Number(amt) > 0 ? false : true, // 금액 0 이던 항목은 변동으로
+                    }));
+                setDoc(ref, { items: seed }).catch((e) => console.error('고정지출 seed 실패:', e));
+            }
+        });
+        return () => unsubscribe();
+    }, [user]);
+
+    const persistFixedExpenses = async (items) => {
+        await setDoc(doc(db, 'site_settings', 'fixed_expenses'), { items });
+    };
+
+    // 고정 항목 추가
+    const handleAddFixedExpense = async (rawName, rawAmount, variable) => {
+        const name = (rawName || '').trim();
+        if (!name) return alert('항목명을 입력하세요.');
+        if (fixedExpenses.some((it) => it.name === name)) return alert('이미 있는 항목입니다.');
+        const amount = variable ? 0 : Number(rawAmount);
+        if (!variable && (!amount || amount <= 0)) return alert('금액을 올바르게 입력하세요.');
+        const items = [
+            ...fixedExpenses,
+            { id: `fx${Date.now().toString(36)}`, name, amount, variable: !!variable },
+        ];
+        try {
+            await persistFixedExpenses(items);
+        } catch (e) {
+            console.error('고정항목 추가 실패:', e);
+            alert('고정항목 추가에 실패했습니다: ' + e.message);
+        }
+    };
+
+    // 고정 항목 수정 (금액/변동여부). patch = { amount?, variable? }
+    const handleUpdateFixedExpense = async (id, patch) => {
+        const next = { ...patch };
+        if ('variable' in next) next.variable = !!next.variable;
+        if (next.variable) next.amount = 0;
+        else if ('amount' in next) {
+            const amt = Number(next.amount);
+            if (!amt || amt <= 0) return alert('금액을 올바르게 입력하세요.');
+            next.amount = amt;
+        }
+        const items = fixedExpenses.map((it) => (it.id === id ? { ...it, ...next } : it));
+        try {
+            await persistFixedExpenses(items);
+        } catch (e) {
+            console.error('고정항목 수정 실패:', e);
+            alert('고정항목 수정에 실패했습니다: ' + e.message);
+        }
+    };
+
+    // 고정 항목 삭제
+    const handleDeleteFixedExpense = async (id, name) => {
+        if (!window.confirm(`고정 항목 '${name}'을(를) 삭제하시겠습니까?`)) return;
+        const items = fixedExpenses.filter((it) => it.id !== id);
+        try {
+            await persistFixedExpenses(items);
+        } catch (e) {
+            console.error('고정항목 삭제 실패:', e);
+            alert('고정항목 삭제에 실패했습니다: ' + e.message);
+        }
+    };
+
+    // '이달 고정지출 불러오기' — 지금 보는 달에 고정항목을 한 번에 등록(이미 있는 항목명은 건너뜀).
+    //  고정금액=금액까지 등록, 변동=금액 0 + memo '입력필요'.
+    const handleLoadFixedExpensesForMonth = async () => {
+        if (fixedExpenses.length === 0) {
+            return alert('등록된 고정 지출 항목이 없습니다. 먼저 고정항목을 추가하세요.');
+        }
+        const year = currentDate.getFullYear();
+        const month = String(currentDate.getMonth() + 1).padStart(2, '0');
+        const ym = `${year}-${month}`;
+        const existing = new Set(
+            expenses.filter((e) => e.date && e.date.startsWith(ym)).map((e) => e.category)
+        );
+        const toAdd = fixedExpenses.filter((it) => !existing.has(it.name));
+        if (toAdd.length === 0) {
+            return alert(`${year}년 ${Number(month)}월에는 이미 모든 고정지출이 등록돼 있습니다.`);
+        }
+        if (
+            !window.confirm(
+                `${year}년 ${Number(month)}월에 고정지출 ${toAdd.length}건을 등록하시겠습니까?\n(${toAdd
+                    .map((it) => it.name + (it.variable ? '(입력필요)' : ''))
+                    .join(', ')})`
+            )
+        )
+            return;
+        try {
+            const dateStr = `${ym}-01`;
+            await Promise.all(
+                toAdd.map((it) =>
+                    addDoc(collection(db, 'expenses'), {
+                        date: dateStr,
+                        category: it.name,
+                        amount: it.variable ? 0 : Number(it.amount) || 0,
+                        memo: it.variable ? '입력필요' : '고정',
+                        createdAt: new Date(),
+                    })
+                )
+            );
+            fetchSettlementData();
+            const skipped = fixedExpenses.length - toAdd.length;
+            const varCount = toAdd.filter((it) => it.variable).length;
+            alert(
+                `고정지출 ${toAdd.length}건을 등록했습니다.` +
+                    (varCount > 0 ? `\n변동항목 ${varCount}건은 금액을 '입력필요'로 두었습니다.` : '') +
+                    (skipped > 0 ? `\n(${skipped}건은 이미 있어 건너뜀)` : '')
+            );
+        } catch (e) {
+            console.error('고정지출 등록 실패:', e);
+            alert('고정지출 등록 중 오류가 발생했습니다: ' + e.message);
         }
     };
 
@@ -1511,8 +1713,13 @@ function App() {
     const handleExpenseSubmit = async () => {
         if (!expenseForm.date || !expenseForm.amount) return alert('날짜/금액 입력');
         try {
-            if (editingExpenseId) await updateDoc(doc(db, 'expenses', editingExpenseId), expenseForm);
-            else await addDoc(collection(db, 'expenses'), { ...expenseForm, createdAt: new Date() });
+            const payload = { ...expenseForm };
+            // 변동(입력필요) 항목을 금액 채워 저장하면 메모의 '입력필요'를 '입력완료'로 바꾼다.
+            if (payload.memo === '입력필요' && Number(payload.amount) > 0) {
+                payload.memo = '입력완료';
+            }
+            if (editingExpenseId) await updateDoc(doc(db, 'expenses', editingExpenseId), payload);
+            else await addDoc(collection(db, 'expenses'), { ...payload, createdAt: new Date() });
             setExpenseForm({ date: '', category: '기타', amount: '', memo: '' });
             setEditingExpenseId(null);
             fetchSettlementData();
@@ -2920,6 +3127,18 @@ function App() {
     });
     const currentItems = filteredStudents.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
     const totalPages = Math.ceil(filteredStudents.length / itemsPerPage);
+
+    // 상단 '재등록' 필터 버튼에 표시할 인원수. 현재 보기(수강중/종료/아티스트) 기준이며,
+    // 검색어·빠른필터 선택과 무관하게 재등록 요망 학생 수를 센다(위 filteredStudents 의 재등록 판정과 동일).
+    const reregisterCount = students.filter((s) => {
+        let inView = true;
+        if (viewStatus === 'active') inView = s.isActive;
+        else if (viewStatus === 'inactive') inView = !s.isActive;
+        else if (viewStatus === 'artist') inView = s.isArtist;
+        if (!inView) return false;
+        const starts = rotationStartsCache.get(s.id);
+        return !s.isMonthly && !s.isArtist && !!starts && starts.size > 0;
+    }).length;
     const paginate = (n) => setCurrentPage(n);
     const totalRevenueIncludingUnpaid =
         settlementIncome.reduce((a, c) => a + Number(c.amount), 0) +
@@ -3108,6 +3327,7 @@ function App() {
                             setViewStatus={setViewStatus}
                             listFilter={listFilter}
                             setListFilter={setListFilter}
+                            reregisterCount={reregisterCount}
                             searchTerm={searchTerm}
                             setSearchTerm={setSearchTerm}
                             studentMemo={studentMemo}
@@ -3167,6 +3387,14 @@ function App() {
                             fetchSettlementData={fetchSettlementData}
                             settlementStatus={settlementStatus}
                             handleToggleSettlementStatus={handleToggleSettlementStatus}
+                            pendingSettlementMonths={pendingSettlementMonths}
+                            unpaidMonths={unpaidMonths}
+                            goToSettlementMonth={goToSettlementMonth}
+                            fixedExpenses={fixedExpenses}
+                            handleAddFixedExpense={handleAddFixedExpense}
+                            handleUpdateFixedExpense={handleUpdateFixedExpense}
+                            handleDeleteFixedExpense={handleDeleteFixedExpense}
+                            handleLoadFixedExpensesForMonth={handleLoadFixedExpensesForMonth}
                             settlementMemo={settlementMemo}
                             handleSettlementMemoSave={handleSettlementMemoSave}
                             settlementIncome={settlementIncome}
