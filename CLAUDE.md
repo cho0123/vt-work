@@ -382,9 +382,33 @@ npm run verify-student-edit  # 학생 수정이 결제 결과를 덮지 않는�
   (정보수정 팝업에서 **월정산 학생일 때만** 입력칸 노출, `EDITABLE` 에 추가). 문서 라벨 '아티스트'는
   서식 그대로일 뿐 앱의 isArtist 와 무관(대상은 isMonthly).
 
+### 2026-07-27 추가 (짱구 어카운트 '보티즈-정산' 통합 — 개발DB 확인 완료, 운영 미이전·미배포)
+
+정산앱(짱구 어카운트, 배포본 `zzang-acc.netlify.app`, 소스 `C:\Users\USER\jjanggu-account`)을
+스케쥴 앱에 **탭으로 통합**. 원래 별도 Firebase(`votiz-acc`)였는데 데이터를 스케쥴 DB로 복사하고
+로그인·DB 를 하나로 합쳤다. (음악 제작 정산 — 학원 정산과 무관한 별개 도메인)
+
+- **데이터**: votiz-acc 의 `projects`(5)/`transactions`(745) → 스케쥴 DB 의 **`acc_projects`/`acc_transactions`**
+  (앞에 `acc_` 붙여 스케쥴 데이터와 분리). uid 는 대상 프로젝트 허용계정으로 **재매핑**(votiz 로그인 uid
+  `SMrI6pZgCKTxOJcRYVy05GWGLAp2` → 스케쥴 계정). 안 바꾸면 `where uid==user.uid` 에 안 걸려 화면에 안 뜸.
+- **이전 스크립트**: `scripts/migrate-votiz.js <votiz키경로> [--prod] [--force]`. 개발이 기본,
+  `--prod` 만 운영. votiz 는 **읽기 전용**, 대상은 acc_* 에만 씀(기존 스케쥴 데이터 불변). 대상에 이미
+  acc_* 있으면 중단(중복 방지, `--force` 로 덮기). votiz 키는 `C:\Users\USER\jjanggu-account\votiz-acc-key.json`
+  (**git 아님, 민감 — 커밋 금지**. `.gitignore` 의 `firebase-adminsdk*.json` 로 이미 보호되지만 확인).
+- **UI**: 짱구 `App.jsx`(1200줄) 를 `src/components/VotizTab.jsx` 로 편입. 자체 로그인/App 래퍼·로그아웃
+  버튼 제거, 스케쥴 공유 `db`·`user` 사용, 컬렉션명 `acc_*` 로 교체. App 탭 목록에 `'votiz'` 추가.
+- **탭 이름**: 기존 정산관리 → **보튜-정산**, 새 탭 → **보티즈-정산**.
+- 보안규칙 그대로 OK(허용계정 전체 접근이라 acc_* 자동 보호). eslint no-undef 없음.
+
+⚠️ **아직 개발DB(vt-work-dev-eeeaa)에서만 통합됨.** 운영 반영 = 아래 '다음 단계' 참고. (사용자 요청:
+커밋만 하고 배포는 나중에. 운영 이전 시 votiz 최신을 다시 읽기로 함)
+
 ### 다음 단계
 
-1. **정산앱(votiz-acc) 통합 검토** — 소스가 회사 PC. 별도 Firebase(`votiz-acc`)라 데이터 이전 or 두 DB 연결 방식.
+1. **보티즈-정산 운영 반영** (사용자가 원할 때):
+   a. 운영 votiz 데이터 이전(최신 재읽기): `node scripts/migrate-votiz.js C:\Users\USER\jjanggu-account\votiz-acc-key.json --prod`
+   b. 배포 절차대로 `refactor/split-app` → `main` 병합 → push → Netlify.
+   c. 배포 후 라이브에서 보티즈-정산 탭 데이터 확인. (원래 짱구 앱 `zzang-acc.netlify.app` 은 이후 방치/폐기 결정)
 2. 보안규칙(`deploy-rules.js key-A.json`) 적용 여부 확인.
 
 ### 끝난 것

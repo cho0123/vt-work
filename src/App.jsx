@@ -83,6 +83,7 @@ import { ScheduleTab } from './components/ScheduleTab.jsx';
 import { AttendanceTab } from './components/AttendanceTab.jsx';
 import { SettlementTab } from './components/SettlementTab.jsx';
 import { StudentsTab } from './components/StudentsTab.jsx';
+import { VotizTab } from './components/VotizTab.jsx';
 import { ROTATION_COLORS } from './constants/theme.js';
 import { expenseDefaults } from './constants/expenses.js';
 import { DEFAULT_PERSONAL_CATEGORIES } from './constants/personalCategories.js';
@@ -3192,7 +3193,7 @@ function App() {
                         VT<span className="text-orange-500">Work</span>
                     </div>
                     <nav className="flex p-1 bg-gray-100/50 rounded-full">
-                        {['schedule', 'students', 'attendance', 'settlement'].map((tab) => (
+                        {['schedule', 'students', 'attendance', 'settlement', 'votiz'].map((tab) => (
                             <button
                                 key={tab}
                                 onClick={() => {
@@ -3211,7 +3212,9 @@ function App() {
                                       ? '출석부'
                                       : tab === 'students'
                                         ? '학생관리'
-                                        : '정산관리'}
+                                        : tab === 'settlement'
+                                          ? '보튜-정산'
+                                          : '보티즈-정산'}
                             </button>
                         ))}
                     </nav>
@@ -3448,6 +3451,7 @@ function App() {
                             students={students}
                         />
                     )}
+                    {activeTab === 'votiz' && <VotizTab user={user} />}
                 </main>
                 {/* [FIX] 학생 개인별 전체 출석부 (재등록 버튼 계산 로직 수정) */}
                 <StudentHistoryModal
