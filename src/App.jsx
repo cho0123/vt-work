@@ -190,6 +190,37 @@ function App() {
         if (window.confirm('로그아웃 하시겠습니까?')) signOut(auth);
     };
 
+    // 보튜 정산 → 보티즈-정산(어카운트) 자동 연동.
+    // 정산완료 시 그 달의 수입(미수금 포함)·지출을 어카운트의 '보이스튜닝' 분야에 저장하고,
+    // 정산완료 해제 시 지운다. 문서 id 를 달 기준으로 고정해 중복 없이 덮어쓰기/삭제한다
+    // (조회·인덱스 불필요). 금액이 0이면 해당 문서는 두지 않는다.
+    const syncVotizFromSettlement = async (yearMonth, { revenue = 0, expense = 0, remove = false } = {}) => {
+        if (!user) return;
+        const incRef = doc(db, 'acc_transactions', `settle_${yearMonth}_income`);
+        const expRef = doc(db, 'acc_transactions', `settle_${yearMonth}_expense`);
+        try {
+            if (remove) {
+                await deleteDoc(incRef);
+                await deleteDoc(expRef);
+                return;
+            }
+            const base = {
+                date: yearMonth,
+                division: 'voicetuning',
+                memo: '보튜 정산 자동',
+                autoFromSettlement: true,
+                uid: user.uid,
+                createdAt: new Date(),
+            };
+            if (revenue > 0) await setDoc(incRef, { ...base, type: 'income', amount: revenue });
+            else await deleteDoc(incRef);
+            if (expense > 0) await setDoc(expRef, { ...base, type: 'expense', amount: expense });
+            else await deleteDoc(expRef);
+        } catch (e) {
+            console.error('보티즈-정산 자동 연동 실패', e);
+        }
+    };
+
     // [NEW] 정산 마감 토글 핸들러
     const handleToggleSettlementStatus = async () => {
         const year = currentDate.getFullYear();
@@ -220,7 +251,12 @@ function App() {
                 setSettlementStatus('completed');
                 if (paymentsCacheRef.current.completed) paymentsCacheRef.current.completed.add(yearMonth);
                 setPendingSettlementMonths(computePendingMonths());
-                alert('정산이 마감되었습니다.');
+                // 보티즈-정산(어카운트)에 그 달 수입(미수금 포함)·지출 자동 저장
+                await syncVotizFromSettlement(yearMonth, {
+                    revenue: currentMonthTotalRevenue,
+                    expense: currentMonthTotalExpense,
+                });
+                alert('정산이 마감되었습니다.\n(보티즈-정산에도 이 달 수입·지출이 저장되었습니다)');
             } catch (e) {
                 console.error(e);
                 alert('처리 중 오류가 발생했습니다.');
@@ -239,6 +275,8 @@ function App() {
                 setSettlementStatus('pending');
                 if (paymentsCacheRef.current.completed) paymentsCacheRef.current.completed.delete(yearMonth);
                 setPendingSettlementMonths(computePendingMonths());
+                // 정산완료 해제 → 보티즈-정산의 그 달 자동저장분도 삭제
+                await syncVotizFromSettlement(yearMonth, { remove: true });
                 alert("정산 상태가 '예정'으로 변경되었습니다.");
             } catch (e) {
                 console.error(e);

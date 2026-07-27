@@ -400,16 +400,29 @@ npm run verify-student-edit  # 학생 수정이 결제 결과를 덮지 않는�
 - **탭 이름**: 기존 정산관리 → **보튜-정산**, 새 탭 → **보티즈-정산**.
 - 보안규칙 그대로 OK(허용계정 전체 접근이라 acc_* 자동 보호). eslint no-undef 없음.
 
-⚠️ **아직 개발DB(vt-work-dev-eeeaa)에서만 통합됨.** 운영 반영 = 아래 '다음 단계' 참고. (사용자 요청:
-커밋만 하고 배포는 나중에. 운영 이전 시 votiz 최신을 다시 읽기로 함)
+### 2026-07-27 추가 2 (보티즈-정산 레이아웃 통일 + 정산 연동 + 운영 배포)
+
+개발DB에서 UI/UX 를 다듬고 **운영 배포까지 완료**. (모두 화면 확인)
+
+- **레이아웃 통일**: 보티즈-정산을 다른 탭처럼 넓은 레이아웃(`h-full` 내부 스크롤)으로. 자체 헤더 제거.
+  상단 **총정산 요약 카드 4개**(순수익+수입+지출, 유튜브는 'USD·총정산 포함X'). 분야 탭 4개(총정산 탭 제거).
+  보이스튜닝·저작권·유튜브는 **좌 등록폼 / 우 세부내역** 2단. 하단 검은 합계카드 제거(요약으로 대체).
+  연도 목록 슬림 + **건수 배지** + **입력월 배지**(최신 `date` 기준). 내역 리스트는 날짜 옆에 세부(제작비>믹싱(메모)) 표기.
+- **보티즈 탭 재구성**: 왼쪽 프로젝트 목록(수입/지출 색박스 강조 + **수익 최신등록일 배지**) + 클릭한 카드
+  바로 아래 아코디언 입력폼, 오른쪽 요약+상세. (프로젝트 목록/상세 전환 방식 → 항상 목록 노출)
+- ⚠️ **컬렉션 버그 수정**: 통합 때 `collection(db,"transactions")`만 `acc_*`로 바꾸고 `doc(db,"transactions",id)`
+  (수정·삭제·프로젝트 업데이트 10곳)를 놓쳤음. 전부 `acc_*`로 고침. (안 고쳤으면 수정·삭제 안 됐음)
+- **보튜→보티즈 자동 연동**: 보튜-정산 '정산완료' 시 그 달 수입(미수금 포함)·지출을 어카운트 '보이스튜닝'에
+  자동 저장, 해제 시 삭제. 문서 id 고정(`settle_YYYY-MM_income/expense`)이라 중복·조회·인덱스 없음.
+  App `syncVotizFromSettlement`, `handleToggleSettlementStatus` 두 분기에서 호출.
+
+**운영 배포**: votiz-acc(변경 없음) → 운영(vt-schedule-12568) `acc_projects`/`acc_transactions` 이전(uid=운영계정),
+운영 백업 후 `main` 병합·push·Netlify. 배포 후 라이브 확인. 원래 짱구앱 `zzang-acc.netlify.app` 은 이후 폐기 예정.
 
 ### 다음 단계
 
-1. **보티즈-정산 운영 반영** (사용자가 원할 때):
-   a. 운영 votiz 데이터 이전(최신 재읽기): `node scripts/migrate-votiz.js C:\Users\USER\jjanggu-account\votiz-acc-key.json --prod`
-   b. 배포 절차대로 `refactor/split-app` → `main` 병합 → push → Netlify.
-   c. 배포 후 라이브에서 보티즈-정산 탭 데이터 확인. (원래 짱구 앱 `zzang-acc.netlify.app` 은 이후 방치/폐기 결정)
-2. 보안규칙(`deploy-rules.js key-A.json`) 적용 여부 확인.
+1. 보안규칙(`deploy-rules.js key-A.json`) 적용 여부 확인.
+2. 원래 짱구앱(zzang-acc) 폐기/리다이렉트 결정.
 
 ### 끝난 것
 

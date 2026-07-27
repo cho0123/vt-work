@@ -20,7 +20,7 @@ const parseNumber = (str) => {
 // ──[ 메인: 보티즈-정산 탭 ]──
 // 스케쥴 앱에서 로그인한 user 를 그대로 받는다. (자체 로그인 화면 제거)
 export function VotizTab({ user }) {
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const [activeTab, setActiveTab] = useState('voicetuning');
   const [transactions, setTransactions] = useState([]);
   const [projects, setProjects] = useState([]);
   
@@ -79,52 +79,96 @@ export function VotizTab({ user }) {
       return `${selectedYear}년 ${selectedMonth}월`;
   };
 
-  return (
-    <div className="bg-gray-100 py-8 px-4 font-sans min-h-full">
-      <div className="max-w-lg mx-auto pb-20">
-        <header className="flex justify-between items-center mb-6 px-2">
-          <div><h1 className="text-2xl font-extrabold text-gray-800 flex items-center gap-2">⚡️ 짱구네 어카운트</h1></div>
-        </header>
+  // 상단 총정산 요약: 분야별 총수입·총지출·순수익. 유튜브는 달러라 총정산에서 뺀다.
+  const sumBy = (filterFn) => {
+      const income = filteredTransactions.filter(t => t.type === 'income' && filterFn(t)).reduce((a, c) => a + Number(c.totalAmount || c.amount || 0), 0);
+      const expense = filteredTransactions.filter(t => t.type === 'expense' && filterFn(t)).reduce((a, c) => a + Number(c.totalAmount || c.amount || 0), 0);
+      return { income, expense, profit: income - expense };
+  };
+  const summary = {
+      total: sumBy(t => t.division !== 'youtube'),
+      vt: sumBy(t => t.division === 'voicetuning'),
+      vz: sumBy(t => t.division === 'votiz' || t.division === 'copyright'),
+      yt: sumBy(t => t.division === 'youtube'),
+  };
+  const DIVISION_TABS = [
+      { key: 'voicetuning', label: '보이스튜닝' },
+      { key: 'votiz', label: '보티즈' },
+      { key: 'copyright', label: '저작권' },
+      { key: 'youtube', label: '유튜브' },
+  ];
 
-        <div className="mb-6 bg-white p-3 rounded-xl shadow-sm border border-gray-100 flex flex-col gap-3">
-            <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 flex-1">
-                    <span className="text-sm font-bold text-gray-400">📅</span>
-                    <select value={selectedYear} onChange={(e) => {setSelectedYear(e.target.value); if(e.target.value==='all') setSelectedMonth('all');}} className="bg-gray-50 font-bold text-gray-700 p-2 rounded-lg outline-none cursor-pointer">
-                        <option value="all">전체 년도</option>
-                        {[2024, 2025, 2026, 2027].map(y => <option key={y} value={y}>{y}년</option>)}
+  return (
+    <div className="flex flex-col h-full w-full gap-6 p-4 md:p-8 lg:px-12 pb-20 overflow-y-auto font-sans">
+        {/* 기간 선택 */}
+        <div className="shrink-0 flex flex-col md:flex-row md:items-center gap-3">
+            <div className="flex items-center gap-2 rounded-2xl bg-white px-3 py-2 shadow-sm ring-1 ring-gray-100">
+                <span className="text-sm font-bold text-gray-400">📅</span>
+                <select value={selectedYear} onChange={(e) => {setSelectedYear(e.target.value); if(e.target.value==='all') setSelectedMonth('all');}} className="bg-gray-50 font-bold text-gray-700 p-2 rounded-lg outline-none cursor-pointer">
+                    <option value="all">전체 년도</option>
+                    {[2024, 2025, 2026, 2027].map(y => <option key={y} value={y}>{y}년</option>)}
+                </select>
+                {selectedYear !== 'all' && (
+                    <select value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)} className={`font-bold p-2 rounded-lg outline-none cursor-pointer transition-colors ${selectedMonth === 'all' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-50 text-gray-700'}`}>
+                        <option value="all">1년 전체</option>
+                        {[1,2,3,4,5,6,7,8,9,10,11,12].map(m => <option key={m} value={m}>{m}월</option>)}
                     </select>
-                    {selectedYear !== 'all' && (
-                        <select value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)} className={`font-bold p-2 rounded-lg outline-none cursor-pointer transition-colors ${selectedMonth === 'all' ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-50 text-gray-700'}`}>
-                            <option value="all">1년 전체</option>
-                            {[1,2,3,4,5,6,7,8,9,10,11,12].map(m => <option key={m} value={m}>{m}월</option>)}
-                        </select>
-                    )}
-                </div>
+                )}
                 <button onClick={resetPeriod} className="text-xs font-bold bg-gray-800 text-white px-3 py-2 rounded-lg hover:bg-gray-700">전체 기간</button>
             </div>
-            <div className="text-xs font-medium text-gray-400 text-right px-1">
-                현재 조회: {getPeriodText()}
-            </div>
+            <span className="text-xs font-medium text-gray-400">현재 조회: {getPeriodText()}</span>
         </div>
 
-        <div className="bg-gray-200 p-1 rounded-xl flex mb-6 overflow-x-auto">
-          {['dashboard', 'voicetuning', 'votiz', 'copyright', 'youtube'].map((tab) => (
-            <button key={tab} onClick={() => setActiveTab(tab)}
-              className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all whitespace-nowrap px-2 ${activeTab === tab ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
-              {tab === 'dashboard' ? '총 정산' : tab === 'voicetuning' ? '보이스튜닝' : tab === 'votiz' ? '보티즈' : tab === 'copyright' ? '저작권' : '유튜브'}
+        {/* 상단 총정산 요약 카드 (총수입·총지출·순수익) */}
+        <div className="shrink-0 grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="bg-gray-900 text-white p-4 rounded-2xl shadow-sm">
+                <div className="text-xs font-bold text-gray-400">총정산 순수익</div>
+                <div className={`text-xl md:text-2xl font-extrabold mt-1 ${summary.total.profit >= 0 ? 'text-green-400' : 'text-red-400'}`}>{formatNumber(summary.total.profit)}원</div>
+                <div className="mt-2 pt-2 border-t border-gray-700 flex justify-between text-[11px] font-medium">
+                    <span className="text-blue-300">수입 +{formatNumber(summary.total.income)}</span>
+                    <span className="text-red-300">지출 -{formatNumber(summary.total.expense)}</span>
+                </div>
+            </div>
+            {[
+                { key: 'vt', label: '보이스튜닝', color: 'text-blue-600' },
+                { key: 'vz', label: '보티즈 (저작권 포함)', color: 'text-blue-600' },
+                { key: 'yt', label: '유튜브 (USD)', color: 'text-purple-600' },
+            ].map(({ key, label, color }) => (
+                <div key={key} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-xs font-bold text-gray-400">{label}</span>
+                        {key === 'yt' && (
+                            <span className="rounded-full bg-gray-100 px-1.5 py-0.5 text-[9px] font-bold text-gray-500">총정산 포함X</span>
+                        )}
+                    </div>
+                    <div className={`text-lg md:text-xl font-extrabold mt-1 ${summary[key].profit >= 0 ? color : 'text-red-500'}`}>
+                        {formatNumber(summary[key].profit)}{key === 'yt' ? '' : '원'}
+                    </div>
+                    <div className="mt-2 pt-2 border-t border-gray-100 flex justify-between text-[11px] font-medium">
+                        <span className="text-blue-500">수입 +{formatNumber(summary[key].income)}</span>
+                        <span className="text-red-400">지출 -{formatNumber(summary[key].expense)}</span>
+                    </div>
+                </div>
+            ))}
+        </div>
+
+        {/* 분야 탭 (4개) */}
+        <div className="shrink-0 bg-gray-200/70 p-1 rounded-2xl flex gap-1 w-full md:w-fit">
+          {DIVISION_TABS.map(({ key, label }) => (
+            <button key={key} onClick={() => setActiveTab(key)}
+              className={`flex-1 md:flex-none py-2 px-5 rounded-xl text-sm font-bold transition-all whitespace-nowrap ${activeTab === key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+              {label}
             </button>
           ))}
         </div>
 
-        <div className="space-y-6">
-          {activeTab === 'dashboard' && <Dashboard transactions={filteredTransactions} periodText={getPeriodText()} />}
+        {/* 선택 분야 상세 */}
+        <div>
           {activeTab === 'voicetuning' && <VoiceTuning user={user} transactions={filteredTransactions} refresh={fetchData} isSummaryMode={selectedYear === 'all'} categoryMap={votizCategories} />}
           {activeTab === 'votiz' && <Votiz user={user} projects={projects} filteredTransactions={filteredTransactions} allTransactions={transactions} refresh={fetchData} categories={votizCategories} subCats={productionSub} isSummaryMode={selectedMonth === 'all' || selectedYear === 'all'} onMonthClick={handleMonthClick} resetPeriod={resetPeriod} />}
           {activeTab === 'copyright' && <CopyrightSection user={user} transactions={filteredTransactions} refresh={fetchData} isSummaryMode={selectedYear === 'all'} />}
           {activeTab === 'youtube' && <YoutubeSection user={user} transactions={filteredTransactions} refresh={fetchData} isSummaryMode={selectedYear === 'all'} />}
         </div>
-      </div>
     </div>
   );
 }
@@ -224,7 +268,7 @@ function CopyrightSection({ user, transactions, refresh, isSummaryMode }) {
             category: form.mainCat, subDetail: form.subCat,
             memo: form.memo, displayCategory: currentCategoryLabel, createdAt: new Date()
         };
-        if (editingId) { await updateDoc(doc(db, "transactions", editingId), data); setEditingId(null); } 
+        if (editingId) { await updateDoc(doc(db, "acc_transactions", editingId), data); setEditingId(null); } 
         else { await addDoc(collection(db, "acc_transactions"), data); }
         setForm({ ...form, amount: '', memo: '' }); refresh();
     };
@@ -237,10 +281,12 @@ function CopyrightSection({ user, transactions, refresh, isSummaryMode }) {
         setEditingId(item.id); window.scrollTo(0, 0);
     };
 
-    const handleDelete = async (id) => { if(window.confirm("삭제하시겠습니까?")) { await deleteDoc(doc(db, "transactions", id)); refresh(); } };
+    const handleDelete = async (id) => { if(window.confirm("삭제하시겠습니까?")) { await deleteDoc(doc(db, "acc_transactions", id)); refresh(); } };
 
     const list = transactions.filter(t => t.division === 'copyright').sort((a,b) => b.date.localeCompare(a.date));
-    
+    const latestMonth = list[0]?.date; // 'YYYY-MM' (내림차순 첫 항목이 최신)
+    const fmtMonth = (d) => (d ? `${d.slice(0, 4)}년 ${Number(d.slice(5, 7))}월` : '');
+
     const stats = list.reduce((acc, cur) => {
         const amt = cur.totalAmount || cur.amount;
         let key = '';
@@ -265,7 +311,7 @@ function CopyrightSection({ user, transactions, refresh, isSummaryMode }) {
     const totalIncome = list.reduce((acc,cur)=>acc+(cur.totalAmount||cur.amount), 0);
 
     return (
-        <>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
             <form onSubmit={handleSubmit} className={`p-5 rounded-2xl shadow-sm border space-y-3 transition-colors ${editingId ? 'bg-green-50 border-green-200' : 'bg-white border-gray-100'}`}>
                 <h3 className={`font-bold mb-2 ${editingId ? 'text-green-700' : 'text-gray-800'}`}>{editingId ? '✏️ 저작권 내역 수정' : 'ⓒ 저작권 수익 등록'}</h3>
                 <div className="grid grid-cols-3 gap-2 mb-2">
@@ -304,18 +350,47 @@ function CopyrightSection({ user, transactions, refresh, isSummaryMode }) {
             </form>
 
             <div className="mt-6">
-                <h3 className="text-sm font-bold text-gray-500 mb-3 ml-1">저작권 내역 리스트</h3>
+                <div className="flex items-center gap-2 mb-3 ml-1">
+                    <h3 className="text-sm font-bold text-gray-500">저작권 내역 리스트</h3>
+                    {latestMonth && (
+                        <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-bold text-blue-600">
+                            {fmtMonth(latestMonth)}까지 입력됨
+                        </span>
+                    )}
+                </div>
+                {/* 카테고리별 소계 (예전 하단 검은 카드에 있던 내역) */}
+                <div className="mb-4 rounded-2xl border border-green-100 bg-green-50/60 p-4">
+                    <div className="flex justify-between items-center border-b border-green-100 pb-2 mb-2">
+                        <span className="text-xs font-bold text-gray-500">총 합계</span>
+                        <span className="text-lg font-extrabold text-green-700">{formatNumber(totalIncome)}원</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                        {['저작권(마)', '저작권(짱)', '실연자(마)', '실연자(짱)', '제작자'].map(key => {
+                            const val = stats[key] || 0;
+                            if (val < 1) return null;
+                            return (
+                                <div key={key} className="flex justify-between">
+                                    <span className="text-gray-500">{key}</span>
+                                    <span className="font-bold text-gray-700">{formatNumber(val)}</span>
+                                </div>
+                            );
+                        })}
+                    </div>
+                </div>
                 {isSummaryMode ? (
-                     <div className="space-y-3">
+                     <div className="space-y-2">
                      {sortedYears.map(year => {
                          const yearList = groupedByYear[year];
                          const yTotal = yearList.reduce((acc,cur)=>acc+(cur.totalAmount||cur.amount), 0);
                          const isOpen = expandedYear === year;
                          return (
-                             <div key={year} className={`bg-white rounded-2xl border transition-all overflow-hidden ${isOpen ? 'border-green-300 shadow-md' : 'border-gray-200 shadow-sm'}`}>
-                                 <div onClick={() => toggleYear(year)} className="p-5 cursor-pointer flex justify-between items-center hover:bg-gray-50">
-                                     <div><h4 className="text-xl font-extrabold text-gray-800">{year}년</h4><span className="text-xs text-gray-400">{yearList.length}건</span></div>
-                                     <div className={`text-lg font-bold ${yTotal >= 0 ? 'text-green-600' : 'text-red-500'}`}>{formatNumber(yTotal)}원</div>
+                             <div key={year} className={`bg-white rounded-xl border transition-all overflow-hidden ${isOpen ? 'border-green-300 shadow-md' : 'border-gray-200 shadow-sm'}`}>
+                                 <div onClick={() => toggleYear(year)} className="px-4 py-3 cursor-pointer flex justify-between items-center hover:bg-gray-50">
+                                     <div className="flex items-center gap-2">
+                                         <h4 className="text-base font-extrabold text-gray-800">{year}년</h4>
+                                         <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-500">{yearList.length}건</span>
+                                     </div>
+                                     <div className={`text-base font-bold ${yTotal >= 0 ? 'text-green-600' : 'text-red-500'}`}>{formatNumber(yTotal)}원</div>
                                  </div>
                                  {isOpen && (
                                      <div className="bg-gray-50 p-2 border-t border-gray-100">
@@ -329,27 +404,8 @@ function CopyrightSection({ user, transactions, refresh, isSummaryMode }) {
                 ) : (
                     <TransactionList list={list} onEdit={handleEdit} onDelete={handleDelete} isSummaryMode={false} />
                 )}
-                 
-                 <div className="sticky bottom-4 mt-4 bg-gray-900 text-white p-4 rounded-xl shadow-xl border border-gray-700 z-10 space-y-2">
-                    <div className="flex justify-between items-center border-b border-gray-700 pb-2 mb-2">
-                        <div className="text-xs text-gray-400">총 합계</div>
-                        <div className="text-xl font-extrabold text-green-400">{formatNumber(totalIncome)}원</div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-gray-300">
-                        {['저작권(마)', '저작권(짱)', '실연자(마)', '실연자(짱)', '제작자'].map(key => {
-                            const val = stats[key] || 0;
-                            if (val < 1) return null; 
-                            return (
-                                <div key={key} className="flex justify-between">
-                                    <span className="opacity-70">{key}</span>
-                                    <span className="font-bold">{formatNumber(val)}</span>
-                                </div>
-                            )
-                        })}
-                    </div>
-                </div>
             </div>
-        </>
+        </div>
     );
 }
 
@@ -372,7 +428,7 @@ function VoiceTuning({ user, transactions, refresh, isSummaryMode, categoryMap }
     if (editingId) {
        const isIncome = !!numIncome;
        const updateData = { ...baseData, amount: isIncome ? numIncome : numExpense, type: isIncome ? 'income' : 'expense' };
-       await updateDoc(doc(db, "transactions", editingId), updateData);
+       await updateDoc(doc(db, "acc_transactions", editingId), updateData);
        setEditingId(null);
     } else {
         if (numIncome) promises.push(addDoc(collection(db, "acc_transactions"), { ...baseData, amount: numIncome, type: 'income' }));
@@ -382,7 +438,7 @@ function VoiceTuning({ user, transactions, refresh, isSummaryMode, categoryMap }
     setForm({ date: '', income: '', expense: '', memo: '' }); refresh();
   };
 
-  const handleDelete = async (id) => { if(window.confirm("삭제하시겠습니까?")) { await deleteDoc(doc(db, "transactions", id)); refresh(); } };
+  const handleDelete = async (id) => { if(window.confirm("삭제하시겠습니까?")) { await deleteDoc(doc(db, "acc_transactions", id)); refresh(); } };
   
   const handleEdit = (item) => { 
       setForm({ date: item.date, income: item.type === 'income' ? formatNumber(item.amount) : '', expense: item.type === 'expense' ? formatNumber(item.amount) : '', memo: item.memo }); 
@@ -390,6 +446,8 @@ function VoiceTuning({ user, transactions, refresh, isSummaryMode, categoryMap }
   };
   
   const list = transactions.filter(t => t.division === 'voicetuning').sort((a,b) => b.date.localeCompare(a.date));
+  const latestMonth = list[0]?.date; // 'YYYY-MM' (list 는 날짜 내림차순이라 첫 항목이 최신)
+  const fmtMonth = (d) => (d ? `${d.slice(0, 4)}년 ${Number(d.slice(5, 7))}월` : '');
   const totalIncome = list.filter(t=>t.type==='income').reduce((acc,cur)=>acc+cur.amount, 0);
   const totalExpense = list.filter(t=>t.type==='expense').reduce((acc,cur)=>acc+cur.amount, 0);
   const totalProfit = totalIncome - totalExpense;
@@ -408,7 +466,7 @@ function VoiceTuning({ user, transactions, refresh, isSummaryMode, categoryMap }
   };
 
   return (
-    <>
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
       <form onSubmit={handleSubmit} className={`p-5 rounded-2xl shadow-sm border space-y-3 transition-colors ${editingId ? 'bg-purple-50 border-purple-200' : 'bg-white border-gray-100'}`}>
            <h3 className={`font-bold mb-2 ${editingId ? 'text-purple-700' : 'text-gray-800'}`}>{editingId ? '✏️ 내역 수정' : '📝 보이스튜닝 통합 등록'}</h3>
            <input type="month" required className={`${inputClass} font-bold text-gray-700`} value={form.date} onChange={e => setForm({...form, date: e.target.value})} />
@@ -430,7 +488,14 @@ function VoiceTuning({ user, transactions, refresh, isSummaryMode, categoryMap }
       </form>
 
       <div className="mt-6">
-        <h3 className="text-sm font-bold text-gray-500 mb-3 ml-1">{isSummaryMode ? '📂 연도별 모아보기' : '내역 리스트'}</h3>
+        <div className="flex items-center gap-2 mb-3 ml-1">
+          <h3 className="text-sm font-bold text-gray-500">{isSummaryMode ? '📂 연도별 모아보기' : '내역 리스트'}</h3>
+          {latestMonth && (
+            <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-bold text-blue-600">
+              {fmtMonth(latestMonth)}까지 입력됨
+            </span>
+          )}
+        </div>
         {isSummaryMode ? (
             <div className="space-y-3">
                 {sortedYears.map(year => {
@@ -438,10 +503,13 @@ function VoiceTuning({ user, transactions, refresh, isSummaryMode, categoryMap }
                     const yProfit = yearList.filter(t=>t.type==='income').reduce((acc,cur)=>acc+cur.amount,0) - yearList.filter(t=>t.type==='expense').reduce((acc,cur)=>acc+cur.amount,0);
                     const isOpen = expandedYear === year;
                     return (
-                        <div key={year} className={`bg-white rounded-2xl border transition-all overflow-hidden ${isOpen ? 'border-purple-300 shadow-md' : 'border-gray-200 shadow-sm'}`}>
-                            <div onClick={() => toggleYear(year)} className="p-5 cursor-pointer flex justify-between items-center hover:bg-gray-50">
-                                <div><h4 className="text-xl font-extrabold text-gray-800">{year}년</h4><span className="text-xs text-gray-400">{yearList.length}건</span></div>
-                                <div className={`text-lg font-bold ${yProfit >= 0 ? 'text-blue-600' : 'text-red-500'}`}>{formatNumber(yProfit)}원</div>
+                        <div key={year} className={`bg-white rounded-xl border transition-all overflow-hidden ${isOpen ? 'border-purple-300 shadow-md' : 'border-gray-200 shadow-sm'}`}>
+                            <div onClick={() => toggleYear(year)} className="px-4 py-3 cursor-pointer flex justify-between items-center hover:bg-gray-50">
+                                <div className="flex items-center gap-2">
+                                    <h4 className="text-base font-extrabold text-gray-800">{year}년</h4>
+                                    <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-500">{yearList.length}건</span>
+                                </div>
+                                <div className={`text-base font-bold ${yProfit >= 0 ? 'text-blue-600' : 'text-red-500'}`}>{formatNumber(yProfit)}원</div>
                             </div>
                             {isOpen && (
                                 <div className="bg-gray-50 p-2 border-t border-gray-100">
@@ -455,12 +523,8 @@ function VoiceTuning({ user, transactions, refresh, isSummaryMode, categoryMap }
         ) : (
             <TransactionList list={list} onEdit={handleEdit} onDelete={handleDelete} isSummaryMode={false} categoryMap={categoryMap} />
         )}
-        <div className="sticky bottom-4 mt-4 bg-gray-900 text-white p-4 rounded-xl shadow-xl border border-gray-700 flex justify-between items-center z-10">
-            <div className="text-xs text-gray-400"><div>총 수입: +{formatNumber(totalIncome)}</div><div>총 지출: -{formatNumber(totalExpense)}</div></div>
-            <div className="text-right"><div className="text-xs font-medium text-gray-400">순수익 합계</div><div className={`text-xl font-extrabold ${totalProfit >= 0 ? 'text-green-400' : 'text-red-400'}`}>{formatNumber(totalProfit)}원</div></div>
-        </div>
       </div>
-    </>
+    </div>
   );
 }
 
@@ -519,7 +583,7 @@ function MonthItem({ monthKey, transactions, refresh, allowDelete, onDelete }) {
         if (!window.confirm(`${editItems.length}건의 데이터를 일괄 수정하시겠습니까?`)) return;
         try {
             const promises = editItems.map(item => {
-                return updateDoc(doc(db, "transactions", item.id), { amount: item.amount, memo: item.memo });
+                return updateDoc(doc(db, "acc_transactions", item.id), { amount: item.amount, memo: item.memo });
             });
             await Promise.all(promises);
             alert("일괄 수정이 완료되었습니다."); setIsBulkEditing(false); refresh();
@@ -633,7 +697,7 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
 
   const handleUpdateProject = async () => {
       if(!editProjectName) return;
-      await updateDoc(doc(db, "projects", selectedProjectId), { name: editProjectName, memo: projectMemo });
+      await updateDoc(doc(db, "acc_projects", selectedProjectId), { name: editProjectName, memo: projectMemo });
       setIsEditingProject(false); refresh();
   };
 
@@ -654,12 +718,12 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
         category: form.category || '', subDetail: form.subDetail || '', memo: form.memo || '', vat: vat, totalAmount: baseAmount + vat
     };
 
-    if(editingId) { await updateDoc(doc(db, "transactions", editingId), data); setEditingId(null); } 
+    if(editingId) { await updateDoc(doc(db, "acc_transactions", editingId), data); setEditingId(null); } 
     else { await addDoc(collection(db, "acc_transactions"), { ...data, createdAt: new Date() }); }
     setForm({ date: '', amount: '', type: form.type, category: form.category, subDetail: '', memo: '', vatIncluded: false }); refresh();
   };
 
-  const handleDelete = async (id) => { if(window.confirm("삭제하시겠습니까?")) { await deleteDoc(doc(db, "transactions", id)); refresh(); } };
+  const handleDelete = async (id) => { if(window.confirm("삭제하시겠습니까?")) { await deleteDoc(doc(db, "acc_transactions", id)); refresh(); } };
   const handleEdit = (item) => { 
       setForm({
           date: item.date, amount: formatNumber(item.amount), type: item.type,
@@ -669,59 +733,13 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
       setEditingId(item.id); window.scrollTo(0, 0);
   };
 
-  const handleBackToList = () => { setSelectedProjectId(null); resetPeriod(); setFilterKeyword(null); };
   const handleCategoryClick = (keyword) => { setFilterKeyword(keyword); setShowStats(false); };
 
-  if (!selectedProjectId) {
-      const votizTotalTrans = allTransactions.filter(t => t.division === 'votiz');
-      const vIncome = votizTotalTrans.filter(t => t.type === 'income').reduce((acc, cur) => acc + (cur.totalAmount || cur.amount), 0);
-      const vExpense = votizTotalTrans.filter(t => t.type === 'expense').reduce((acc, cur) => acc + (cur.totalAmount || cur.amount), 0);
-      const vProfit = vIncome - vExpense;
-
-      return (
-          <>
-            <div className="flex gap-2 mb-6">
-                <input type="text" placeholder="새 프로젝트 만들기" className={`${inputClass} bg-white`} value={newProjectName} onChange={e => setNewProjectName(e.target.value)} />
-                <button onClick={handleProjectAdd} className="bg-blue-600 text-white px-5 rounded-xl font-bold shadow-md hover:bg-blue-700 shrink-0">생성</button>
-            </div>
-            <h3 className="font-bold text-gray-500 text-sm mb-3 ml-1">📂 프로젝트 목록</h3>
-            <div className="grid gap-4 mb-20">
-                {projects.map(p => {
-                    const pTrans = allTransactions.filter(t => t.projectId === p.id && t.division === 'votiz');
-                    const income = pTrans.filter(t=>t.type==='income').reduce((acc,cur)=>acc + (cur.totalAmount||cur.amount), 0);
-                    const expense = pTrans.filter(t=>t.type==='expense').reduce((acc,cur)=>acc + (cur.totalAmount||cur.amount), 0);
-                    const profit = income - expense;
-                    return (
-                        <div key={p.id} onClick={() => handleSelectProject(p)} className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 cursor-pointer hover:border-blue-400 hover:shadow-md transition group">
-                            <div className="flex justify-between items-center mb-3"><span className="font-extrabold text-lg text-gray-800 group-hover:text-blue-600 transition">{p.name}</span><span className="text-gray-300 group-hover:text-blue-400">➜</span></div>
-                            <div className="flex justify-between items-end bg-gray-50 p-3 rounded-xl">
-                                <div className="text-xs text-gray-500 space-y-1"><div>수입 <span className="text-blue-600 font-bold">+{formatNumber(income)}</span></div><div>지출 <span className="text-red-500 font-bold">-{formatNumber(expense)}</span></div></div>
-                                <div className={`font-extrabold text-xl ${profit >= 0 ? 'text-gray-800' : 'text-red-500'}`}>{formatNumber(profit)}원</div>
-                            </div>
-                        </div>
-                    );
-                })}
-            </div>
-            <div className="sticky bottom-4 mt-4 bg-gray-900 text-white p-4 rounded-xl shadow-xl border border-gray-700 flex justify-between items-center z-10">
-                <div className="text-xs text-gray-400">
-                    <div>총 수입: +{formatNumber(vIncome)}</div>
-                    <div>총 지출: -{formatNumber(vExpense)}</div>
-                </div>
-                <div className="text-right">
-                    <div className="text-xs font-medium text-gray-400">순수익 합계</div>
-                    <div className={`text-xl font-extrabold ${vProfit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                        {formatNumber(vProfit)}원
-                    </div>
-                </div>
-            </div>
-          </>
-      );
-  }
-
+  // 선택된 프로젝트 상세 집계 (기간 필터 반영). 선택 전이면 빈 목록.
   const projectTrans = filteredTransactions.filter(t => t.projectId === selectedProjectId && t.division === 'votiz').sort((a,b) => b.date.localeCompare(a.date));
   const finalList = filterKeyword ? projectTrans.filter(t => {
         let key = '';
-        if (t.subDetail) { if (t.subDetail.includes('-')) key = t.subDetail.split('-')[1]; else key = t.subDetail; } 
+        if (t.subDetail) { if (t.subDetail.includes('-')) key = t.subDetail.split('-')[1]; else key = t.subDetail; }
         else { key = t.category === 'marketing' ? '마케팅비' : t.category; }
         if (!key || key === 'undefined') key = '미분류';
         return key === filterKeyword;
@@ -733,95 +751,151 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
   const expenseMark = pTotalExpense.filter(t=>t.category === 'marketing').reduce((acc,cur)=>acc + (cur.totalAmount||cur.amount), 0);
   const totalExp = expenseProd + expenseMark;
 
+  // 입력폼 — 선택한 프로젝트 카드 바로 아래에 아코디언처럼 끼워 넣는다.
+  const projectForm = (
+    <form onSubmit={handleSubmit} className={`mt-2 p-4 rounded-2xl shadow-sm border-2 relative overflow-hidden space-y-3 transition-colors ${editingId ? 'bg-blue-50 border-blue-300' : 'bg-white border-blue-100'}`}>
+        <div className="absolute top-0 left-0 w-full h-1 bg-blue-500"></div>
+        <h3 className={`font-bold text-sm ${editingId ? 'text-blue-700' : 'text-gray-800'}`}>{editingId ? '✏️ 수정 중' : '📝 내역 입력'}</h3>
+        <div className="flex gap-2">
+            <select className={`${selectClass} flex-1`} value={form.type} onChange={e => {
+                const newType = e.target.value;
+                const defaultCategory = newType === 'income' ? 'source' : 'production';
+                setForm({...form, type: newType, category: defaultCategory, subDetail: ''});
+            }}>
+                <option value="income">수익</option><option value="expense">지출</option>
+            </select>
+            <input type="date" className={`${inputClass} flex-[2]`} value={form.date} onChange={e => setForm({...form, date: e.target.value})} />
+        </div>
+        <select className={selectClass} value={form.category} onChange={e => setForm({...form, category: e.target.value})}>{Object.entries(categories[form.type]).map(([key, label]) => (<option key={key} value={key}>{label}</option>))}</select>
+        {form.type === 'expense' && form.category === 'production' && (<select className={selectClass} value={form.subDetail} onChange={e => setForm({...form, subDetail: e.target.value})}><option value="">세부 항목 선택</option><optgroup label="곡비">{subCats.songFee.map(x=><option key={x} value={`곡비-${x}`}>{x}</option>)}</optgroup><optgroup label="녹음비">{subCats.recording.map(x=><option key={x} value={`녹음비-${x}`}>{x}</option>)}</optgroup><optgroup label="후반작업">{subCats.post.map(x=><option key={x} value={`후반-${x}`}>{x}</option>)}</optgroup><optgroup label="영상제작">{subCats.video.map(x=><option key={x} value={`영상-${x}`}>{x}</option>)}</optgroup><option value="기타진행비">기타 진행비</option></select>)}
+        <div className="relative">
+            <input type="text" placeholder="공급가액 (VAT 별도)" className={`${inputClass} font-bold text-gray-900 pr-32`} value={form.amount} onChange={e => handleMoneyChange(e.target.value)} />
+            <label className="absolute right-2 top-2 bottom-2 flex items-center bg-gray-100 px-3 rounded-lg cursor-pointer hover:bg-gray-200 transition select-none"><input type="checkbox" className="w-4 h-4 text-blue-600 rounded mr-2" checked={form.vatIncluded} onChange={e => setForm({...form, vatIncluded: e.target.checked})} /><span className="text-xs font-bold text-gray-600">VAT 별도</span></label>
+        </div>
+        <input type="text" placeholder="메모" className={inputClass} value={form.memo} onChange={e => setForm({...form, memo: e.target.value})} />
+        <div className="flex gap-2"><button className={`flex-1 text-white py-3 rounded-xl font-bold transition ${editingId ? 'bg-blue-600' : 'bg-blue-500 shadow-md'}`}>{editingId ? '수정 완료' : '추가하기'}</button>{editingId && <button type="button" onClick={() => {setEditingId(null); setForm({...form, amount: '', memo: '', vatIncluded: false});}} className="px-4 bg-gray-200 rounded-xl font-bold text-gray-600">취소</button>}</div>
+    </form>
+  );
+
   return (
-    <>
-      <div className="mb-4 pb-4 border-b border-gray-100">
-          <div className="flex items-center gap-2 mb-3">
-              <button onClick={handleBackToList} className="bg-gray-100 text-gray-700 px-3 py-2 rounded-lg font-bold text-xs hover:bg-gray-200 border border-gray-300">🔙 프로젝트 목록</button>
-              {!isSummaryMode && (
-                  <button onClick={resetPeriod} className="bg-indigo-50 text-indigo-600 px-3 py-2 rounded-lg font-bold text-xs hover:bg-indigo-100 border border-indigo-200">📆 전체 기간 보기</button>
-              )}
+    <div className="grid grid-cols-1 lg:grid-cols-[minmax(260px,1fr)_1.7fr] gap-6 items-start">
+      {/* 왼쪽: 프로젝트 목록 + (선택 시) 입력폼 */}
+      <div className="space-y-4">
+        <div className="flex gap-2">
+            <input type="text" placeholder="새 프로젝트 만들기" className={`${inputClass} bg-white`} value={newProjectName} onChange={e => setNewProjectName(e.target.value)} />
+            <button onClick={handleProjectAdd} className="bg-blue-600 text-white px-4 rounded-xl font-bold shadow-md hover:bg-blue-700 shrink-0">생성</button>
+        </div>
+        <div className="space-y-2">
+            <h3 className="font-bold text-gray-500 text-sm ml-1">📂 프로젝트 목록</h3>
+            {projects.map(p => {
+                const pTrans = allTransactions.filter(t => t.projectId === p.id && t.division === 'votiz');
+                const income = pTrans.filter(t=>t.type==='income').reduce((acc,cur)=>acc + (cur.totalAmount||cur.amount), 0);
+                const expense = pTrans.filter(t=>t.type==='expense').reduce((acc,cur)=>acc + (cur.totalAmount||cur.amount), 0);
+                const profit = income - expense;
+                // 이 프로젝트 수익이 언제까지 등록됐는지 (정산 진행 파악용)
+                const incomeDates = pTrans.filter(t=>t.type==='income').map(t=>t.date).sort();
+                const lastIncome = incomeDates.length ? incomeDates[incomeDates.length - 1] : null;
+                const active = p.id === selectedProjectId;
+                return (
+                    <div key={p.id}>
+                        <div onClick={() => handleSelectProject(p)} className={`cursor-pointer rounded-xl border p-3 transition ${active ? 'border-blue-400 bg-blue-50/60 ring-1 ring-blue-200' : 'border-gray-100 bg-white hover:border-blue-300 hover:shadow-sm'}`}>
+                            <div className="flex justify-between items-center gap-2">
+                                <div className="flex items-center gap-1.5 min-w-0">
+                                    <span className={`font-bold truncate ${active ? 'text-blue-700' : 'text-gray-800'}`}>{p.name}</span>
+                                    <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold ${lastIncome ? 'bg-blue-50 text-blue-600' : 'bg-gray-100 text-gray-400'}`}>
+                                        {lastIncome ? `수익 ~${lastIncome.replace(/-/g, '.')}` : '수익 미등록'}
+                                    </span>
+                                </div>
+                                <span className={`shrink-0 text-base font-extrabold ${profit >= 0 ? 'text-gray-900' : 'text-red-500'}`}>{formatNumber(profit)}원</span>
+                            </div>
+                            <div className="mt-2 flex gap-2">
+                                <div className="flex-1 rounded-lg bg-blue-50 px-2.5 py-1.5">
+                                    <div className="text-[10px] font-bold text-blue-400">수입</div>
+                                    <div className="text-sm font-extrabold text-blue-600">+{formatNumber(income)}</div>
+                                </div>
+                                <div className="flex-1 rounded-lg bg-red-50 px-2.5 py-1.5">
+                                    <div className="text-[10px] font-bold text-red-400">지출</div>
+                                    <div className="text-sm font-extrabold text-red-500">-{formatNumber(expense)}</div>
+                                </div>
+                            </div>
+                        </div>
+                        {active && projectForm}
+                    </div>
+                );
+            })}
+            {projects.length === 0 && <div className="text-xs text-gray-400 px-1">프로젝트를 먼저 만들어주세요.</div>}
+        </div>
+      </div>
+
+      {/* 오른쪽: 요약 + 상세 */}
+      <div>
+        {!selectedProjectId ? (
+            <div className="flex items-center justify-center min-h-[320px] rounded-2xl border border-dashed border-gray-200 bg-gray-50 text-sm font-medium text-gray-400">
+                왼쪽에서 프로젝트를 선택하세요
+            </div>
+        ) : (
+        <div className="space-y-6">
+          <div className="pb-4 border-b border-gray-100">
+              <div className="flex items-center justify-between gap-2">
+                {isEditingProject ? (
+                    <div className="flex gap-2 w-full">
+                        <input type="text" className={`${inputClass} py-2`} value={editProjectName} onChange={e=>setEditProjectName(e.target.value)} />
+                        <button onClick={handleUpdateProject} className="bg-blue-600 text-white px-3 rounded-lg font-bold text-sm">저장</button>
+                        <button onClick={()=>setIsEditingProject(false)} className="bg-gray-200 text-gray-600 px-3 rounded-lg font-bold text-sm">취소</button>
+                    </div>
+                ) : (
+                    <div className="flex items-center gap-2">
+                        <span className="font-extrabold text-2xl text-gray-800">{editProjectName}</span>
+                        <button onClick={()=>setIsEditingProject(true)} className="text-gray-400 hover:text-blue-500">✏️</button>
+                    </div>
+                )}
+              </div>
+              <div className="mt-2 relative">
+                 <textarea placeholder="프로젝트 메모" className="w-full p-3 bg-yellow-50 border border-yellow-200 rounded-xl text-sm text-gray-700 focus:ring-2 focus:ring-yellow-400 outline-none resize-none"
+                    rows="2" value={projectMemo} onChange={e => setProjectMemo(e.target.value)} onBlur={handleUpdateProject} />
+                 <div className="absolute bottom-2 right-2 text-[10px] text-gray-400 pointer-events-none">자동저장</div>
+              </div>
           </div>
-          <div className="flex items-center gap-2">
-            {isEditingProject ? (
-                <div className="flex gap-2 w-full">
-                    <input type="text" className={`${inputClass} py-2`} value={editProjectName} onChange={e=>setEditProjectName(e.target.value)} />
-                    <button onClick={handleUpdateProject} className="bg-blue-600 text-white px-3 rounded-lg font-bold text-sm">저장</button>
-                    <button onClick={()=>setIsEditingProject(false)} className="bg-gray-200 text-gray-600 px-3 rounded-lg font-bold text-sm">취소</button>
+
+          <div className="bg-white p-5 rounded-2xl shadow-sm border border-blue-100">
+              <div className="grid grid-cols-2 gap-4 text-sm mb-4">
+                  <div className="space-y-1">
+                      <div className="text-gray-400 text-xs">총 수입</div>
+                      <div className="font-bold text-blue-600 text-lg">+{formatNumber(pIncome)}</div>
+                  </div>
+                  <div className="space-y-1 text-right">
+                      <div className="text-gray-400 text-xs">총 지출</div>
+                      <div className="font-bold text-red-500 text-lg">-{formatNumber(totalExp)}</div>
+                  </div>
+              </div>
+              <div className="bg-gray-50 p-3 rounded-xl space-y-1 mb-3 text-xs">
+                  <div className="flex justify-between"><span>🛠️ 제작비</span> <span>{formatNumber(expenseProd)}원</span></div>
+                  <div className="flex justify-between"><span>📢 마케팅비</span> <span>{formatNumber(expenseMark)}원</span></div>
+              </div>
+              <div className="border-t pt-3 flex justify-between items-end">
+                  <span className="font-bold text-gray-600">예상 순수익</span>
+                  <span className={`text-2xl font-extrabold ${pIncome - totalExp >= 0 ? 'text-gray-900' : 'text-red-500'}`}>{formatNumber(pIncome - totalExp)}원</span>
+              </div>
+          </div>
+
+          <div>
+            <div className="flex justify-between items-center mb-2">
+                <h3 className="text-sm font-bold text-gray-500 ml-1">내역 리스트 ({finalList.length})</h3>
+                <button onClick={()=>setShowStats(!showStats)} className="text-xs font-bold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-100 hover:bg-blue-100">{showStats ? '리스트 보기' : '📊 세부 통계 보기'}</button>
+            </div>
+            {filterKeyword && (
+                <div onClick={() => setFilterKeyword(null)} className="inline-flex items-center gap-1 bg-yellow-100 text-yellow-800 px-3 py-1.5 rounded-full text-xs font-bold mb-3 cursor-pointer hover:bg-yellow-200 transition">
+                    <span>🔍 '{filterKeyword}' 내역만 보는 중</span><span className="text-yellow-500 ml-1">✕ 해제</span>
                 </div>
-            ) : (
-                <>
-                    <span className="font-extrabold text-2xl text-gray-800">{editProjectName}</span>
-                    <button onClick={()=>setIsEditingProject(true)} className="text-gray-400 hover:text-blue-500">✏️</button>
-                </>
+            )}
+            {showStats ? ( <CategoryStats list={projectTrans} onCategoryClick={handleCategoryClick} /> ) : (
+                <TransactionList list={finalList} showVat={true} onEdit={handleEdit} onDelete={handleDelete} isSummaryMode={false} onMonthClick={onMonthClick} categoryMap={categories} />
             )}
           </div>
-          <div className="mt-2 relative">
-             <textarea placeholder="프로젝트 메모" className="w-full p-3 bg-yellow-50 border border-yellow-200 rounded-xl text-sm text-gray-700 focus:ring-2 focus:ring-yellow-400 outline-none resize-none"
-                rows="2" value={projectMemo} onChange={e => setProjectMemo(e.target.value)} onBlur={handleUpdateProject} />
-             <div className="absolute bottom-2 right-2 text-[10px] text-gray-400 pointer-events-none">자동저장</div>
-          </div>
-      </div>
-      
-      <div className="bg-white p-5 rounded-2xl shadow-sm border border-blue-100 mb-6">
-          <div className="grid grid-cols-2 gap-4 text-sm mb-4">
-              <div className="space-y-1">
-                  <div className="text-gray-400 text-xs">총 수입</div>
-                  <div className="font-bold text-blue-600 text-lg">+{formatNumber(pIncome)}</div>
-              </div>
-              <div className="space-y-1 text-right">
-                  <div className="text-gray-400 text-xs">총 지출</div>
-                  <div className="font-bold text-red-500 text-lg">-{formatNumber(totalExp)}</div>
-              </div>
-          </div>
-          <div className="bg-gray-50 p-3 rounded-xl space-y-1 mb-3 text-xs">
-              <div className="flex justify-between"><span>🛠️ 제작비</span> <span>{formatNumber(expenseProd)}원</span></div>
-              <div className="flex justify-between"><span>📢 마케팅비</span> <span>{formatNumber(expenseMark)}원</span></div>
-          </div>
-          <div className="border-t pt-3 flex justify-between items-end">
-              <span className="font-bold text-gray-600">예상 순수익</span>
-              <span className={`text-2xl font-extrabold ${pIncome - totalExp >= 0 ? 'text-gray-900' : 'text-red-500'}`}>{formatNumber(pIncome - totalExp)}원</span>
-          </div>
-      </div>
-
-      <form onSubmit={handleSubmit} className={`p-5 rounded-2xl shadow-sm border-2 relative overflow-hidden space-y-3 transition-colors ${editingId ? 'bg-blue-50 border-blue-300' : 'bg-white border-blue-50'}`}>
-            <div className="absolute top-0 left-0 w-full h-1 bg-blue-500"></div>
-            <h3 className={`font-bold text-sm ${editingId ? 'text-blue-700' : 'text-gray-800'}`}>{editingId ? '✏️ 수정 중' : '📝 내역 입력'}</h3>
-            <div className="flex gap-2">
-                <select className={`${selectClass} flex-1`} value={form.type} onChange={e => {
-                    const newType = e.target.value;
-                    const defaultCategory = newType === 'income' ? 'source' : 'production';
-                    setForm({...form, type: newType, category: defaultCategory, subDetail: ''});
-                }}>
-                    <option value="income">수익</option><option value="expense">지출</option>
-                </select>
-                <input type="date" className={`${inputClass} flex-[2]`} value={form.date} onChange={e => setForm({...form, date: e.target.value})} />
-            </div>
-            <select className={selectClass} value={form.category} onChange={e => setForm({...form, category: e.target.value})}>{Object.entries(categories[form.type]).map(([key, label]) => (<option key={key} value={key}>{label}</option>))}</select>
-            {form.type === 'expense' && form.category === 'production' && (<select className={selectClass} value={form.subDetail} onChange={e => setForm({...form, subDetail: e.target.value})}><option value="">세부 항목 선택</option><optgroup label="곡비">{subCats.songFee.map(x=><option key={x} value={`곡비-${x}`}>{x}</option>)}</optgroup><optgroup label="녹음비">{subCats.recording.map(x=><option key={x} value={`녹음비-${x}`}>{x}</option>)}</optgroup><optgroup label="후반작업">{subCats.post.map(x=><option key={x} value={`후반-${x}`}>{x}</option>)}</optgroup><optgroup label="영상제작">{subCats.video.map(x=><option key={x} value={`영상-${x}`}>{x}</option>)}</optgroup><option value="기타진행비">기타 진행비</option></select>)}
-            <div className="relative">
-                <input type="text" placeholder="공급가액 (VAT 별도)" className={`${inputClass} font-bold text-gray-900 pr-32`} value={form.amount} onChange={e => handleMoneyChange(e.target.value)} />
-                <label className="absolute right-2 top-2 bottom-2 flex items-center bg-gray-100 px-3 rounded-lg cursor-pointer hover:bg-gray-200 transition select-none"><input type="checkbox" className="w-4 h-4 text-blue-600 rounded mr-2" checked={form.vatIncluded} onChange={e => setForm({...form, vatIncluded: e.target.checked})} /><span className="text-xs font-bold text-gray-600">VAT 별도</span></label>
-            </div>
-            <input type="text" placeholder="메모" className={inputClass} value={form.memo} onChange={e => setForm({...form, memo: e.target.value})} />
-            <div className="flex gap-2"><button className={`flex-1 text-white py-3.5 rounded-xl font-bold transition ${editingId ? 'bg-blue-600' : 'bg-blue-500 shadow-md'}`}>{editingId ? '수정 완료' : '추가하기'}</button>{editingId && <button type="button" onClick={() => {setEditingId(null); setForm({...form, amount: '', memo: '', vatIncluded: false});}} className="px-4 bg-gray-200 rounded-xl font-bold text-gray-600">취소</button>}</div>
-      </form>
-
-      <div className="mt-6">
-        <div className="flex justify-between items-center mb-2">
-            <h3 className="text-sm font-bold text-gray-500 ml-1">내역 리스트 ({finalList.length})</h3>
-            <button onClick={()=>setShowStats(!showStats)} className="text-xs font-bold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-lg border border-blue-100 hover:bg-blue-100">{showStats ? '리스트 보기' : '📊 세부 통계 보기'}</button>
         </div>
-        {filterKeyword && (
-            <div onClick={() => setFilterKeyword(null)} className="inline-flex items-center gap-1 bg-yellow-100 text-yellow-800 px-3 py-1.5 rounded-full text-xs font-bold mb-3 cursor-pointer hover:bg-yellow-200 transition">
-                <span>🔍 '{filterKeyword}' 내역만 보는 중</span><span className="text-yellow-500 ml-1">✕ 해제</span>
-            </div>
-        )}
-        {showStats ? ( <CategoryStats list={projectTrans} onCategoryClick={handleCategoryClick} /> ) : (
-            <TransactionList list={finalList} showVat={true} onEdit={handleEdit} onDelete={handleDelete} isSummaryMode={false} onMonthClick={onMonthClick} categoryMap={categories} />
         )}
       </div>
-    </>
+    </div>
   );
 }
 
@@ -910,11 +984,15 @@ function TransactionList({ list, showVat, onEdit, onDelete, isSummaryMode, onMon
             return (
             <li key={item.id} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-[0_2px_8px_rgba(0,0,0,0.04)] hover:shadow-md transition-shadow">
             <div className="flex justify-between items-start mb-1">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                     <span className={`text-[10px] font-extrabold px-2 py-1 rounded-md tracking-wide ${isVT ? 'bg-purple-100 text-purple-600' : isCR ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600'}`}>
                         {isVT ? 'VT' : isCR ? '저작권' : '보티즈'}
                     </span>
-                    <span className="text-xs font-medium text-gray-400">{item.date}</span>
+                    <span className="text-sm font-bold text-gray-500">{item.date}</span>
+                    <span className="text-sm font-medium text-gray-600">
+                        {displayTitle}
+                        {(displayTitle !== item.memo && item.memo) && <span className="text-gray-400 font-normal"> ({item.memo})</span>}
+                    </span>
                 </div>
                 <div className="flex gap-1">
                     <button onClick={() => onEdit(item)} className="p-1 text-gray-300 hover:text-blue-500"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4"><path d="m5.433 13.917 1.262-3.155A4 4 0 0 1 7.58 9.42l6.92-6.918a2.121 2.121 0 0 1 3 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 0 1-.65-.65Z" /></svg></button>
@@ -922,13 +1000,8 @@ function TransactionList({ list, showVat, onEdit, onDelete, isSummaryMode, onMon
                 </div>
             </div>
             <div className="flex justify-between items-center mt-2">
-                <div>
-                    <div className={`text-lg font-extrabold flex items-center gap-1 ${isIncome ? (finalAmount >=0 ? 'text-blue-600' : 'text-red-500') : 'text-red-500'}`}>
-                        <span>{isIncome ? '수익' : '지출'}</span><span>{formatNumber(finalAmount)}원</span>
-                    </div>
-                    <div className="text-sm text-gray-600 mt-1 font-medium flex items-center flex-wrap gap-1">
-                        <span>{displayTitle}</span>{(displayTitle !== item.memo && item.memo) && <span className="text-gray-500 font-normal">({item.memo})</span>}
-                    </div>
+                <div className={`text-lg font-extrabold flex items-center gap-1 ${isIncome ? (finalAmount >=0 ? 'text-blue-600' : 'text-red-500') : 'text-red-500'}`}>
+                    <span>{isIncome ? '수익' : '지출'}</span><span>{formatNumber(finalAmount)}원</span>
                 </div>
                 {showVat && item.vat > 0 && (<div className="text-[10px] text-gray-400 bg-gray-50 px-2 py-1 rounded">VAT 포함</div>)}
             </div>
@@ -965,7 +1038,7 @@ function YoutubeSection({ user, transactions, refresh, isSummaryMode }) {
     if (editingId) {
        const isIncome = !!numIncome;
        const updateData = { ...baseData, amount: isIncome ? numIncome : numExpense, type: isIncome ? 'income' : 'expense' };
-       await updateDoc(doc(db, "transactions", editingId), updateData);
+       await updateDoc(doc(db, "acc_transactions", editingId), updateData);
        setEditingId(null);
     } else {
         if (numIncome) promises.push(addDoc(collection(db, "acc_transactions"), { ...baseData, amount: numIncome, type: 'income' }));
@@ -975,7 +1048,7 @@ function YoutubeSection({ user, transactions, refresh, isSummaryMode }) {
     setForm({ date: '', income: '', expense: '', memo: '' }); refresh();
   };
 
-  const handleDelete = async (id) => { if(window.confirm("삭제하시겠습니까?")) { await deleteDoc(doc(db, "transactions", id)); refresh(); } };
+  const handleDelete = async (id) => { if(window.confirm("삭제하시겠습니까?")) { await deleteDoc(doc(db, "acc_transactions", id)); refresh(); } };
   
   const handleEdit = (item) => { 
       setForm({ date: item.date, income: item.type === 'income' ? item.amount.toString() : '', expense: item.type === 'expense' ? formatNumber(item.amount) : '', memo: item.memo }); 
@@ -983,6 +1056,8 @@ function YoutubeSection({ user, transactions, refresh, isSummaryMode }) {
   };
   
   const list = transactions.filter(t => t.division === 'youtube').sort((a,b) => b.date.localeCompare(a.date));
+  const latestMonth = list[0]?.date; // 'YYYY-MM' (내림차순 첫 항목이 최신)
+  const fmtMonth = (d) => (d ? `${d.slice(0, 4)}년 ${Number(d.slice(5, 7))}월` : '');
   const totalIncome = list.filter(t=>t.type==='income').reduce((acc,cur)=>acc+cur.amount, 0);
   const totalExpense = list.filter(t=>t.type==='expense').reduce((acc,cur)=>acc+cur.amount, 0);
 
@@ -1005,7 +1080,7 @@ function YoutubeSection({ user, transactions, refresh, isSummaryMode }) {
   };
 
   return (
-    <>
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
       <form onSubmit={handleSubmit} className={`p-5 rounded-2xl shadow-sm border space-y-3 transition-colors ${editingId ? 'bg-red-50 border-red-200' : 'bg-white border-gray-100'}`}>
            <h3 className={`font-bold mb-2 ${editingId ? 'text-red-700' : 'text-gray-800'}`}>{editingId ? '✏️ 내역 수정' : '📝 유튜브 수익/지출 등록'}</h3>
            <input type="month" required className={`${inputClass} font-bold text-gray-700`} value={form.date} onChange={e => setForm({...form, date: e.target.value})} />
@@ -1027,7 +1102,14 @@ function YoutubeSection({ user, transactions, refresh, isSummaryMode }) {
       </form>
 
       <div className="mt-6">
-        <h3 className="text-sm font-bold text-gray-500 mb-3 ml-1">{isSummaryMode ? '📂 연도별 모아보기' : '내역 리스트'}</h3>
+        <div className="flex items-center gap-2 mb-3 ml-1">
+          <h3 className="text-sm font-bold text-gray-500">{isSummaryMode ? '📂 연도별 모아보기' : '내역 리스트'}</h3>
+          {latestMonth && (
+            <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-bold text-blue-600">
+              {fmtMonth(latestMonth)}까지 입력됨
+            </span>
+          )}
+        </div>
         {isSummaryMode ? (
             <div className="space-y-3">
                 {sortedYears.map(year => {
@@ -1038,7 +1120,10 @@ function YoutubeSection({ user, transactions, refresh, isSummaryMode }) {
                     return (
                         <div key={year} className={`bg-white rounded-2xl border transition-all overflow-hidden ${isOpen ? 'border-red-300 shadow-md' : 'border-gray-200 shadow-sm'}`}>
                             <div onClick={() => toggleYear(year)} className="p-5 cursor-pointer flex justify-between items-center hover:bg-gray-50">
-                                <div><h4 className="text-xl font-extrabold text-gray-800">{year}년</h4><span className="text-xs text-gray-400">{yearList.length}건</span></div>
+                                <div className="flex items-center gap-2">
+                                    <h4 className="text-xl font-extrabold text-gray-800">{year}년</h4>
+                                    <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-500">{yearList.length}건</span>
+                                </div>
                                 <div className="text-right text-sm font-bold flex flex-col gap-0.5">
                                     <div className="text-blue-600">${yIncome.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
                                     <div className="text-red-500">₩{formatNumber(yExpense)}</div>
@@ -1056,14 +1141,8 @@ function YoutubeSection({ user, transactions, refresh, isSummaryMode }) {
         ) : (
             <YoutubeTransactionList list={list} onEdit={handleEdit} onDelete={handleDelete} />
         )}
-        <div className="sticky bottom-4 mt-4 bg-gray-900 text-white p-4 rounded-xl shadow-xl border border-gray-700 flex justify-between items-center z-10">
-            <div className="text-xs text-gray-400">
-                <div>총 수입: +${totalIncome.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</div>
-                <div>총 지출: -₩{formatNumber(totalExpense)}</div>
-            </div>
-        </div>
       </div>
-    </>
+    </div>
   );
 }
 
