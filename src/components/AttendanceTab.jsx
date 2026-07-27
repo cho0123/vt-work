@@ -23,6 +23,7 @@ import {
 } from '../utils/date.js';
 import { formatCurrency, calculateBilledAmount, vocalRateFactorFor } from '../utils/money.js';
 import { getBadgeStyle } from '../utils/badgeStyle.js';
+import { downloadSettlementDoc } from '../utils/settlementDoc.js';
 
 /**
  * App.jsx 에서 그대로 옮긴 블록.
@@ -470,6 +471,68 @@ export function AttendanceTab({
                                                                     </span>
                                                                 </div>
 
+                                                                <div className="flex items-center gap-1.5">
+                                                                {/* 정산서(회사 청구용 워드) 추출 */}
+                                                                <button
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation();
+                                                                        const y = attMonth.getFullYear();
+                                                                        const mo = attMonth.getMonth();
+                                                                        const pad = (n) => String(n).padStart(2, '0');
+                                                                        const periodStart = `${y}-${pad(mo + 1)}-01`;
+                                                                        const periodEnd = `${y}-${pad(mo + 1)}-${pad(new Date(y, mo + 1, 0).getDate())}`;
+                                                                        const lessons = [...monthScheds]
+                                                                            .sort((a, b) => (a.date < b.date ? -1 : 1))
+                                                                            .map((s) => {
+                                                                                const isM =
+                                                                                    s.gridType === 'master' || !s.gridType;
+                                                                                const type = isM
+                                                                                    ? '마스터'
+                                                                                    : vocalRateFactorFor(s, student) === 1
+                                                                                      ? '보컬'
+                                                                                      : '보컬(30)';
+                                                                                return { date: s.date, type };
+                                                                            });
+                                                                        const breakdown = [];
+                                                                        if (cntM > 0)
+                                                                            breakdown.push({
+                                                                                label: '마스터',
+                                                                                unit: rateM,
+                                                                                count: cntM,
+                                                                                amount: rateM * cntM,
+                                                                            });
+                                                                        if (cntV_Full > 0)
+                                                                            breakdown.push({
+                                                                                label: '보컬',
+                                                                                unit: rateV_Base,
+                                                                                count: cntV_Full,
+                                                                                amount: rateV_Base * cntV_Full,
+                                                                            });
+                                                                        if (cntV_Half > 0)
+                                                                            breakdown.push({
+                                                                                label: '보컬(30)',
+                                                                                unit: Math.round(rateV_Base * 0.5),
+                                                                                count: cntV_Half,
+                                                                                amount: Math.round(rateV_Base * 0.5) * cntV_Half,
+                                                                            });
+                                                                        downloadSettlementDoc({
+                                                                            studentName: student.name,
+                                                                            clientName: student.clientName || '',
+                                                                            clientBizNo: student.clientBizNo || '',
+                                                                            periodStart,
+                                                                            periodEnd,
+                                                                            monthLabel: `${y}-${pad(mo + 1)}`,
+                                                                            lessons,
+                                                                            breakdown,
+                                                                            total: totalAmount,
+                                                                            issueDate: formatDateLocal(new Date()),
+                                                                        });
+                                                                    }}
+                                                                    className="flex items-center gap-1 rounded bg-gray-900 px-2 py-1 text-[10px] font-bold text-white shadow-sm transition-colors hover:bg-gray-700"
+                                                                    title="이 달 정산서를 워드 파일로 내려받습니다"
+                                                                >
+                                                                    <FaFileInvoiceDollar className="text-[10px]" /> 정산서
+                                                                </button>
                                                                 {/* [추가됨] 청구하기 버튼 */}
                                                                 {/* [수정됨] 이미 청구된 내역인지 확인 */}
                                                                 {(() => {
@@ -557,6 +620,7 @@ export function AttendanceTab({
                                                                         </button>
                                                                     );
                                                                 })()}
+                                                                </div>
                                                             </div>
                                                         </div>
                                                     );

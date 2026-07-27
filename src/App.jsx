@@ -390,6 +390,8 @@ function App() {
     const itemsPerPage = 30;
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [editingId, setEditingId] = useState(null);
+    // 로테이션 이력이 있는 학생 저장 시, 팝업을 닫지 않고 그 자리서 반영을 확인시켜 주는 안내
+    const [studentSaveNotice, setStudentSaveNotice] = useState('');
     // 수정 모달을 열 때의 학생 원본. 저장 시 '사용자가 실제로 바꾼 필드'만
     // 가려내는 기준으로 쓴다. (아래 handleSubmit 주석 참고)
     const [editingOriginal, setEditingOriginal] = useState(null);
@@ -571,6 +573,7 @@ function App() {
         isFixed: false,
         recurrence: 'weekly',
         dayOfMonth: null,
+        monthOfYear: null,
         status: '',
         gridType: 'master',
         isVocalProgress: false,
@@ -627,6 +630,8 @@ function App() {
         lastDate: formatDateLocal(new Date()),
         memo: '',
         cashReceiptMemo: '',
+        clientName: '', // 월정산 정산서 거래처(회사)명
+        clientBizNo: '', // 월정산 정산서 거래처 사업자등록번호
         schedule: [
             { week: 1, master: '', vocal: '', vocal30: '' },
             { week: 2, master: '', vocal: '', vocal30: '' },
@@ -1887,6 +1892,7 @@ function App() {
                     isFixed: existingItem.isFixed || false,
                     recurrence: existingItem.recurrence || 'weekly',
                     dayOfMonth: existingItem.dayOfMonth || null,
+                    monthOfYear: existingItem.monthOfYear || null,
                     status: existingItem.status || '',
                     gridType: existingItem.gridType || 'master',
                     isVocalProgress: existingItem.isVocalProgress || false,
@@ -2191,6 +2197,10 @@ function App() {
         //  - monthlyLast  : 날짜 필드 불필요 (말일은 매달 계산)
         const recurrence = scheduleForm.isFixed ? scheduleForm.recurrence || 'weekly' : null;
         const clickedDayOfMonth = selectedSlot.date ? Number(selectedSlot.date.split('-')[2]) : null;
+        const clickedMonthOfYear = selectedSlot.date ? Number(selectedSlot.date.split('-')[1]) : null;
+        // monthlyDate·yearlyDate 는 '일'을 쓴다. 편집이면 기존 값 유지, 신규/이동은 클릭한 칸 날짜.
+        const savedDayOfMonth =
+            selectedSlot.id && scheduleForm.dayOfMonth ? Number(scheduleForm.dayOfMonth) : clickedDayOfMonth;
         const data = {
             time: timeToSave,
             ...scheduleForm,
@@ -2200,10 +2210,13 @@ function App() {
             recurrence,
             dayOfWeek: recurrence === 'weekly' ? selectedSlot.dayOfWeek : null,
             dayOfMonth:
-                recurrence === 'monthlyDate'
-                    ? selectedSlot.id && scheduleForm.dayOfMonth
-                        ? Number(scheduleForm.dayOfMonth)
-                        : clickedDayOfMonth
+                recurrence === 'monthlyDate' || recurrence === 'yearlyDate' ? savedDayOfMonth : null,
+            // 매년 반복은 '월'도 필요하다. 편집이면 기존 값 유지, 아니면 클릭한 칸의 월.
+            monthOfYear:
+                recurrence === 'yearlyDate'
+                    ? selectedSlot.id && scheduleForm.monthOfYear
+                        ? Number(scheduleForm.monthOfYear)
+                        : clickedMonthOfYear
                     : null,
             fixedStartDate: scheduleForm.isFixed ? selectedSlot.date || formatDateLocal(new Date()) : null,
             relatedScheduleId: selectedMakeupId || null,
@@ -2879,6 +2892,8 @@ function App() {
                     'rates',
                     'memo',
                     'cashReceiptMemo',
+                    'clientName',
+                    'clientBizNo',
                 ];
                 const patch = {};
                 for (const k of EDITABLE) {
@@ -2950,8 +2965,20 @@ function App() {
 
                 await addDoc(collection(db, 'students'), newStudentData);
             }
-            closeModal();
+
             fetchSettlementData(); // 데이터 갱신
+
+            // 로테이션 변경 이력이 있는 학생을 '수정' 저장한 경우엔 팝업을 닫지 않고
+            // 그 자리서 반영을 확인할 수 있게 한다(다시 열어 확인하는 번거로움 제거).
+            const keepOpen = editingId && Array.isArray(normHistory) && normHistory.length >= 2;
+            if (keepOpen) {
+                // 저장된 값(정리된 이력)을 폼과 비교기준에 반영해 두어야 이후 수정 비교가 맞는다.
+                setFormData(formData2);
+                setEditingOriginal(formData2);
+                setStudentSaveNotice('저장되었습니다. 아래에서 변경 이력을 확인하세요. (계속 수정하거나 닫아도 됩니다)');
+            } else {
+                closeModal();
+            }
         } catch (e) {
             console.error(e);
             alert('저장 중 오류가 발생했습니다: ' + e.message);
@@ -3001,6 +3028,7 @@ function App() {
         setEditingId(null);
         setEditingOriginal(null);
         setFormData(initialFormState);
+        setStudentSaveNotice('');
     };
 
     // --- [NEW] 재등록 예정일 자동 등록 핸들러 (학생 이름 포함 수정) ---
@@ -3477,6 +3505,8 @@ function App() {
                     handleRateChange={handleRateChange}
                     handleSubmit={handleSubmit}
                     calculateTotalAmount={calculateTotalAmount}
+                    saveNotice={studentSaveNotice}
+                    clearSaveNotice={() => setStudentSaveNotice('')}
                 />
 
                 {/* 이미지 미리보기 모달 (모바일 개선) */}

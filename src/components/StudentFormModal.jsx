@@ -15,6 +15,8 @@ export function StudentFormModal({
     handleRateChange,
     handleSubmit,
     calculateTotalAmount,
+    saveNotice,
+    clearSaveNotice,
 }) {
     const [changeDate, setChangeDate] = useState('');
     if (!isModalOpen) return null;
@@ -27,7 +29,10 @@ export function StudentFormModal({
     const curIdx = history.length - 1;
     const currentSchedule = history[curIdx].schedule || formData.schedule;
 
-    const syncHistory = (h) => setFormData({ ...formData, scheduleHistory: h, schedule: h[h.length - 1].schedule });
+    const syncHistory = (h) => {
+        clearSaveNotice?.(); // 저장 후 다시 손대면 '저장됨' 안내는 지운다
+        setFormData({ ...formData, scheduleHistory: h, schedule: h[h.length - 1].schedule });
+    };
     const editCell = (i, field, v) => {
         const val = v.replace(/[^0-9.]/g, '');
         syncHistory(
@@ -182,6 +187,14 @@ export function StudentFormModal({
                             >
                                 로테이션 변경
                             </button>
+                        </div>
+
+                        {/* 사용법 안내 (수업 구성을 도중에 바꾼 학생 기록법) */}
+                        <div className="mb-2 rounded-xl bg-orange-50/60 px-3 py-2 text-[11px] leading-relaxed text-gray-500">
+                            <b className="text-gray-600">수업을 바꾼 학생 기록법</b> — ① 아래 표를{' '}
+                            <b>바뀌기 전(옛) 설정</b>으로 맞춤 → ② 오른쪽 날짜에 <b>바뀐 날</b> 선택 →{' '}
+                            <b>[로테이션 변경]</b> 클릭 → ③ 표를 <b>새 설정</b>으로 고치고 저장. 아래 이력에{' '}
+                            <span className="text-gray-500">옛설정 → 새설정 (날짜)</span> 로 남습니다.
                         </div>
 
                         <div className="bg-gray-50 p-5 rounded-[2rem] border border-gray-100">
@@ -344,7 +357,55 @@ export function StudentFormModal({
                             />
                         </div>
                     </div>
+
+                    {/* 월정산 학생: 정산서(회사 청구용) 거래처 정보 */}
+                    {formData.isMonthly && (
+                        <div className="rounded-2xl border border-blue-100 bg-blue-50/50 p-4">
+                            <div className="mb-2 flex items-center gap-2">
+                                <span className="rounded-full bg-blue-100 px-2 py-0.5 text-[10px] font-bold text-blue-600">
+                                    월정산 정산서
+                                </span>
+                                <span className="text-[11px] text-gray-400">
+                                    출석부 월정산에서 정산서(워드)를 뽑을 때 들어가는 거래처 정보
+                                </span>
+                            </div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="text-xs font-bold text-gray-500 mb-1.5 ml-2 block">거래처명</label>
+                                    <input
+                                        type="text"
+                                        name="clientName"
+                                        className="input w-full bg-white border-transparent focus:ring-2 focus:ring-blue-100 rounded-2xl font-medium text-gray-800 h-12 px-5"
+                                        placeholder="예: 플레디스 엔터테인먼트"
+                                        value={formData.clientName || ''}
+                                        onChange={handleChange}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="text-xs font-bold text-gray-500 mb-1.5 ml-2 block">
+                                        사업자등록번호
+                                    </label>
+                                    <input
+                                        type="text"
+                                        name="clientBizNo"
+                                        className="input w-full bg-white border-transparent focus:ring-2 focus:ring-blue-100 rounded-2xl font-medium text-gray-800 h-12 px-5"
+                                        placeholder="예: 211-88-46472"
+                                        value={formData.clientBizNo || ''}
+                                        onChange={handleChange}
+                                    />
+                                </div>
+                            </div>
+                        </div>
+                    )}
                 </div>
+
+                {/* 저장 후 안내 (팝업 유지 시) — 다시 열지 않고 바로 확인 */}
+                {saveNotice && (
+                    <div className="mt-6 flex items-center gap-2 rounded-2xl bg-green-50 px-4 py-3 text-sm font-semibold text-green-700 ring-1 ring-green-100">
+                        <span>✓</span>
+                        <span>{saveNotice}</span>
+                    </div>
+                )}
 
                 {/* 6. 버튼 */}
                 <div className="mt-8 flex gap-4">
@@ -352,7 +413,7 @@ export function StudentFormModal({
                         onClick={closeModal}
                         className="btn btn-lg h-14 min-h-[3.5rem] flex-1 bg-white border-2 border-gray-100 text-gray-500 hover:bg-gray-50 hover:border-gray-300 rounded-2xl font-bold text-base shadow-sm transition-all"
                     >
-                        취소
+                        {saveNotice ? '닫기' : '취소'}
                     </button>
                     <button
                         onClick={handleSubmit}

@@ -9,6 +9,8 @@
 //   'monthlyDate' 매월 dayOfMonth 일. 그 날짜가 없는 달이면 그 달 말일로 당김
 //                 (예: 31일 지정 → 30일까지인 달은 30일, 2월은 28/29일)
 //   'monthlyLast' 매월 말일
+//   'yearlyDate'  매년 monthOfYear 월 dayOfMonth 일 (예: 생일). 2월 29일 지정은
+//                 평년이면 그 달 말일(28일)로 당김
 //
 // 'monthlyDate' 의 말일 당김 규칙 때문에 "매월 31일"은 결과적으로 "매월 말일"과
 // 같아지지만, 의도를 분명히 하려고 옵션은 따로 둔다.
@@ -29,6 +31,14 @@ export function fixedScheduleOccursOn(s, dateObj) {
 
     if (rec === 'monthlyDate') {
         // 지정일이 그 달에 없으면 말일로 당긴다.
+        const target = Math.min(Number(s.dayOfMonth), daysInMonth(dateObj));
+        return dateObj.getDate() === target;
+    }
+
+    if (rec === 'yearlyDate') {
+        // 지정한 '월'이 아니면 걸리지 않는다. (monthOfYear 는 1~12)
+        if (Number(s.monthOfYear) !== dateObj.getMonth() + 1) return false;
+        // 2월 29일 지정을 평년에 볼 때처럼, 그 달에 없는 날짜는 말일로 당긴다.
         const target = Math.min(Number(s.dayOfMonth), daysInMonth(dateObj));
         return dateObj.getDate() === target;
     }

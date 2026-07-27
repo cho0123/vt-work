@@ -294,6 +294,11 @@ export function ScheduleModal({
                                         {scheduleForm.dayOfMonth || Number(selectedSlot?.date?.split('-')[2]) || ''}일
                                     </option>
                                     <option value="monthlyLast">매월 말일</option>
+                                    <option value="yearlyDate">
+                                        매년{' '}
+                                        {scheduleForm.monthOfYear || Number(selectedSlot?.date?.split('-')[1]) || ''}월{' '}
+                                        {scheduleForm.dayOfMonth || Number(selectedSlot?.date?.split('-')[2]) || ''}일
+                                    </option>
                                 </select>
                             )}
                         </div>

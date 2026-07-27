@@ -351,12 +351,41 @@ npm run verify-student-edit  # 학생 수정이 결제 결과를 덮지 않는�
 - 검증: `npx eslint src/` no-undef 없음 + dev 화면 확인(불러오기·임금 연동·입력완료 전부 확인,
   테스트로 넣은 지출은 삭제로 원복). 사용자는 개발자가 아님 — 확인은 사용자가 화면에서 진행.
 
-### 다음 단계 (2026-07-26 기준) — 회사 PC에서
+### 2026-07-27 1차 운영 배포 완료 ✅
 
-1. **배포** (`refactor/split-app` → `main` → Netlify). 위 **"배포 절차"** 섹션 그대로.
-   - ⚠️ **최우선: Netlify 환경변수(운영 `VITE_*` 6개) 확인.** 없으면 운영DB 연결 실패로 앱이 통째로 안 뜸.
-   - 이번 세션 작업(배너·고정지출·재등록 인원수·스타일)도 전부 이 브랜치에 있어 병합하면 함께 배포됨.
-2. **정산앱(votiz-acc) 통합 검토** — 소스가 회사 PC. 별도 Firebase(`votiz-acc`)라 데이터 이전 or 두 DB 연결 방식.
+회사 PC에서 첫 배포 성공. `refactor/split-app` → `main` fast-forward 병합 → push → Netlify 자동 배포
+(`vt-schedule.netlify.app`, 운영 `vt-schedule-12568`). 사용자가 라이브 확인 완료.
+- 롤백 지점 태그: `prod-before-refactor-deploy`(옛 main `1c5d513`). 코드만 되돌리면 복구.
+- 배포 전 운영 백업: `backup/prod-2026-07-27-*.json`.
+- Netlify 환경변수(운영 `VITE_*` 6개, `VITE_PROJECT_ID=vt-schedule-12568`) 이미 등록돼 있어 `.env` 불필요.
+- ⚠️ **병합 시 로컬 `.env` 가 사라짐**: 옛 main 은 `.env` 추적, refactor 는 gitignore → 병합하면
+  working tree 에서 삭제됨. 배포엔 무관(Netlify 자체 환경변수)하지만, 로컬 작업용으로
+  `git show prod-before-refactor-deploy:.env > .env` 로 되살려 둘 것.
+- (미확인) 보안규칙 `deploy-rules.js key-A.json` 적용 여부 — 안 했으면 다음에 할 것.
+
+### 2026-07-27 추가 (2차 작업 — 모두 화면 확인 완료, 재배포함)
+
+- **고정 개인일정 '매년 같은 날짜'(`yearlyDate`)** — 생일 등. 기존 weekly/monthlyDate/monthlyLast 옆에.
+  `fixedRecurrence.js`: 월(`monthOfYear` 1~12)+일(`dayOfMonth`) 둘 다 맞아야 걸림. **2/29 지정은
+  평년이면 말일(28)로 당김**. 저장은 클릭한 칸 날짜에서 월·일 자동, 편집 시 기존 값 유지. 모달 select 에
+  '매년 M월 D일' 옵션. 단위테스트 13/13(기존 규칙 회귀 포함).
+- **시점별 로테이션(scheduleHistory) UI 개선** — ⚠️ **표를 여러 개로 늘리는 방식은 사용자가 명시적으로
+  거부함**(예전에 그게 싫어서 지금의 '표 1개 + 한 줄 이력'으로 바꿨음). 그래서 UI 구조(표+한 줄 이력)는
+  그대로 두고 두 가지만: (1) 표 위에 **사용법 안내 메모**(옛 설정 맞춤→날짜 선택→[로테이션 변경]→새 설정),
+  (2) **로테이션 이력(≥2구간) 있는 학생 저장 시 팝업을 안 닫고** 초록 '저장됨' 배너로 그 자리서 확인
+  (App `handleSubmit` 의 `keepOpen`, `studentSaveNotice`). 계산 엔진은 안 건드림.
+- **월정산 레슨 정산서(회사 청구용 워드) 자동 생성** — `src/utils/settlementDoc.js` 의
+  `downloadSettlementDoc`. Storage 없이 HTML 기반 `.doc` Blob 다운로드(백업과 같은 방식, 워드에서 열림).
+  출석부 → 월별 보기 → **월정산** 탭의 학생 금액 옆 **'정산서' 버튼**(`AttendanceTab`). 그 달 수업만
+  날짜순 표 + 단가별(단가×횟수) 내역 + 합계. 서식은 학원 실제 파일(`보이스튜닝 레슨 정산서_*.docx`,
+  경로: 사용자 바탕화면 `기획사 정산자료`) 재현. **거래처명/사업자번호는 학생 문서 `clientName`/`clientBizNo`**
+  (정보수정 팝업에서 **월정산 학생일 때만** 입력칸 노출, `EDITABLE` 에 추가). 문서 라벨 '아티스트'는
+  서식 그대로일 뿐 앱의 isArtist 와 무관(대상은 isMonthly).
+
+### 다음 단계
+
+1. **정산앱(votiz-acc) 통합 검토** — 소스가 회사 PC. 별도 Firebase(`votiz-acc`)라 데이터 이전 or 두 DB 연결 방식.
+2. 보안규칙(`deploy-rules.js key-A.json`) 적용 여부 확인.
 
 ### 끝난 것
 
