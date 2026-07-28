@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
     FaPlus,
     FaChevronLeft,
@@ -34,6 +34,7 @@ export function ScheduleTab({
     getGhostSchedules,
     handleSlotClick,
     handleBulkCompleteDay,
+    todosByDate,
     weeklyMemo,
     handleWeeklyMemoSave,
 }) {
@@ -43,6 +44,10 @@ export function ScheduleTab({
         () => new Set(scheduleCancellations.map((c) => `${c.date}|${c.time}|${c.studentId}`)),
         [scheduleCancellations]
     );
+
+    // 짱구 ToDo 팝업으로 볼 날짜 (null = 닫힘)
+    const [todoPopupDate, setTodoPopupDate] = useState(null);
+    const todoMap = todosByDate || {};
 
     return (
         <div className="flex flex-col h-full w-full p-4 md:p-8 lg:px-12 gap-4">
@@ -162,6 +167,7 @@ export function ScheduleTab({
                             // 미처리 수업이 하나도 없으면 버튼을 비활성화한다.
                             // 판정은 실제 완료 처리와 같은 함수를 쓴다(조건이 어긋나지 않도록).
                             const pendingCount = isPastDay ? bulkCompleteTargets(schedules, dateStr).length : 0;
+                            const dayTodos = todoMap[dateStr] || []; // 짱구 ToDo 그 날 할일
                             const dayColor =
                                 d.getDay() === 0
                                     ? 'text-red-500'
@@ -172,12 +178,25 @@ export function ScheduleTab({
                             return (
                                 <div
                                     key={i}
-                                    className={`text-center py-3 px-2 border-r border-gray-100 last:border-r-0 ${isToday ? 'bg-orange-50 rounded-lg shadow-md' : ''}`}
+                                    className={`text-center py-3 px-2 border-r border-gray-100 last:border-r-0 ${isToday ? 'bg-orange-50 rounded-lg shadow-md' : dayTodos.length ? 'bg-indigo-50/50' : ''}`}
                                 >
                                     <div className="text-xs text-gray-400">
                                         {['일', '월', '화', '수', '목', '금', '토'][d.getDay()]}
                                     </div>
                                     <div className={`text-lg font-extrabold ${dayColor}`}>{d.getDate()}</div>
+                                    {dayTodos.length > 0 && (
+                                        <button
+                                            type="button"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                setTodoPopupDate(dateStr);
+                                            }}
+                                            className="mt-1 inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-bold text-indigo-600 transition-colors hover:bg-indigo-200"
+                                            title="이 날 짱구 ToDo 할일 보기"
+                                        >
+                                            📋 {dayTodos.length}
+                                        </button>
+                                    )}
                                     {isPastDay && handleBulkCompleteDay && (
                                         <button
                                             type="button"
@@ -505,6 +524,38 @@ export function ScheduleTab({
                     })()}
                 </div>
             </div>
+
+            {/* 짱구 ToDo — 그 날 할일 팝업 (읽기 전용) */}
+            {todoPopupDate && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+                    onClick={() => setTodoPopupDate(null)}
+                >
+                    <div
+                        className="w-full max-w-xs rounded-2xl bg-white p-5 shadow-2xl"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="mb-3 flex items-center justify-between">
+                            <h3 className="font-extrabold text-gray-800">📋 {todoPopupDate} 할일</h3>
+                            <button
+                                onClick={() => setTodoPopupDate(null)}
+                                className="grid h-7 w-7 place-items-center rounded-full text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
+                            >
+                                ✕
+                            </button>
+                        </div>
+                        <ul className="space-y-2">
+                            {(todoMap[todoPopupDate] || []).map((t, idx) => (
+                                <li key={idx} className="flex items-start gap-2 text-sm text-gray-700">
+                                    <span className="mt-0.5 text-indigo-400">•</span>
+                                    <span>{t}</span>
+                                </li>
+                            ))}
+                        </ul>
+                        <div className="mt-4 text-[11px] text-gray-400">짱구 ToDo에서 가져온 내용 (보기 전용)</div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

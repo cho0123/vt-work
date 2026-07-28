@@ -41,10 +41,11 @@ export function ScheduleModal({
     if (!isScheduleModalOpen) return null;
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/40 backdrop-blur-md p-4">
+        <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center overflow-y-auto bg-gray-900/40 backdrop-blur-md p-4">
             {/* [수정됨] gridType이 'master'가 아니면(짱구일정이면) 연한 초록 배경(bg-green-50) 적용 */}
+            {/* 화면이 짧으면(폰 가로 등) 내용이 잘리지 않도록 최대 높이 + 내부 스크롤 */}
             <div
-                className={`w-full max-w-sm rounded-2xl shadow-xl p-6 relative transition-colors duration-200 ${scheduleForm.gridType === 'master' ? 'bg-white' : 'bg-green-50 border-2 border-green-100'}`}
+                className={`w-full max-w-sm my-auto max-h-[90vh] overflow-y-auto rounded-2xl shadow-xl p-6 relative transition-colors duration-200 ${scheduleForm.gridType === 'master' ? 'bg-white' : 'bg-green-50 border-2 border-green-100'}`}
             >
                 <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
                     {/* 제목 옆에 점으로 색상 힌트 추가 */}

@@ -38,6 +38,7 @@ import {
     FaList,
 } from 'react-icons/fa';
 import { auth, db } from './firebase';
+import { choDb } from './choworks.js';
 import { onAuthStateChanged, signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import {
     collection,
@@ -155,6 +156,39 @@ function App() {
         });
         return () => unsubscribe();
     }, []);
+
+    // 짱구 ToDo(cho-works)에서 날짜 지정된 할일을 실시간으로 읽어 날짜별로 묶는다.
+    // 읽기 전용이고 별개 프로젝트라, 여기가 막혀도(규칙 미허용 등) 스케쥴 앱 본체엔 영향 없다.
+    useEffect(() => {
+        if (!user) return;
+        let unsub = () => {};
+        (async () => {
+            try {
+                const { collection: choCol, onSnapshot: choOnSnap } = await import('firebase/firestore');
+                unsub = choOnSnap(
+                    choCol(choDb, 'tasks'),
+                    (snap) => {
+                        const map = {};
+                        snap.forEach((d) => {
+                            const t = d.data();
+                            if (t.isCompleted) return; // 완료 처리된 할일은 스케쥴에 안 띄운다
+                            const day = t.targetDate; // 'YYYY-MM-DD' (단기·일반 할일만 값이 있음)
+                            const title = t.text || t.content || '';
+                            if (day && title) {
+                                if (!map[day]) map[day] = [];
+                                map[day].push(title);
+                            }
+                        });
+                        setTodosByDate(map);
+                    },
+                    (e) => console.warn('짱구 ToDo 읽기 실패(규칙/네트워크). 스케쥴엔 영향 없음:', e?.code || e?.message || e)
+                );
+            } catch (e) {
+                console.warn('짱구 ToDo 연결 실패:', e?.message || e);
+            }
+        })();
+        return () => unsub();
+    }, [user]);
 
     const getWeightRemainderSuffix = (student) => {
         if (!student) return '';
@@ -575,6 +609,8 @@ function App() {
 
     // 스케쥴 관리
     const [scheduleDate, setScheduleDate] = useState(new Date());
+    // 짱구 ToDo(cho-works)에서 날짜 지정된 할일 → { 'YYYY-MM-DD': [제목, ...] } (읽기 전용)
+    const [todosByDate, setTodosByDate] = useState({});
     const [schedules, setSchedules] = useState([]);
     const [fixedSchedules, setFixedSchedules] = useState([]);
     const [historySchedules, setHistorySchedules] = useState([]);
@@ -3349,6 +3385,7 @@ function App() {
                             getGhostSchedules={getGhostSchedules}
                             handleSlotClick={handleSlotClick}
                             handleBulkCompleteDay={handleBulkCompleteDay}
+                            todosByDate={todosByDate}
                             weeklyMemo={weeklyMemo}
                             handleWeeklyMemoSave={handleWeeklyMemoSave}
                         />

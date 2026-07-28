@@ -418,11 +418,26 @@ npm run verify-student-edit  # 학생 수정이 결제 결과를 덮지 않는�
 
 **운영 배포**: votiz-acc(변경 없음) → 운영(vt-schedule-12568) `acc_projects`/`acc_transactions` 이전(uid=운영계정),
 운영 백업 후 `main` 병합·push·Netlify. 배포 후 라이브 확인. 원래 짱구앱 `zzang-acc.netlify.app` 은 이후 폐기 예정.
+2026-07-27 배포 완료 후 **보안규칙도 적용함**(`deploy-rules.js key-A.json --yes --prod`, 허용 UID 2개).
+
+### 2026-07-28 추가 (짱구 ToDo 연동 — 스케쥴에 할일 표시)
+
+세 번째 앱 **짱구 ToDo(짱구 Manager, `zzang-todo.netlify.app`, Firebase `cho-works`)** 의 날짜 지정 할일을
+스케쥴 화면에 **읽기 전용**으로 보여준다. 데이터 이전 없이 실시간 구독.
+
+- `src/choworks.js`: cho-works Firebase 두 번째 앱(이름 `'choworks'`)으로 붙어 `choDb` 내보냄(읽기 전용).
+  설정값은 ToDo 앱 번들의 공개값 그대로. cho-works 규칙은 이미 `allow read,write: if true`(전면 개방)라 규칙 변경 불필요.
+  (⚠️ cho-works 는 쓰기도 공개 — 사용자 개인앱이라 그대로 두기로. 우리 연동은 읽기만.)
+- App: `todosByDate` state + `onSnapshot(collection(choDb,'tasks'))` 실시간 구독. `tasks` 필드 —
+  `text`(제목), `targetDate`('YYYY-MM-DD', 단기·일반 할일만), `isCompleted`(완료면 제외), `dueDate`(장기 D-day, 안 씀).
+  `{ 'YYYY-MM-DD': [제목...] }` 로 묶어 ScheduleTab 에 전달. 연결 실패해도 스케쥴 본체는 정상(경고만).
+- ScheduleTab: 할일 있는 날 헤더 연보라 강조 + `📋 개수` 배지, 클릭 시 작은 팝업으로 제목 목록. `isCompleted` 는 안 보임.
+- (UI 수정) 스케쥴 조정 팝업(ScheduleModal)이 짧은 화면(폰 가로)에서 위아래 잘려 버튼이 안 눌리던 것 →
+  `max-h-[90vh] overflow-y-auto` + 짧은 화면 `items-start`.
 
 ### 다음 단계
 
-1. 보안규칙(`deploy-rules.js key-A.json`) 적용 여부 확인.
-2. 원래 짱구앱(zzang-acc) 폐기/리다이렉트 결정.
+1. 원래 짱구앱(zzang-acc, 회계) 폐기/리다이렉트 결정. (ToDo 앱 zzang-todo 는 계속 운영 — 스케쥴이 그걸 읽음)
 
 ### 끝난 것
 
