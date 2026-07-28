@@ -1,0 +1,15 @@
+# Netlify 배포 설정.
+#
+# 이 앱은 프론트엔드 전용(Vite + 클라이언트 Firebase)이라, 번들에 들어가는
+# Firebase 설정(apiKey 등)은 전부 '공개되어도 되는 값'이다. 서버 비밀키는 없다.
+#
+# Netlify 의 비밀키 유출 스캔(Secrets scanning)이 Firebase 웹 apiKey(AIzaSy...)를
+# 비밀키로 오해해 빌드를 실패시켜서(2026-07-28 짱구 ToDo 연동 배포 시 발생), 끈다.
+# (Firebase 웹 설정은 클라이언트에 노출되도록 설계된 공개값이라 안전)
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  SECRETS_SCAN_ENABLED = "false"

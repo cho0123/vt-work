@@ -162,31 +162,28 @@ function App() {
     useEffect(() => {
         if (!user) return;
         let unsub = () => {};
-        (async () => {
-            try {
-                const { collection: choCol, onSnapshot: choOnSnap } = await import('firebase/firestore');
-                unsub = choOnSnap(
-                    choCol(choDb, 'tasks'),
-                    (snap) => {
-                        const map = {};
-                        snap.forEach((d) => {
-                            const t = d.data();
-                            if (t.isCompleted) return; // 완료 처리된 할일은 스케쥴에 안 띄운다
-                            const day = t.targetDate; // 'YYYY-MM-DD' (단기·일반 할일만 값이 있음)
-                            const title = t.text || t.content || '';
-                            if (day && title) {
-                                if (!map[day]) map[day] = [];
-                                map[day].push(title);
-                            }
-                        });
-                        setTodosByDate(map);
-                    },
-                    (e) => console.warn('짱구 ToDo 읽기 실패(규칙/네트워크). 스케쥴엔 영향 없음:', e?.code || e?.message || e)
-                );
-            } catch (e) {
-                console.warn('짱구 ToDo 연결 실패:', e?.message || e);
-            }
-        })();
+        try {
+            unsub = onSnapshot(
+                collection(choDb, 'tasks'),
+                (snap) => {
+                    const map = {};
+                    snap.forEach((d) => {
+                        const t = d.data();
+                        if (t.isCompleted) return; // 완료 처리된 할일은 스케쥴에 안 띄운다
+                        const day = t.targetDate; // 'YYYY-MM-DD' (단기·일반 할일만 값이 있음)
+                        const title = t.text || t.content || '';
+                        if (day && title) {
+                            if (!map[day]) map[day] = [];
+                            map[day].push(title);
+                        }
+                    });
+                    setTodosByDate(map);
+                },
+                (e) => console.warn('짱구 ToDo 읽기 실패(규칙/네트워크). 스케쥴엔 영향 없음:', e?.code || e?.message || e)
+            );
+        } catch (e) {
+            console.warn('짱구 ToDo 연결 실패:', e?.message || e);
+        }
         return () => unsub();
     }, [user]);
 
