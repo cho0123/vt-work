@@ -1002,6 +1002,34 @@ function App() {
         return () => unsubscribe();
     }, [user]);
 
+    // 로테이션(R1,R2…) 계산과 스케쥴 화면은 스케쥴 '전체' 이력이 필요하다.
+    // 이 데이터는 보고 있는 월/주와 무관하므로 세션당 1회만 구독한다.
+    // (예전엔 출석부/학생관리의 월 이동마다 전체를 다시 구독해서 하루 읽기 한도(5만)를
+    //  넘겼다 — 2026-07-29 인시던트. 읽는 데이터·계산은 그대로고 '언제 다시 읽는지'만 바꾼 것이라
+    //  회차 결과는 달라지지 않는다. 두 번째 방문부터는 firebase.js 로컬 캐시로 변경분만 받는다.)
+    useEffect(() => {
+        if (!user) return;
+        const SCHED_RANGE_START = '2000-01-01';
+        const SCHED_RANGE_END = `${new Date().getFullYear() + 5}-12-31`;
+        const qSched = query(
+            collection(db, 'schedules'),
+            where('date', '>=', SCHED_RANGE_START),
+            where('date', '<=', SCHED_RANGE_END)
+        );
+        const unsubSched = onSnapshot(qSched, (snapshot) => {
+            setAttSchedules(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })));
+        });
+        // 고정(반복) 스케쥴도 주와 무관하므로 여기서 한 번만 구독한다.
+        const fixedQ = query(collection(db, 'schedules'), where('isFixed', '==', true));
+        const unsubFixed = onSnapshot(fixedQ, (snapshot) => {
+            setFixedSchedules(snapshot.docs.map((d) => ({ id: d.id, ...d.data() })));
+        });
+        return () => {
+            unsubSched();
+            unsubFixed();
+        };
+    }, [user]);
+
     // 사용자가 추가한 개인일정 항목 구독
     useEffect(() => {
         if (!user) return;
@@ -1266,11 +1294,7 @@ function App() {
             const list = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
             setSchedules(list);
         });
-        const fixedQ = query(collection(db, 'schedules'), where('isFixed', '==', true));
-        const unsubscribeFixed = onSnapshot(fixedQ, (snapshot) => {
-            const list = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-            setFixedSchedules(list);
-        });
+        // (고정 스케쥴 구독은 세션당 1회 구독으로 옮김 — 주 이동마다 재구독하지 않게)
 
         const fetchHistory = async () => {
             const threeMonthsAgo = new Date(startOfWeek);
@@ -1291,7 +1315,6 @@ function App() {
 
         return () => {
             unsubscribe();
-            unsubscribeFixed();
         };
     }, [user, activeTab, scheduleDate]);
 
@@ -1343,40 +1366,12 @@ function App() {
             setPeriodAttendance(map);
         });
 
-        // 5. 스케줄 데이터 구독 (Schedules)
-        //
-        // 화면에 보이는 기간만 받으면 될 것 같지만 그렇지 않다. 로테이션(R1, R2...)
-        // 계산과 재등록 시점 판정이 학생의 '전체' 완료 이력을 필요로 하기 때문에,
-        // 범위를 좁히면 화면 밖 수업이 빠져 회차가 어긋난다.
-        //
-        // 그래서 범위는 넓게 두되, 반복 방문 시의 읽기 비용은 firebase.js 의
-        // 로컬 지속 캐시로 줄인다(두 번째 방문부터는 변경분만 받아온다).
-        //
-        // 상한을 '2030-12-31' 로 박아두면 2031년부터 스케쥴이 조용히 사라지므로,
-        // 현재 연도를 기준으로 넉넉히 잡는다.
-        const SCHED_RANGE_START = '2000-01-01';
-        const SCHED_RANGE_END = `${new Date().getFullYear() + 5}-12-31`;
-        const qSched = query(
-            collection(db, 'schedules'),
-            where('date', '>=', SCHED_RANGE_START),
-            where('date', '<=', SCHED_RANGE_END)
-        );
-        const unsubSched = onSnapshot(qSched, (snapshot) => {
-            const list = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-
-            setAttSchedules(list);
-        });
-
-        // [NEW] 고정 스케줄 취소 내역 구독
-        const unsubCancel = onSnapshot(collection(db, 'schedule_cancellations'), (snap) => {
-            const list = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-            setScheduleCancellations(list);
-        });
+        // (전체 스케쥴 구독은 세션당 1회 구독으로 옮김 — 월 이동마다 전체를 다시 읽지 않게.
+        //  로테이션 계산은 여전히 같은 attSchedules 전체를 쓰므로 회차 결과는 동일하다.)
+        // (schedule_cancellations 구독도 세션단위 전역 구독[위쪽 useEffect]에서 이미 하므로 여기선 중복 제거.)
 
         return () => {
             unsubAtt();
-            unsubSched();
-            unsubCancel();
         };
     }, [user, activeTab, attBaseDate, attViewMode, attMonth]);
 
