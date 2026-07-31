@@ -85,7 +85,11 @@ function assignCycles(typeScheds, reqAt) {
         if (cycleReq > 0 && filled >= cycleReq) {
             filled -= cycleReq;
             cycleIndex++;
-            cycleStart[cycleIndex] = s.date; // 이월분이 있으면 이 날짜부터, 없으면 다음 수업이 덮어씀
+            // 이월분(half 등)이 있으면 이 수업이 다음 사이클에도 걸치므로 이 날짜가 시작.
+            // 딱 떨어지게 끝났으면 다음 사이클 시작은 '실제 다음 수업'이 와야 정해진다.
+            // (예전엔 이 날짜를 임시로 넣고 다음 수업이 덮어쓰게 했는데, 다음 수업이 아직
+            //  등록 전이면 임시값이 남아 사이클 '마지막' 수업에 재등록이 잘못 떴다 — 전영림 사례)
+            if (filled > 0) cycleStart[cycleIndex] = s.date;
             cycleReq = reqAt(s.date);
         }
     }
