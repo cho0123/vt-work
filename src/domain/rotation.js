@@ -65,35 +65,61 @@ function reqAtFactory(student, isMaster) {
 }
 
 /**
- * 한 종류(M or V)의 수업들을 사이클로 나눈다. reqAt(dateStr) 로 사이클마다 요구치를 읽는다.
- * 요구치가 일정하면 기존 상수 공식(floor(누적/req))과 결과가 동일하도록 나머지를 이월(carry)한다.
- * @returns { perLesson: Map(id -> {cycleIndex, posInCycle}), cycleStart: string[] }
+ * 시점별 이력(scheduleHistory) 학생의 사이클 배정 — 마스터·보컬을 함께 배정한다.
+ *
+ * 구간(from ~ 다음 from 전)마다 그 구간의 설정으로 각 타입을 독립 배정하되,
+ * **구간이 바뀌면 두 타입 모두 '그때까지 둘 중 더 많이 진행된 번호 + 1'부터 같이 시작한다.**
+ * 안 그러면 한 타입만 쉬는 구간에서 번호가 어긋난다 — 전영림: 보컬만 하는 구간(R15)이
+ * 끝나고 마스터가 재개되자, 마스터는 자기 기준 15번째라 이미 지난 R15를 또 썼다.
+ * 구간 경계에서 진행 중이던 사이클은 그대로 닫는다(다음 구간은 새 번호로 새 사이클).
+ *
+ * @returns { mPerLesson, vPerLesson: Map(id -> {cycleIndex, posInCycle}), mCycleStart, vCycleStart: string[] }
  */
-function assignCycles(typeScheds, reqAt) {
-    const perLesson = new Map();
-    const cycleStart = [];
-    let cycleIndex = 0;
-    let filled = 0;
-    let cycleReq = null;
-    for (const s of typeScheds) {
-        if (filled === 0) {
-            cycleReq = reqAt(s.date);
-            cycleStart[cycleIndex] = s.date;
-        }
-        perLesson.set(s.id, { cycleIndex, posInCycle: filled });
-        filled += s._weight;
-        if (cycleReq > 0 && filled >= cycleReq) {
-            filled -= cycleReq;
-            cycleIndex++;
-            // 이월분(half 등)이 있으면 이 수업이 다음 사이클에도 걸치므로 이 날짜가 시작.
-            // 딱 떨어지게 끝났으면 다음 사이클 시작은 '실제 다음 수업'이 와야 정해진다.
-            // (예전엔 이 날짜를 임시로 넣고 다음 수업이 덮어쓰게 했는데, 다음 수업이 아직
-            //  등록 전이면 임시값이 남아 사이클 '마지막' 수업에 재등록이 잘못 떴다 — 전영림 사례)
-            if (filled > 0) cycleStart[cycleIndex] = s.date;
-            cycleReq = reqAt(s.date);
-        }
+export function assignCyclesTimeline(mScheds, vScheds, student) {
+    const hist = student.scheduleHistory;
+    const mPerLesson = new Map();
+    const vPerLesson = new Map();
+    const mCycleStart = [];
+    const vCycleStart = [];
+    let base = 0; // 이번 구간에서 시작할 사이클 번호 (마·보 공통)
+    let mi = 0;
+    let vi = 0;
+
+    for (let seg = 0; seg < hist.length; seg++) {
+        const to = seg + 1 < hist.length ? hist[seg + 1].from : null; // null = 끝까지
+        const { reqM, reqV } = computeRequirementOf(hist[seg].schedule);
+
+        // 한 타입을 이 구간 범위에서 배정한다.
+        const run = (list, from, req, perLesson, cycleStart) => {
+            let i = from;
+            let cycleIndex = base;
+            let filled = 0;
+            while (i < list.length && (to === null || list[i].date < to)) {
+                const s = list[i];
+                if (filled === 0) cycleStart[cycleIndex] = s.date;
+                perLesson.set(s.id, { cycleIndex, posInCycle: filled });
+                filled += s._weight;
+                if (req > 0 && filled >= req) {
+                    filled -= req;
+                    cycleIndex++;
+                    // 이월분(half 등)이 있으면 이 수업이 다음 사이클에도 걸치므로 이 날짜가 시작.
+                    // 딱 떨어지게 끝났으면 다음 사이클 시작은 '실제 다음 수업'이 와야 정해진다.
+                    // (임시값을 남기면 다음 수업 등록 전에 마지막 수업에 재등록이 잘못 뜬다 — 전영림 사례)
+                    if (filled > 0) cycleStart[cycleIndex] = s.date;
+                }
+                i++;
+            }
+            // 진행 중(filled>0)이던 사이클도 '시작된' 것으로 세어 다음 구간 번호에 반영한다.
+            return { next: i, nextBase: filled > 0 ? cycleIndex + 1 : cycleIndex };
+        };
+
+        const rm = run(mScheds, mi, reqM, mPerLesson, mCycleStart);
+        const rv = run(vScheds, vi, reqV, vPerLesson, vCycleStart);
+        mi = rm.next;
+        vi = rv.next;
+        base = Math.max(rm.nextBase, rv.nextBase);
     }
-    return { perLesson, cycleStart };
+    return { mPerLesson, vPerLesson, mCycleStart, vCycleStart };
 }
 
 /**
@@ -164,14 +190,13 @@ export function getRotationInfo(scheds, targetSchedId, student, { excludeConsult
 
     const isTargetMaster = isMasterSched(target);
 
-    // 시점별 설정 이력이 있으면 각 수업 날짜의 요구치로 사이클을 센다.
+    // 시점별 설정 이력이 있으면 구간별 요구치 + 마·보 동기화 번호로 사이클을 센다.
     if (hasScheduleTimeline(student)) {
         const { mScheds, vScheds } = splitByType(scheds, { excludeConsult });
-        const typeScheds = isTargetMaster ? mScheds : vScheds;
-        const reqAt = reqAtFactory(student, isTargetMaster);
-        const { perLesson } = assignCycles(typeScheds, reqAt);
-        const info = perLesson.get(targetSchedId);
+        const { mPerLesson, vPerLesson } = assignCyclesTimeline(mScheds, vScheds, student);
+        const info = (isTargetMaster ? mPerLesson : vPerLesson).get(targetSchedId);
         if (!info) return { index: 0, label: 'R1' };
+        const reqAt = reqAtFactory(student, isTargetMaster);
         const cycleReq = reqAt(target.date);
         const sub = cycleReq > 0 ? Math.floor(info.posInCycle % cycleReq) + 1 : Math.floor(info.posInCycle) + 1;
         const label = withSubIndex ? `R${info.cycleIndex + 1}-${sub}` : `R${info.cycleIndex + 1}`;
@@ -217,11 +242,10 @@ export function getRotationInfo(scheds, targetSchedId, student, { excludeConsult
 export function findRotationStarts(scheds, { reqM, reqV, anchorDate, excludeConsult = false, student = null }) {
     const startDates = new Set();
 
-    // 시점별 이력이 있으면 날짜별 요구치로 사이클 시작일을 구한다.
+    // 시점별 이력이 있으면 구간별 요구치 + 마·보 동기화 번호로 사이클 시작일을 구한다.
     if (student && hasScheduleTimeline(student)) {
         const { mScheds, vScheds } = splitByType(scheds, { excludeConsult });
-        const { cycleStart: mStarts } = assignCycles(mScheds, reqAtFactory(student, true));
-        const { cycleStart: vStarts } = assignCycles(vScheds, reqAtFactory(student, false));
+        const { mCycleStart: mStarts, vCycleStart: vStarts } = assignCyclesTimeline(mScheds, vScheds, student);
         const n = Math.max(mStarts.length, vStarts.length);
         for (let i = 0; i <= n; i++) {
             const mS = mStarts[i];
@@ -327,8 +351,29 @@ export function sortByDateTime(scheds) {
  * @returns { req, cycleIndex, label, cells: string[] }  또는 null
  *          cells[i] ∈ 'done' | 'current' | 'future'
  */
-export function cycleCells(typeScheds, currentId, req) {
+export function cycleCells(typeScheds, currentId, req, perLesson = null) {
     if (!req || req <= 0) return null;
+
+    // 시점별 이력 학생: 배정표(assignCyclesTimeline 결과)의 번호를 그대로 쓴다.
+    // 위치 나눗셈으로는 구간 경계·마보 동기화 번호를 알 수 없다.
+    if (perLesson && perLesson.has(currentId)) {
+        const { cycleIndex, posInCycle } = perLesson.get(currentId);
+        const slot = Math.floor(posInCycle);
+        const cycleScheds = typeScheds.filter((s) => perLesson.get(s.id)?.cycleIndex === cycleIndex);
+        const cells = [];
+        for (let i = 0; i < req; i++) {
+            const sched = cycleScheds.find((s) => Math.floor(perLesson.get(s.id).posInCycle) === i);
+            if (i === slot) {
+                const st = sched?.status;
+                cells.push(st === 'completed' || st === 'absent' ? 'done' : 'current');
+            } else if (sched && (sched.status === 'completed' || sched.status === 'absent')) {
+                cells.push('done');
+            } else {
+                cells.push('future');
+            }
+        }
+        return { req, cycleIndex, label: `R${cycleIndex + 1}`, cells };
+    }
 
     const globalIndex = typeScheds.findIndex((s) => s.id === currentId);
     if (globalIndex === -1) return null;

@@ -13,6 +13,8 @@ import {
     resolveAnchorDate,
     findRotationStarts,
     cycleCells,
+    hasScheduleTimeline,
+    assignCyclesTimeline,
 } from '../domain/rotation.js';
 
 /**
@@ -138,8 +140,10 @@ export function StudentRotationInfo({ student, slotDate, slotId, onNameClick }) 
     const masterAnchorId = clicked && isMasterSched(clicked) ? clicked.id : mScheds[mScheds.length - 1]?.id;
     const vocalAnchorId = clicked && isVocalSched(clicked) ? clicked.id : vScheds[vScheds.length - 1]?.id;
 
-    const masterCycle = cycleCells(mScheds, masterAnchorId, reqM);
-    const vocalCycle = cycleCells(vScheds, vocalAnchorId, reqV);
+    // 로테이션 중간 변경 학생은 마·보 동기화 배정표로 회차를 매긴다 (구간 경계 반영).
+    const timelineAssign = hasScheduleTimeline(student) ? assignCyclesTimeline(mScheds, vScheds, student) : null;
+    const masterCycle = cycleCells(mScheds, masterAnchorId, reqM, timelineAssign?.mPerLesson);
+    const vocalCycle = cycleCells(vScheds, vocalAnchorId, reqV, timelineAssign?.vPerLesson);
 
     // 이 수업 날짜가 재등록(결제) 시점인지 — 출석부 재등록 버튼과 같은 기준(B)
     const isNewNoPayment =
