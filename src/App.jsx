@@ -2562,6 +2562,9 @@ function App() {
                 date: selectedSlot.date, // 클릭한 날짜
                 time: `${selectedSlot.time}:${selectedMinute}`,
                 studentId: scheduleForm.studentId,
+                // [FIX] 마스터/보컬 구분. 개인일정(쌤·짱구)은 studentId 가 없어 날짜+시간만으론
+                //       같은 시간대의 마스터·보컬이 구분되지 않아, 하나를 취소하면 둘 다 숨던 버그가 있었다.
+                gridType: scheduleForm.gridType || 'master',
                 createdAt: new Date().toISOString(),
             });
             setIsScheduleModalOpen(false);

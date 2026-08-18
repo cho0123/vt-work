@@ -39,9 +39,11 @@ export function ScheduleTab({
     handleWeeklyMemoSave,
 }) {
     // 취소 내역을 매 칸마다 전체 훑지 않도록, 렌더당 한 번만 조회용 Set 으로 만든다.
-    // 키: `날짜|시간|학생ID` — 아래 필터의 비교 조건(date·time·studentId)과 동일하다.
+    // 키: `날짜|시간|학생ID|그리드종류` — 아래 필터의 비교 조건과 동일하다.
+    // [FIX] gridType 추가: 개인일정(쌤·짱구)은 studentId 가 없어, 같은 시간대의 마스터·보컬이
+    //       구분되지 않아 하나를 취소하면 둘 다 숨던 버그를 막는다. (옛 기록엔 gridType 이 없어 매칭 안 됨 → 재취소 필요)
     const cancelledKeys = useMemo(
-        () => new Set(scheduleCancellations.map((c) => `${c.date}|${c.time}|${c.studentId}`)),
+        () => new Set(scheduleCancellations.map((c) => `${c.date}|${c.time}|${c.studentId}|${c.gridType || ''}`)),
         [scheduleCancellations]
     );
 
@@ -258,8 +260,10 @@ export function ScheduleTab({
                                                     (s.gridType || 'master') === gType &&
                                                     (!s.fixedStartDate || s.fixedStartDate <= dateStr) &&
                                                     (!s.fixedEndDate || s.fixedEndDate >= dateStr) &&
-                                                    // [NEW] 취소 내역 확인 (날짜 + 시간 + 학생ID)
-                                                    !cancelledKeys.has(`${dateStr}|${matchStr}|${s.studentId}`)
+                                                    // [NEW] 취소 내역 확인 (날짜 + 시간 + 학생ID + 그리드종류)
+                                                    !cancelledKeys.has(
+                                                        `${dateStr}|${matchStr}|${s.studentId}|${s.gridType || 'master'}`
+                                                    )
                                             );
                                             const merged = [...normal];
                                             fixed.forEach((f) => {
