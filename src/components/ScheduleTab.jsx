@@ -291,7 +291,10 @@ export function ScheduleTab({
                                                     inHour(s.time) &&
                                                     (!s.fixedStartDate || s.fixedStartDate <= dateStr) &&
                                                     (!s.fixedEndDate || s.fixedEndDate >= dateStr) &&
-                                                    !cancelledKeys.has(`${dateStr}|${s.time}|${s.studentId}`)
+                                                    // 취소 내역 확인 (날짜 + 시간 + 학생ID + 그리드종류) — 위 getRealItems 와 같은 키
+                                                    !cancelledKeys.has(
+                                                        `${dateStr}|${s.time}|${s.studentId}|${s.gridType || 'master'}`
+                                                    )
                                             );
                                             const merged = [...normal];
                                             fixed.forEach((f) => {
