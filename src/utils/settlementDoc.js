@@ -38,7 +38,7 @@ const esc = (s) =>
  *   total        총 요청금액(숫자)
  *   issueDate    'YYYY-MM-DD' 발행일
  */
-export function downloadSettlementDoc(p) {
+function buildSettlementHtml(p) {
     const lessonRows = (p.lessons || [])
         .map(
             (l, i) => `
@@ -114,13 +114,82 @@ export function downloadSettlementDoc(p) {
 </body>
 </html>`;
 
+    return html;
+}
+
+/** 파일명(확장자 제외). 워드·PDF 모두 같은 이름을 쓴다. */
+const settlementFileName = (p) => `보이스튜닝 레슨 정산서_${p.studentName} (${p.monthLabel})`;
+
+export function downloadSettlementDoc(p) {
+    const html = buildSettlementHtml(p);
+
     const blob = new Blob(['﻿', html], { type: 'application/msword;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `보이스튜닝 레슨 정산서_${p.studentName} (${p.monthLabel}).doc`;
+    a.download = `${settlementFileName(p)}.doc`;
     document.body.appendChild(a);
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+/**
+ * 정산서 PDF 저장 — 브라우저 인쇄 창을 띄운다(대상 선택에서 'PDF로 저장').
+ *
+ * .doc 은 확장자만 워드이고 내용은 HTML 이라, 받는 쪽 환경(최신 워드 보안설정,
+ * 회사 PC, 한글/구글독스, 모바일, 메일 필터)에 따라 열리지 않는 일이 있었다.
+ * PDF 는 어디서든 열리고 서식도 안 깨진다. 거래처는 정산서를 편집하지 않으므로
+ * PDF 가 맞다고 판단. (워드 버튼은 그대로 남겨둠 — 필요할 때 쓸 수 있게)
+ *
+ * 라이브러리 없이 브라우저 인쇄를 쓰는 이유: PDF 생성 라이브러리는 한글 폰트를
+ * 따로 넣어야 해서 번들이 크게 무거워진다. 인쇄 경로는 서식·한글이 그대로 나온다.
+ *
+ * 화면 전환 없이 처리하려고 보이지 않는 iframe 안에서 인쇄한다.
+ * (window.open 은 팝업 차단에 걸리고, 현재 창 인쇄는 앱 화면을 건드린다)
+ */
+export function printSettlementPdf(p) {
+    const html = buildSettlementHtml(p).replace(
+        '</head>',
+        // 인쇄 시 여백과 파일명(브라우저가 <title>을 기본 파일명으로 쓴다)
+        `<style>@page { size: A4; margin: 15mm; }</style>
+<title>${esc(settlementFileName(p))}</title></head>`
+    );
+
+    const iframe = document.createElement('iframe');
+    iframe.setAttribute('aria-hidden', 'true');
+    iframe.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden;';
+    document.body.appendChild(iframe);
+
+    // 저장 파일명은 브라우저가 '최상위 문서'의 제목에서 가져간다(iframe 안의 <title> 이 아님).
+    // PDF 프린터 드라이버(한PDF 등)도 마찬가지라, 인쇄하는 동안만 탭 제목을 정산서 이름으로 바꾼다.
+    const prevTitle = document.title;
+    document.title = settlementFileName(p);
+
+    let done = false;
+    const cleanup = () => {
+        if (done) return;
+        done = true;
+        document.title = prevTitle;
+        // 인쇄 창이 닫힌 뒤에 지운다. 바로 지우면 인쇄가 취소되는 브라우저가 있다.
+        setTimeout(() => iframe.remove(), 1000);
+    };
+
+    iframe.onload = () => {
+        try {
+            const win = iframe.contentWindow;
+            win.focus();
+            win.onafterprint = cleanup;
+            win.print();
+            // onafterprint 를 안 주는 브라우저 대비 (이때는 시간으로 정리)
+            setTimeout(cleanup, 60_000);
+        } catch (e) {
+            console.error('정산서 인쇄 실패:', e);
+            alert('인쇄 창을 열지 못했습니다. 워드(.doc)로 내려받아 사용해 주세요.');
+            cleanup();
+        }
+    };
+
+    // srcdoc 은 같은 출처로 취급돼 contentWindow 접근이 막히지 않는다.
+    iframe.srcdoc = html;
 }

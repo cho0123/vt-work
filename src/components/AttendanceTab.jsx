@@ -23,7 +23,7 @@ import {
 } from '../utils/date.js';
 import { formatCurrency, calculateBilledAmount, vocalRateFactorFor } from '../utils/money.js';
 import { getBadgeStyle } from '../utils/badgeStyle.js';
-import { downloadSettlementDoc } from '../utils/settlementDoc.js';
+import { downloadSettlementDoc, printSettlementPdf } from '../utils/settlementDoc.js';
 
 /**
  * App.jsx 에서 그대로 옮긴 블록.
@@ -472,10 +472,9 @@ export function AttendanceTab({
                                                                 </div>
 
                                                                 <div className="flex items-center gap-1.5">
-                                                                {/* 정산서(회사 청구용 워드) 추출 */}
-                                                                <button
-                                                                    onClick={(e) => {
-                                                                        e.stopPropagation();
+                                                                {/* 정산서 데이터 — 워드·PDF 두 버튼이 같은 내용을 쓴다 */}
+                                                                {(() => {
+                                                                    const buildSettlementData = () => {
                                                                         const y = attMonth.getFullYear();
                                                                         const mo = attMonth.getMonth();
                                                                         const pad = (n) => String(n).padStart(2, '0');
@@ -515,7 +514,7 @@ export function AttendanceTab({
                                                                                 count: cntV_Half,
                                                                                 amount: Math.round(rateV_Base * 0.5) * cntV_Half,
                                                                             });
-                                                                        downloadSettlementDoc({
+                                                                        return {
                                                                             studentName: student.name,
                                                                             clientName: student.clientName || '',
                                                                             clientBizNo: student.clientBizNo || '',
@@ -526,13 +525,36 @@ export function AttendanceTab({
                                                                             breakdown,
                                                                             total: totalAmount,
                                                                             issueDate: formatDateLocal(new Date()),
-                                                                        });
-                                                                    }}
-                                                                    className="flex items-center gap-1 rounded bg-gray-900 px-2 py-1 text-[10px] font-bold text-white shadow-sm transition-colors hover:bg-gray-700"
-                                                                    title="이 달 정산서를 워드 파일로 내려받습니다"
-                                                                >
-                                                                    <FaFileInvoiceDollar className="text-[10px]" /> 정산서
-                                                                </button>
+                                                                        };
+                                                                    };
+
+                                                                    return (
+                                                                        <>
+                                                                            {/* 거래처 전송용 — PDF 가 어디서든 열려서 기본 */}
+                                                                            <button
+                                                                                onClick={(e) => {
+                                                                                    e.stopPropagation();
+                                                                                    printSettlementPdf(buildSettlementData());
+                                                                                }}
+                                                                                className="flex items-center gap-1 rounded bg-blue-600 px-2 py-1 text-[10px] font-bold text-white shadow-sm transition-colors hover:bg-blue-700"
+                                                                                title="이 달 정산서를 PDF 로 저장합니다 (인쇄 창에서 '대상'을 'PDF로 저장'으로)"
+                                                                            >
+                                                                                <FaFileInvoiceDollar className="text-[10px]" /> 정산서 PDF
+                                                                            </button>
+                                                                            {/* 워드는 편집이 필요할 때만 */}
+                                                                            <button
+                                                                                onClick={(e) => {
+                                                                                    e.stopPropagation();
+                                                                                    downloadSettlementDoc(buildSettlementData());
+                                                                                }}
+                                                                                className="flex items-center gap-1 rounded bg-gray-900 px-2 py-1 text-[10px] font-bold text-white shadow-sm transition-colors hover:bg-gray-700"
+                                                                                title="이 달 정산서를 워드 파일로 내려받습니다 (편집이 필요할 때만 — 받는 쪽에서 안 열릴 수 있습니다)"
+                                                                            >
+                                                                                <FaFileInvoiceDollar className="text-[10px]" /> 워드
+                                                                            </button>
+                                                                        </>
+                                                                    );
+                                                                })()}
                                                                 {/* [추가됨] 청구하기 버튼 */}
                                                                 {/* [수정됨] 이미 청구된 내역인지 확인 */}
                                                                 {(() => {
