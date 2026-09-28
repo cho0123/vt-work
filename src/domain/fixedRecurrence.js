@@ -20,10 +20,49 @@ export function daysInMonth(dateObj) {
     return new Date(dateObj.getFullYear(), dateObj.getMonth() + 1, 0).getDate();
 }
 
+// 토·일이면 다음 월요일로 민 날짜. 평일은 그대로.
+// 카드결제·자동이체 같은 금융업무는 지정일이 주말이면 실제로는 다음 영업일에 처리된다.
+function shiftWeekendToMonday(dateObj) {
+    const day = dateObj.getDay();
+    if (day !== 0 && day !== 6) return dateObj;
+    const shifted = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate());
+    shifted.setDate(shifted.getDate() + (day === 6 ? 2 : 1));
+    return shifted;
+}
+
+// 그 달에 이 고정 스케쥴이 걸리는 '원래 지정일'. 안 걸리는 달이면 null.
+// (주말 밀기를 계산하려면 "이 날짜가 지정일인가"가 아니라 "그 달의 지정일이 언제인가"가 필요하다)
+function targetDateInMonth(s, year, monthIndex) {
+    const rec = s.recurrence || 'weekly';
+    const probe = new Date(year, monthIndex, 1);
+    const last = daysInMonth(probe);
+
+    if (rec === 'monthlyLast') return new Date(year, monthIndex, last);
+    if (rec === 'monthlyDate') return new Date(year, monthIndex, Math.min(Number(s.dayOfMonth), last));
+    if (rec === 'yearlyDate') {
+        if (Number(s.monthOfYear) !== monthIndex + 1) return null;
+        return new Date(year, monthIndex, Math.min(Number(s.dayOfMonth), last));
+    }
+    return null; // weekly 는 주말 밀기 대상이 아니다
+}
+
+const sameDay = (a, b) =>
+    a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+
 // 고정 스케쥴 s 가 dateObj(Date) 날짜에 걸리는가?
 // (시간대/gridType/취소/기간 범위는 각 호출부가 따로 확인하고, 여기서는 '반복 규칙'만 본다)
 export function fixedScheduleOccursOn(s, dateObj) {
     const rec = s.recurrence || 'weekly';
+
+    // 주말 밀기(shiftWeekend)를 켠 스케쥴은 지정일이 토·일이면 다음 월요일에 걸린다.
+    // 말일이 토요일이면 다음 달로 넘어가므로, 이번 달과 지난 달의 지정일을 각각 밀어보고 맞춰본다.
+    // 필드가 없는 기존 스케쥴은 이 분기를 타지 않아 동작이 그대로다.
+    if (s.shiftWeekend && rec !== 'weekly') {
+        return [0, -1].some((offset) => {
+            const target = targetDateInMonth(s, dateObj.getFullYear(), dateObj.getMonth() + offset);
+            return target ? sameDay(shiftWeekendToMonday(target), dateObj) : false;
+        });
+    }
 
     if (rec === 'monthlyLast') {
         return dateObj.getDate() === daysInMonth(dateObj);

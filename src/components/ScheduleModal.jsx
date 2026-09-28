@@ -37,6 +37,7 @@ export function ScheduleModal({
     userPersonalCategories,
     onAddPersonalCategory,
     onRemovePersonalCategory,
+    getNextPersonalSeq,
 }) {
     if (!isScheduleModalOpen) return null;
 
@@ -245,7 +246,16 @@ export function ScheduleModal({
                         <PersonalCategoryPicker
                             gridType={scheduleForm.gridType}
                             value={scheduleForm.category}
-                            onChange={(cat) => setScheduleForm({ ...scheduleForm, category: cat })}
+                            onChange={(cat) => {
+                                const next = { ...scheduleForm, category: cat };
+                                // 헬스·PT 처럼 메모에 회차를 적어온 항목이면 다음 번호를 자동으로 채운다.
+                                // 새로 만들 때만, 그리고 메모가 비어 있을 때만 — 적어둔 내용을 덮지 않는다.
+                                if (!selectedSlot?.id && !String(scheduleForm.memo || '').trim() && getNextPersonalSeq) {
+                                    const seq = getNextPersonalSeq(cat, scheduleForm.gridType);
+                                    if (seq) next.memo = String(seq);
+                                }
+                                setScheduleForm(next);
+                            }}
                             defaults={
                                 (defaultPersonalCategories &&
                                     defaultPersonalCategories[
@@ -301,6 +311,23 @@ export function ScheduleModal({
                                         {scheduleForm.dayOfMonth || Number(selectedSlot?.date?.split('-')[2]) || ''}일
                                     </option>
                                 </select>
+                            )}
+                            {/* 카드결제·자동이체처럼 지정일이 주말이면 실제로는 다음 영업일에 처리되는 일정용.
+                                주말에도 그대로 두어야 하는 일정이 있어 스케쥴마다 따로 켠다. 매주 반복에는 의미가 없어 숨긴다. */}
+                            {scheduleForm.isFixed && (scheduleForm.recurrence || 'weekly') !== 'weekly' && (
+                                <label className="label cursor-pointer justify-start gap-2 pt-1">
+                                    <input
+                                        type="checkbox"
+                                        className="checkbox checkbox-sm checkbox-primary"
+                                        checked={!!scheduleForm.shiftWeekend}
+                                        onChange={(e) =>
+                                            setScheduleForm({ ...scheduleForm, shiftWeekend: e.target.checked })
+                                        }
+                                    />
+                                    <span className="label-text text-xs text-gray-600">
+                                        지정일이 주말이면 <b>다음 월요일</b>로 (카드결제 등)
+                                    </span>
+                                </label>
                             )}
                         </div>
                     )}

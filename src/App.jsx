@@ -643,6 +643,7 @@ function App() {
         memo: '',
         category: '레슨',
         isFixed: false,
+        shiftWeekend: false,
         recurrence: 'weekly',
         dayOfMonth: null,
         monthOfYear: null,
@@ -1847,6 +1848,36 @@ function App() {
         setScheduleDate(new Date(e.target.value));
     };
 
+    // 개인일정 회차 자동 번호 (헬스·PT 처럼 메모에 회차만 적어온 항목).
+    //
+    // 어떤 항목에 쓸지 따로 설정하지 않는다. 그 항목+그리드의 가장 최근 메모가 숫자면
+    // 회차를 쓰는 항목으로 보고 다음 번호를 돌려준다. 실제 데이터에서 헬스 19/19,
+    // PT 13/15 만 숫자 메모이고 기타·미팅·병원 등 나머지 18개 항목은 0건이라 깔끔하게 갈린다.
+    // 쌤(master)/짱구(vocal)는 각각 따로 센다. 회차 항목이 아니면 null.
+    const getNextPersonalSeq = (category, gridType) => {
+        if (!category) return null;
+        const grid = gridType === 'vocal' ? 'vocal' : 'master';
+        const list = attSchedules
+            .filter(
+                (s) =>
+                    !s.studentId &&
+                    !s.isFixed &&
+                    s.category === category &&
+                    (s.gridType || 'master') === grid &&
+                    s.date &&
+                    s.date !== 'FIXED'
+            )
+            .sort((a, b) => `${a.date}${a.time || ''}`.localeCompare(`${b.date}${b.time || ''}`));
+
+        // 최근 것부터 거슬러 본다. 메모가 비어 있으면(적는 걸 잊은 회차) 그 전 것을 본다.
+        for (let i = list.length - 1; i >= 0; i--) {
+            const memo = String(list[i].memo || '').trim();
+            if (!memo) continue;
+            const hit = memo.match(/^(d+)s*차?$/); // '9' 또는 '22차'
+            return hit ? Number(hit[1]) + 1 : null; // 숫자가 아니면 회차 항목이 아니다
+        }
+        return null;
+    };
     const handleSlotClick = async (dateStr, hourStr, dayOfWeek, existingItem = null, gridType = 'master') => {
         const editingName = existingItem ? existingItem.studentName : null;
 
@@ -1952,6 +1983,7 @@ function App() {
                     memo: movingSchedule.memo || '',
                     category: movingSchedule.category || '레슨',
                     isFixed: movingSchedule.isFixed || false,
+                    shiftWeekend: movingSchedule.shiftWeekend || false,
                     recurrence: movingSchedule.recurrence || 'weekly',
                     dayOfMonth: movingSchedule.dayOfMonth || null,
                     status: movingSchedule.status || '',
@@ -1972,6 +2004,7 @@ function App() {
                     memo: existingItem.memo || '',
                     category: existingItem.category || '레슨',
                     isFixed: existingItem.isFixed || false,
+                    shiftWeekend: existingItem.shiftWeekend || false,
                     recurrence: existingItem.recurrence || 'weekly',
                     dayOfMonth: existingItem.dayOfMonth || null,
                     monthOfYear: existingItem.monthOfYear || null,
@@ -1995,6 +2028,7 @@ function App() {
                     memo: movingSchedule.memo || '',
                     category: movingSchedule.category || '레슨',
                     isFixed: movingSchedule.isFixed || false,
+                    shiftWeekend: movingSchedule.shiftWeekend || false,
                     recurrence: movingSchedule.recurrence || 'weekly',
                     dayOfMonth: movingSchedule.dayOfMonth || null,
                     status: movingSchedule.status || '',
@@ -2012,6 +2046,7 @@ function App() {
                     memo: '',
                     category: '레슨',
                     isFixed: false,
+                    shiftWeekend: false,
                     recurrence: 'weekly',
                     dayOfMonth: null,
                     status: '',
@@ -2046,6 +2081,7 @@ function App() {
                 category: '레슨',
                 status: '',
                 isFixed: false,
+                shiftWeekend: false,
                 recurrence: 'weekly',
             }));
             // 레슨은 정시/30분만 쓴다. 개인일정에서 세밀한 분(예: 20)을 골랐다면 정시로 되돌린다.
@@ -3580,6 +3616,7 @@ function App() {
                     userPersonalCategories={userPersonalCategories}
                     onAddPersonalCategory={handleAddPersonalCategory}
                     onRemovePersonalCategory={handleRemovePersonalCategory}
+                    getNextPersonalSeq={getNextPersonalSeq}
                 />
 
                 {/* 수강생 등록/수정 모달 (단가 입력 0 제거 로직 적용) */}
