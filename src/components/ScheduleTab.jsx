@@ -93,7 +93,7 @@ export function ScheduleTab({
 
                 const fixedTaken = new Set();
                 const map = new Map();
-                for (const { x, isShifted } of eligible) {
+                for (const { x, isShifted, originStr } of eligible) {
                     const own = x.time || '';
                     // 실제 일정이 그 시간을 쓰고 있으면 예전처럼 숨긴다.
                     if (normalTimes.has(own)) continue;
@@ -117,7 +117,8 @@ export function ScheduleTab({
                         if (!slot) continue; // 그날 빈 자리가 없으면 예전처럼 안 보인다
                     }
                     fixedTaken.add(slot);
-                    map.set(x.id, slot);
+                    // 주말 밀기로 다른 날에서 온 것은 원래 며칠 일정이었는지도 같이 담는다(화면 표시용).
+                    map.set(x.id, { slot, fromDay: isShifted ? Number(originStr.slice(8, 10)) : null });
                 }
                 if (map.size) placement.set(`${dateStr}|${gType}`, map);
             }
@@ -332,13 +333,16 @@ export function ScheduleTab({
                                                     s.time === matchStr &&
                                                     (s.gridType || 'master') === gType
                                             );
-                                            // 반복·기간·취소 판정은 fixedPlacement 에서 이미 끝났다. 여기선 배치된 시간만 본다.
-                                            // 겹쳐서 내려온 것은 time 은 원래 시간 그대로 두고(클릭·수정이 원래 시간으로 열리도록)
-                                            // movedFrom 으로 표시만 남긴다.
+                                            // 반복·기간·취소 판정은 fixedPlacement 에서 이미 끝났다. 여긴 배치된 시간만 본다.
+                                            // time 은 원래 값 그대로 둔다(클릭·수정이 원래 시간으로 열리도록).
+                                            // 주말 밀기로 옮겨온 것은 movedFromDay 로 원래 날짜만 표시한다.
                                             const fixed = placed
                                                 ? fixedSchedules
-                                                      .filter((s) => placed.get(s.id) === matchStr)
-                                                      .map((s) => (s.time === matchStr ? s : { ...s, movedFrom: s.time }))
+                                                      .filter((s) => placed.get(s.id)?.slot === matchStr)
+                                                      .map((s) => {
+                                                          const from = placed.get(s.id).fromDay;
+                                                          return from ? { ...s, movedFromDay: from } : s;
+                                                      })
                                                 : [];
                                             return [...normal, ...fixed];
                                         };
@@ -358,10 +362,13 @@ export function ScheduleTab({
                                             const fixed = placed
                                                 ? fixedSchedules
                                                       .filter((s) => {
-                                                          const t = placed.get(s.id);
-                                                          return t && inHour(t);
+                                                          const p = placed.get(s.id);
+                                                          return p && inHour(p.slot);
                                                       })
-                                                      .map((s) => (placed.get(s.id) === s.time ? s : { ...s, movedFrom: s.time }))
+                                                      .map((s) => {
+                                                          const from = placed.get(s.id).fromDay;
+                                                          return from ? { ...s, movedFromDay: from } : s;
+                                                      })
                                                 : [];
                                             return [...normal, ...fixed];
                                         };
@@ -522,12 +529,12 @@ export function ScheduleTab({
                                                             <FaRedoAlt className="text-[7px] min-w-fit opacity-70" />
                                                         )}
                                                         {/* 같은 시간이 차 있어 이 칸으로 내려온 고정일정 — 원래 시간을 같이 보여준다 */}
-                                                        {item.movedFrom && (
+                                                        {item.movedFromDay && (
                                                             <span
                                                                 className="shrink-0 rounded bg-black/10 px-1 text-[9px] font-bold"
-                                                                title={`원래 ${item.movedFrom} 일정인데 그 시간이 차 있어 내려왔습니다`}
+                                                                title={`원래 ${item.movedFromDay}일 일정인데 주말이라 옮겨왔습니다`}
                                                             >
-                                                                ↓{item.movedFrom}
+                                                                {item.movedFromDay}일
                                                             </span>
                                                         )}
                                                         {statusIcon}
