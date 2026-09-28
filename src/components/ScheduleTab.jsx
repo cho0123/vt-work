@@ -12,7 +12,7 @@ import {
 import { MemoInput } from './MemoInput.jsx';
 import { formatDateLocal, getStartOfWeek } from '../utils/date.js';
 import { getBadgeStyle } from '../utils/badgeStyle.js';
-import { fixedScheduleOccursOn } from '../domain/fixedRecurrence.js';
+import { fixedScheduleOccursOn, fixedOriginalDateOn } from '../domain/fixedRecurrence.js';
 import { bulkCompleteTargets } from '../domain/bulkComplete.js';
 
 /**
@@ -47,6 +47,83 @@ export function ScheduleTab({
         [scheduleCancellations]
     );
 
+    // 고정일정이 같은 날·같은 시간에 몰렸을 때 어디에 그릴지 미리 정해 둔다.
+    //
+    // 주말 밀기(shiftWeekend)를 쓰면 26일(토)과 27일(일) 것이 같은 월요일로 와서 시간까지 겹칠 수 있다.
+    // 예전 코드는 한 시간대에 고정일정을 하나만 그려서 뒤엣것이 조용히 사라졌다.
+    // 규칙: 원래 날짜가 이른 것이 제자리를 갖고, 겹친 것은 그 아래 빈 시간대로 내려 보낸다.
+    // 실제 일정이 있는 시간은 예전처럼 고정일정을 숨기고(덮어쓰기), 내려갈 자리를 고를 때도 건너뛴다.
+    // 반환: Map<`날짜|그리드`, Map<고정문서id, 그릴시간>>
+    const fixedPlacement = useMemo(() => {
+        const placement = new Map();
+
+        for (const day of weekDays) {
+            const dateStr = formatDateLocal(day);
+            for (const gType of ['master', 'vocal']) {
+                // 그날 실제로 잡힌 일정의 시간 — 고정일정은 여기를 피한다.
+                const normalTimes = new Set(
+                    schedules
+                        .filter((x) => x.date === dateStr && (x.gridType || 'master') === gType)
+                        .map((x) => x.time)
+                );
+
+                const eligible = fixedSchedules
+                    .filter(
+                        (x) =>
+                            (x.gridType || 'master') === gType &&
+                            fixedScheduleOccursOn(x, day) &&
+                            (!x.fixedStartDate || x.fixedStartDate <= dateStr) &&
+                            (!x.fixedEndDate || x.fixedEndDate >= dateStr) &&
+                            !cancelledKeys.has(`${dateStr}|${x.time}|${x.studentId}|${x.gridType || 'master'}`)
+                    )
+                    .map((x) => {
+                        const origin = fixedOriginalDateOn(x, day);
+                        const originStr = origin ? formatDateLocal(origin) : dateStr;
+                        // 주말 밀기로 다른 날에서 넘어온 것인지. 이것만 자리를 비켜 내려간다.
+                        return { x, originStr, isShifted: originStr !== dateStr };
+                    })
+                    // 원래 이 날이 자기 날인 것(제자리)이 먼저, 그 다음 밀려온 것을 원래 날짜 순으로.
+                    .sort(
+                        (a, b) =>
+                            Number(a.isShifted) - Number(b.isShifted) ||
+                            a.originStr.localeCompare(b.originStr) ||
+                            (a.x.time || '').localeCompare(b.x.time || '') ||
+                            String(a.x.id).localeCompare(String(b.x.id))
+                    );
+
+                const fixedTaken = new Set();
+                const map = new Map();
+                for (const { x, isShifted } of eligible) {
+                    const own = x.time || '';
+                    // 실제 일정이 그 시간을 쓰고 있으면 예전처럼 숨긴다.
+                    if (normalTimes.has(own)) continue;
+
+                    let slot = own;
+                    if (fixedTaken.has(own)) {
+                        // 제자리 일정끼리 겹치는 건 예전처럼 하나만 보인다.
+                        // (같은 요일·시간에 중복 등록된 옛 고정일정들이 있어, 여기서 펼치면 갑자기 여러 개가 뜬다)
+                        if (!isShifted) continue;
+                        // 밀려온 것만 아래로 내려가며 첫 빈 시간을 찾는다(분은 유지).
+                        const [hh, mm = '00'] = own.split(':');
+                        const startIdx = hours.indexOf(Number(hh));
+                        slot = null;
+                        for (let k = startIdx + 1; k >= 1 && k < hours.length; k++) {
+                            const cand = `${hours[k]}:${mm}`;
+                            if (!normalTimes.has(cand) && !fixedTaken.has(cand)) {
+                                slot = cand;
+                                break;
+                            }
+                        }
+                        if (!slot) continue; // 그날 빈 자리가 없으면 예전처럼 안 보인다
+                    }
+                    fixedTaken.add(slot);
+                    map.set(x.id, slot);
+                }
+                if (map.size) placement.set(`${dateStr}|${gType}`, map);
+            }
+        }
+        return placement;
+    }, [weekDays, fixedSchedules, schedules, cancelledKeys, hours]);
     // 짱구 ToDo 팝업으로 볼 날짜 (null = 닫힘)
     const [todoPopupDate, setTodoPopupDate] = useState(null);
     const todoMap = todosByDate || {};
@@ -243,6 +320,8 @@ export function ScheduleTab({
 
                                     const getScheduleItems = (gType) => {
                                         const ghosts = gType === 'master' ? ghostsMaster : ghostsVocal;
+                                        // 위에서 미리 정해둔 '고정일정을 그릴 시간'. 겹쳐서 내려간 것도 여기에 들어 있다.
+                                        const placed = fixedPlacement.get(`${dateStr}|${gType}`);
 
                                         // 실제 스케줄 가져오기 (Helper)
                                         const getRealItems = (tStr) => {
@@ -253,23 +332,15 @@ export function ScheduleTab({
                                                     s.time === matchStr &&
                                                     (s.gridType || 'master') === gType
                                             );
-                                            const fixed = fixedSchedules.filter(
-                                                (s) =>
-                                                    fixedScheduleOccursOn(s, day) &&
-                                                    s.time === matchStr &&
-                                                    (s.gridType || 'master') === gType &&
-                                                    (!s.fixedStartDate || s.fixedStartDate <= dateStr) &&
-                                                    (!s.fixedEndDate || s.fixedEndDate >= dateStr) &&
-                                                    // [NEW] 취소 내역 확인 (날짜 + 시간 + 학생ID + 그리드종류)
-                                                    !cancelledKeys.has(
-                                                        `${dateStr}|${matchStr}|${s.studentId}|${s.gridType || 'master'}`
-                                                    )
-                                            );
-                                            const merged = [...normal];
-                                            fixed.forEach((f) => {
-                                                if (!merged.some((n) => n.time === f.time)) merged.push(f);
-                                            });
-                                            return merged;
+                                            // 반복·기간·취소 판정은 fixedPlacement 에서 이미 끝났다. 여기선 배치된 시간만 본다.
+                                            // 겹쳐서 내려온 것은 time 은 원래 시간 그대로 두고(클릭·수정이 원래 시간으로 열리도록)
+                                            // movedFrom 으로 표시만 남긴다.
+                                            const fixed = placed
+                                                ? fixedSchedules
+                                                      .filter((s) => placed.get(s.id) === matchStr)
+                                                      .map((s) => (s.time === matchStr ? s : { ...s, movedFrom: s.time }))
+                                                : [];
+                                            return [...normal, ...fixed];
                                         };
 
                                         // [NEW] 정시/30분이 아닌 세밀한 시간(개인일정 등)도 이 시간대(hour) 칸에 함께 표시
@@ -284,23 +355,15 @@ export function ScheduleTab({
                                                     (s.gridType || 'master') === gType &&
                                                     inHour(s.time)
                                             );
-                                            const fixed = fixedSchedules.filter(
-                                                (s) =>
-                                                    fixedScheduleOccursOn(s, day) &&
-                                                    (s.gridType || 'master') === gType &&
-                                                    inHour(s.time) &&
-                                                    (!s.fixedStartDate || s.fixedStartDate <= dateStr) &&
-                                                    (!s.fixedEndDate || s.fixedEndDate >= dateStr) &&
-                                                    // 취소 내역 확인 (날짜 + 시간 + 학생ID + 그리드종류) — 위 getRealItems 와 같은 키
-                                                    !cancelledKeys.has(
-                                                        `${dateStr}|${s.time}|${s.studentId}|${s.gridType || 'master'}`
-                                                    )
-                                            );
-                                            const merged = [...normal];
-                                            fixed.forEach((f) => {
-                                                if (!merged.some((n) => n.time === f.time)) merged.push(f);
-                                            });
-                                            return merged;
+                                            const fixed = placed
+                                                ? fixedSchedules
+                                                      .filter((s) => {
+                                                          const t = placed.get(s.id);
+                                                          return t && inHour(t);
+                                                      })
+                                                      .map((s) => (placed.get(s.id) === s.time ? s : { ...s, movedFrom: s.time }))
+                                                : [];
+                                            return [...normal, ...fixed];
                                         };
 
                                         const real00 = getRealItems(`${hour}:00`);
@@ -457,6 +520,15 @@ export function ScheduleTab({
 
                                                         {item.isFixed && (
                                                             <FaRedoAlt className="text-[7px] min-w-fit opacity-70" />
+                                                        )}
+                                                        {/* 같은 시간이 차 있어 이 칸으로 내려온 고정일정 — 원래 시간을 같이 보여준다 */}
+                                                        {item.movedFrom && (
+                                                            <span
+                                                                className="shrink-0 rounded bg-black/10 px-1 text-[9px] font-bold"
+                                                                title={`원래 ${item.movedFrom} 일정인데 그 시간이 차 있어 내려왔습니다`}
+                                                            >
+                                                                ↓{item.movedFrom}
+                                                            </span>
                                                         )}
                                                         {statusIcon}
 

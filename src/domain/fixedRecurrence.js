@@ -85,3 +85,19 @@ export function fixedScheduleOccursOn(s, dateObj) {
     // weekly (기본값): 옛 문서는 recurrence 필드가 없으므로 여기로 온다.
     return s.dayOfWeek === dateObj.getDay();
 }
+
+// 이 날짜에 걸린 고정 스케쥴의 '원래 지정일'. 주말 밀기로 옮겨온 것이면 밀리기 전 날짜를 준다.
+// 같은 날·같은 시간에 여러 개가 몰렸을 때 누가 제자리를 갖는지 정하는 기준으로 쓴다
+// (26일 토요일 것과 27일 일요일 것이 같은 월요일로 오면, 26일 것이 먼저).
+// 그 날짜에 안 걸리면 null.
+export function fixedOriginalDateOn(s, dateObj) {
+    if (!fixedScheduleOccursOn(s, dateObj)) return null;
+    const rec = s.recurrence || 'weekly';
+    if (s.shiftWeekend && rec !== 'weekly') {
+        for (const offset of [0, -1]) {
+            const target = targetDateInMonth(s, dateObj.getFullYear(), dateObj.getMonth() + offset);
+            if (target && sameDay(shiftWeekendToMonday(target), dateObj)) return target;
+        }
+    }
+    return dateObj;
+}

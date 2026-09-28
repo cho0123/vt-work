@@ -1873,7 +1873,7 @@ function App() {
         for (let i = list.length - 1; i >= 0; i--) {
             const memo = String(list[i].memo || '').trim();
             if (!memo) continue;
-            const hit = memo.match(/^(d+)s*차?$/); // '9' 또는 '22차'
+            const hit = memo.match(/^(\d+)$/); // 숫자만 (예: '9')
             return hit ? Number(hit[1]) + 1 : null; // 숫자가 아니면 회차 항목이 아니다
         }
         return null;
