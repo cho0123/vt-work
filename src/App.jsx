@@ -1850,6 +1850,21 @@ function App() {
     const handleSlotClick = async (dateStr, hourStr, dayOfWeek, existingItem = null, gridType = 'master') => {
         const editingName = existingItem ? existingItem.studentName : null;
 
+        // [FIX] 일정 이동은 '같은 종류' 칸끼리만 허용한다.
+        // 이동 시 gridType 을 목적지 슬롯의 것으로 덮어쓰기 때문에(아래 setScheduleForm),
+        // 보컬 수업을 마스터 칸에 놓으면 마스터 수업으로 바뀌어 버렸다(로테이션·정산까지 어긋남).
+        // 수업(레슨/상담)에만 적용한다. 개인일정은 기존대로 둔다.
+        if (movingSchedule) {
+            const movingIsLesson = movingSchedule.category === '레슨' || movingSchedule.category === '상담';
+            const fromGrid = movingSchedule.gridType || 'master';
+            const toGrid = gridType || 'master';
+            if (movingIsLesson && fromGrid !== toGrid) {
+                const gridName = (g) => (g === 'vocal' ? '보컬' : '마스터');
+                alert(`${gridName(fromGrid)} 수업은 ${gridName(toGrid)} 칸으로 옮길 수 없습니다. 같은 ${gridName(fromGrid)} 칸으로 옮겨주세요.`);
+                return;
+            }
+        }
+
         // [NEW] 월정산 마감(Lock) 여부 확인 (최우선 차단)
         try {
             const targetDate = new Date(dateStr);

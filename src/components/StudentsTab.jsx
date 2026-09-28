@@ -914,6 +914,11 @@ export function StudentsTab({
                                                                                             <span className="text-red-500 text-xs font-bold">
                                                                                                 미결제
                                                                                             </span>
+                                                                                        ) : pay.paymentMethod === 'cash' ? (
+                                                                                            // 현금은 배지 없이 대시만 표기한다(현금이라고 드러나지 않게).
+                                                                                            <span className="text-gray-400 text-xs font-bold">
+                                                                                                -
+                                                                                            </span>
                                                                                         ) : (
                                                                                             <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-gray-100 text-gray-600">
                                                                                                 {label}
