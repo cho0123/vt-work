@@ -2,8 +2,8 @@
 //
 // 용도가 "이 수업들에 대한 금액이 미납"을 학생과 같이 확인하는 것이라,
 // 결제(payments)와 미결제(unpaidList)를 **재등록일 기준 한 줄기**로 합치고,
-// 각 재등록일부터 다음 재등록일 전까지 진행된 수업을 그 아래 한 줄로 묶는다.
-// 서로 다 아는 내용을 확인하는 문서라 최대한 짧게 쓴다(학생 1명이 A4 1~2장).
+// 각 재등록일부터 다음 재등록일 전까지 진행된 수업을 같은 줄 오른쪽에 붙인다.
+// 서로 다 아는 내용을 확인하는 문서라 한 사이클을 한 줄로 쓴다(공간 절약).
 //
 // 저장 방식은 정산서(settlementDoc.js)와 같다 — 안 보이는 iframe 에서 인쇄 창을 띄운다.
 // (.doc 은 확장자만 워드라 받는 쪽에서 안 열리는 일이 있었다. PDF 는 어디서나 열린다)
@@ -26,12 +26,11 @@ const esc = (s) =>
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
 
-/** 결제수단 표기. 이체는 항상 현금영수증을 발행하므로 기록과 무관하게 붙인다(원장 확인). */
+/** 결제일·수단. 미결제는 수단 자리에 표시한다. */
 function tailOf(c) {
     if (c.isUnpaid) return '<b class="unpaid">★ 미결제</b>';
     const method = METHOD_LABEL[c.paymentMethod] || c.paymentMethod || '-';
-    const receipt = c.paymentMethod === 'transfer' ? '+현금영수증' : '';
-    return `결제 ${esc((c.paymentDate || '-').slice(5))} ${esc(method)}${receipt}`;
+    return `결제 ${esc(c.paymentDate || '-')} ${esc(method)}`;
 }
 
 function buildHtml(p) {
@@ -42,10 +41,7 @@ function buildHtml(p) {
                     .map((l) => `${esc(l.date.slice(5))}(${esc(l.type)}${l.absent ? '결' : ''})`)
                     .join(' ') || '-';
             return `
-    <div class="cyc">
-      <div class="head">■ ${esc(c.targetDate)} · ${esc(c.cls)} · ${money(c.amount)} / ${tailOf(c)}</div>
-      <div class="les">(${(c.lessons || []).length}회) ${lessons}</div>
-    </div>`;
+    <div class="cyc"><span class="head">■ ${esc(c.targetDate)} · ${esc(c.cls)} · ${money(c.amount)} / ${tailOf(c)}</span> <span class="les">(${(c.lessons || []).length}회) ${lessons}</span></div>`;
         })
         .join('');
 
@@ -60,13 +56,12 @@ function buildHtml(p) {
 <title>${esc(p.fileName)}</title>
 <style>
   @page { size: A4; margin: 14mm; }
-  body { font-family: '맑은 고딕','Malgun Gothic',sans-serif; color:#222; font-size:10.5pt; line-height:1.45; }
+  body { font-family: '맑은 고딕','Malgun Gothic',sans-serif; color:#222; font-size:10pt; line-height:1.5; }
   h1 { font-size:15pt; margin:0 0 2px; }
-  .sub { color:#555; font-size:10pt; margin-bottom:2px; }
-  .legend { color:#888; font-size:8.5pt; border-bottom:1px solid #ddd; padding-bottom:6px; margin-bottom:8px; }
-  .cyc { break-inside: avoid; margin-bottom:5px; }
+  .sub { color:#555; font-size:10pt; border-bottom:1px solid #ddd; padding-bottom:6px; margin-bottom:8px; }
+  .cyc { break-inside: avoid; margin-bottom:4px; }
   .head { font-weight:bold; }
-  .les { color:#444; font-size:9.5pt; padding-left:14px; }
+  .les { color:#555; font-size:9pt; }
   .unpaid { color:#c0392b; }
   .sum { margin-top:10px; padding-top:6px; border-top:1px solid #ddd; font-size:11pt; font-weight:bold; }
   .foot { margin-top:14px; color:#999; font-size:8.5pt; text-align:right; }
@@ -75,7 +70,6 @@ function buildHtml(p) {
 <body>
   <h1>수강 내역서</h1>
   <div class="sub">${esc(p.studentName)} · 최초 등록일 ${esc(p.firstDate || '-')}</div>
-  <div class="legend">■ 재등록일 · 클래스 · 금액 / 결제일 · 수단  |  마=마스터, 발=보컬, 발30=30분, 결=결석</div>
   ${blocks}
   ${unpaidLine}
   <div class="foot">발행일 ${esc(p.issueDate)} · 보이스튜닝</div>
