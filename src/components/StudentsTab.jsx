@@ -22,6 +22,7 @@ import {
     FaStickyNote,
     FaSort,
     FaCalendarAlt,
+    FaFileAlt,
 } from 'react-icons/fa';
 import { MemoInput } from './MemoInput.jsx';
 import { getDaysPassed } from '../utils/date.js';
@@ -82,6 +83,7 @@ export function StudentsTab({
     setPaymentFile,
     resetPaymentForm,
     paymentHistory,
+    handlePrintStudentRecord,
     historyPage,
     setHistoryPage,
     historyPerPage,
@@ -785,6 +787,16 @@ export function StudentsTab({
                                                                     </span>
                                                                 </h4>
                                                                 <div className="flex gap-2 items-center">
+                                                                    {/* 결제·미결제 확인용 내역서(학생과 같이 보는 문서) */}
+                                                                    {handlePrintStudentRecord && (
+                                                                        <button
+                                                                            onClick={() => handlePrintStudentRecord(student)}
+                                                                            className="btn btn-xs bg-blue-600 text-white hover:bg-blue-700 border-none flex gap-1 items-center"
+                                                                            title="결제·미결제 내역서를 PDF 로 저장합니다 (인쇄 창에서 'PDF로 저장')"
+                                                                        >
+                                                                            <FaFileAlt /> 내역서 PDF
+                                                                        </button>
+                                                                    )}
                                                                     <button
                                                                         onClick={() =>
                                                                             setHistorySort(

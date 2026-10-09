@@ -95,7 +95,10 @@ import {
     resolveAnchorDate,
     rotationBufferDate,
     sortByDateTime,
+    scheduleForDate,
+    computeRequirementOf,
 } from './domain/rotation.js';
+import { printStudentRecordPdf } from './utils/studentRecordDoc.js';
 import { fixedScheduleOccursOn } from './domain/fixedRecurrence.js';
 
 const WEEKDAY_LABELS = ['일', '월', '화', '수', '목', '금', '토'];
@@ -1848,6 +1851,75 @@ function App() {
         setScheduleDate(new Date(e.target.value));
     };
 
+    // 학생 수강 내역서 PDF — 결제·미결제 확인용(학생과 같이 보는 문서).
+    //
+    // 결제(paymentHistory)와 미결제(unpaidList)를 재등록일 기준 한 줄기로 합치고,
+    // 각 재등록일 ~ 다음 재등록일 전까지 진행된 수업을 그 아래 묶는다.
+    // 펼친 학생의 결제 이력만 구독하고 있으므로 버튼도 펼쳤을 때만 보인다.
+    const handlePrintStudentRecord = (student) => {
+        if (!student) return;
+
+        const paid = (paymentHistory || [])
+            .filter((p) => p.targetDate)
+            .map((p) => ({
+                targetDate: p.targetDate,
+                amount: p.amount,
+                paymentDate: p.paymentDate,
+                paymentMethod: p.paymentMethod,
+                isUnpaid: false,
+            }));
+        const unpaid = (student.unpaidList || [])
+            .filter((u) => u.targetDate)
+            .map((u) => ({ targetDate: u.targetDate, amount: u.amount, isUnpaid: true }));
+        const merged = [...paid, ...unpaid].sort((a, b) => a.targetDate.localeCompare(b.targetDate));
+
+        if (merged.length === 0) {
+            alert(`${student.name} 학생은 결제·미결제 기록이 없습니다.`);
+            return;
+        }
+
+        // 진행된 수업(완료·결석)만 쓴다. 전체 스케쥴은 이미 메모리에 있어 추가 조회가 없다.
+        const lessons = attSchedules
+            .filter(
+                (x) =>
+                    x.studentId === student.id &&
+                    x.date &&
+                    x.date !== 'FIXED' &&
+                    (x.status === 'completed' || x.status === 'absent')
+            )
+            .sort((a, b) => `${a.date}${a.time || ''}`.localeCompare(`${b.date}${b.time || ''}`));
+
+        const typeOf = (x) => {
+            if (x.gridType === 'master' || !x.gridType) return '마';
+            // 하프(반쪽)도 30분으로 묶어 표기한다(원장 요청).
+            return x.vocalType === '30' || x.vocalType === 'half' ? '발30' : '발';
+        };
+
+        const cycles = merged.map((c, i) => {
+            const next = merged[i + 1];
+            const req = computeRequirementOf(scheduleForDate(student, c.targetDate));
+            const cls =
+                [req.reqM > 0 ? `마${req.reqM}` : null, req.reqV > 0 ? `발${req.reqV}` : null]
+                    .filter(Boolean)
+                    .join('+') || '-';
+            return {
+                ...c,
+                cls,
+                lessons: lessons
+                    .filter((x) => x.date >= c.targetDate && (!next || x.date < next.targetDate))
+                    .map((x) => ({ date: x.date, type: typeOf(x), absent: x.status === 'absent' })),
+            };
+        });
+
+        printStudentRecordPdf({
+            studentName: student.name,
+            firstDate: student.firstDate,
+            cycles,
+            unpaidCount: unpaid.length,
+            unpaidSum: unpaid.reduce((acc, u) => acc + Number(u.amount || 0), 0),
+            issueDate: formatDateLocal(new Date()),
+        });
+    };
     // 개인일정 회차 자동 번호 (헬스·PT 처럼 메모에 회차만 적어온 항목).
     //
     // 어떤 항목에 쓸지 따로 설정하지 않는다. 그 항목+그리드의 가장 최근 메모가 숫자면
@@ -3517,6 +3589,7 @@ function App() {
                             setPaymentFile={setPaymentFile}
                             resetPaymentForm={resetPaymentForm}
                             paymentHistory={paymentHistory}
+                            handlePrintStudentRecord={handlePrintStudentRecord}
                             historyPage={historyPage}
                             setHistoryPage={setHistoryPage}
                             historyPerPage={historyPerPage}
