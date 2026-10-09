@@ -35,6 +35,7 @@ export function ScheduleTab({
     handleSlotClick,
     handleBulkCompleteDay,
     todosByDate,
+    weeklySummary,
     weeklyMemo,
     handleWeeklyMemoSave,
 }) {
@@ -207,7 +208,33 @@ export function ScheduleTab({
                         </button>
                     </div>
 
-                    <div className="flex gap-2">
+                    <div className="flex items-center gap-3">
+                        {/* 이번 주 수업량·금액. 좁은 화면(모바일)에서는 자리를 차지해서 숨긴다. */}
+                        {weeklySummary && (
+                            <div className="hidden items-center gap-3 rounded-2xl bg-white px-4 py-2 text-sm shadow-sm ring-1 ring-gray-100 md:flex">
+                                <span className="flex items-baseline gap-1">
+                                    <span className="font-bold text-orange-500">M</span>
+                                    <span className="text-xs text-gray-400">
+                                        ({weeklySummary.mCount}
+                                        {weeklySummary.mArtist > 0 && `+${weeklySummary.mArtist}`})
+                                    </span>
+                                    <span className="font-extrabold text-gray-800">
+                                        {weeklySummary.mAmount.toLocaleString()}원
+                                    </span>
+                                </span>
+                                <span className="h-4 w-px bg-gray-200" />
+                                <span className="flex items-baseline gap-1">
+                                    <span className="font-bold text-green-600">V</span>
+                                    <span className="text-xs text-gray-400">
+                                        ({weeklySummary.vCount}
+                                        {weeklySummary.vArtist > 0 && `+${weeklySummary.vArtist}`})
+                                    </span>
+                                    <span className="font-extrabold text-gray-800">
+                                        {weeklySummary.vAmount.toLocaleString()}원
+                                    </span>
+                                </span>
+                            </div>
+                        )}
                         <button
                             onClick={() => setScheduleDate(new Date())}
                             className="rounded-full bg-gray-900 px-5 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-gray-700 active:scale-95"

@@ -72,7 +72,7 @@ import {
     shiftMonth,
 } from './utils/date.js';
 import { compressImage } from './utils/image.js';
-import { calculateTotalAmount, formatCurrency } from './utils/money.js';
+import { calculateTotalAmount, formatCurrency, vocalRateFactorFor } from './utils/money.js';
 import { getBadgeStyle } from './utils/badgeStyle.js';
 import { MemoInput } from './components/MemoInput.jsx';
 import { LoginScreen } from './components/LoginScreen.jsx';
@@ -1851,6 +1851,44 @@ function App() {
         setScheduleDate(new Date(e.target.value));
     };
 
+    // 이번 주 수업량·금액 요약 (스케쥴 탭 상단, 모바일에서는 숨김).
+    //
+    // - 금액은 학생별 단가 × 수업 종류 배수. 보컬은 30분/하프가 반값이라 vocalRateFactorFor 를 쓴다
+    //   (마스터는 30분이어도 정가 — utils/money.js 상단 표 참고).
+    // - 연기된 원본(reschedule / reschedule_assigned)은 뺀다. 보강은 별도 문서로 새로 생기므로
+    //   **실제 보강을 한 주에** 완료 수업으로 잡힌다.
+    // - 아티스트는 회당 결제가 아니라 누적 방식이라 금액에서 빼고 횟수만 따로 센다(M(15+2) 의 +2).
+    // - 월정산 학생은 포함한다.
+    const weeklySummary = useMemo(() => {
+        const byId = new Map(students.map((st) => [st.id, st]));
+        let mAmount = 0,
+            mCount = 0,
+            mArtist = 0,
+            vAmount = 0,
+            vCount = 0,
+            vArtist = 0;
+
+        for (const sc of schedules) {
+            if (!sc.studentId) continue; // 개인일정 제외
+            if (sc.status === 'reschedule' || sc.status === 'reschedule_assigned') continue;
+            const st = byId.get(sc.studentId);
+            if (!st) continue;
+            const isMaster = sc.gridType === 'master' || !sc.gridType;
+            if (st.isArtist) {
+                if (isMaster) mArtist++;
+                else vArtist++;
+                continue;
+            }
+            if (isMaster) {
+                mCount++;
+                mAmount += Number(st.rates?.master || 0);
+            } else {
+                vCount++;
+                vAmount += Number(st.rates?.vocal || 0) * vocalRateFactorFor(sc, st);
+            }
+        }
+        return { mAmount, mCount, mArtist, vAmount, vCount, vArtist };
+    }, [schedules, students]);
     // 학생 수강 내역서 PDF — 결제·미결제 확인용(학생과 같이 보는 문서).
     //
     // 결제(paymentHistory)와 미결제(unpaidList)를 재등록일 기준 한 줄기로 합치고,
@@ -3504,6 +3542,7 @@ function App() {
                             handleSlotClick={handleSlotClick}
                             handleBulkCompleteDay={handleBulkCompleteDay}
                             todosByDate={todosByDate}
+                            weeklySummary={weeklySummary}
                             weeklyMemo={weeklyMemo}
                             handleWeeklyMemoSave={handleWeeklyMemoSave}
                         />
