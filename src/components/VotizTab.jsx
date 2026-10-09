@@ -682,6 +682,9 @@ function MonthItem({ monthKey, transactions, refresh, allowDelete, onDelete }) {
 // ──[ 8. Votiz (수정 완료됨) ]──
 function Votiz({ user, projects, filteredTransactions, allTransactions, refresh, categories, subCats, isSummaryMode, onMonthClick, resetPeriod }) {
   const [selectedProjectId, setSelectedProjectId] = useState(null);
+  // 왼쪽 입력폼(아코디언)이 열린 프로젝트. 선택(selectedProjectId)과 따로 둔다 —
+  // 접어도 오른쪽 상세는 그 프로젝트를 계속 보여주기 위해.
+  const [formOpenId, setFormOpenId] = useState(null);
   const [newProjectName, setNewProjectName] = useState('');
   
   const [form, setForm] = useState({ date: '', amount: '', type: 'income', category: 'source', subDetail: '', memo: '', vatIncluded: false });
@@ -702,20 +705,17 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
     setNewProjectName(''); refresh(); 
   };
   
-  // 같은 카드를 한 번 더 누르면 아코디언을 접는다(선택 해제 → 오른쪽 상세도 같이 닫힘).
-  // 접을 때 수정 상태를 푸는 이유: editingId 가 남은 채로 다른 프로젝트를 열면
-  // handleSubmit 의 projectId = selectedProjectId 때문에 그 내역이 새 프로젝트로 옮겨간다.
+  // 카드 클릭: 선택(오른쪽 상세)과 왼쪽 입력폼 열림을 따로 다룬다.
   // (입력폼에 타이핑해 둔 값은 일부러 안 지운다 — 다시 펼치면 그대로 있다.)
   const handleSelectProject = (project) => {
+      // 열려 있는 카드를 다시 누르면 왼쪽 입력폼만 접는다(또는 다시 펼친다).
+      // 선택은 유지 → 오른쪽 상세·통계·필터는 건드리지 않는다.
       if (project.id === selectedProjectId) {
-          setSelectedProjectId(null);
+          setFormOpenId(formOpenId === project.id ? null : project.id);
           setEditingId(null);
-          setIsEditingProject(false);
-          setShowStats(false);
-          setFilterKeyword(null);
           return;
       }
-      // 다른 프로젝트로 넘어갈 때도 수정 상태를 푼다. 안 풀면 '수정 완료' 를 누를 때
+      // 다른 프로젝트로 넘어갈 때는 수정 상태를 푼다. 안 풀면 '수정 완료' 를 누를 때
       // handleSubmit 의 projectId = selectedProjectId 때문에 앞 프로젝트의 내역이
       // 지금 고른 프로젝트로 옮겨간다. 금액·메모는 앞 프로젝트 값이라 폼의 '취소'
       // 버튼과 똑같은 방식으로 비운다(날짜·종류·분류는 그대로 둔다).
@@ -724,6 +724,7 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
           setForm({ ...form, amount: '', memo: '', vatIncluded: false });
       }
       setSelectedProjectId(project.id);
+      setFormOpenId(project.id);
       setEditProjectName(project.name);
       setProjectMemo(project.memo || '');
       setShowStats(false);
@@ -765,7 +766,9 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
           category: item.category || (item.type === 'income' ? 'source' : 'production'), 
           subDetail: item.subDetail || '', memo: item.memo || '', vatIncluded: item.vat > 0
       }); 
-      setEditingId(item.id); window.scrollTo(0, 0);
+      setEditingId(item.id);
+      setFormOpenId(selectedProjectId); // 접혀 있으면 펼친다 — 수정 입력창이 이 폼이다
+      window.scrollTo(0, 0);
   };
 
   const handleCategoryClick = (keyword) => { setFilterKeyword(keyword); setShowStats(false); };
@@ -854,7 +857,7 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
                                 </div>
                             </div>
                         </div>
-                        {active && projectForm}
+                        {p.id === formOpenId && projectForm}
                     </div>
                 );
             })}
