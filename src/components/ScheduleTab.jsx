@@ -233,6 +233,20 @@ export function ScheduleTab({
                                         {weeklySummary.vAmount.toLocaleString()}원
                                     </span>
                                 </span>
+                                <span className="h-4 w-px bg-gray-200" />
+                                {/* 총합계 — 아티스트는 금액에 없고 횟수에만 들어간다(M/V 와 같은 규칙) */}
+                                <span className="flex items-baseline gap-1">
+                                    <span className="font-bold text-gray-500">합계</span>
+                                    <span className="text-xs text-gray-400">
+                                        ({weeklySummary.mCount + weeklySummary.vCount}
+                                        {weeklySummary.mArtist + weeklySummary.vArtist > 0 &&
+                                            `+${weeklySummary.mArtist + weeklySummary.vArtist}`}
+                                        )
+                                    </span>
+                                    <span className="font-extrabold text-blue-600">
+                                        {(weeklySummary.mAmount + weeklySummary.vAmount).toLocaleString()}원
+                                    </span>
+                                </span>
                             </div>
                         )}
                         <button
