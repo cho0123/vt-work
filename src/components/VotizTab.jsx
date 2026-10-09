@@ -702,7 +702,19 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
     setNewProjectName(''); refresh(); 
   };
   
+  // 같은 카드를 한 번 더 누르면 아코디언을 접는다(선택 해제 → 오른쪽 상세도 같이 닫힘).
+  // 접을 때 수정 상태를 푸는 이유: editingId 가 남은 채로 다른 프로젝트를 열면
+  // handleSubmit 의 projectId = selectedProjectId 때문에 그 내역이 새 프로젝트로 옮겨간다.
+  // (입력폼에 타이핑해 둔 값은 일부러 안 지운다 — 다시 펼치면 그대로 있다.)
   const handleSelectProject = (project) => {
+      if (project.id === selectedProjectId) {
+          setSelectedProjectId(null);
+          setEditingId(null);
+          setIsEditingProject(false);
+          setShowStats(false);
+          setFilterKeyword(null);
+          return;
+      }
       setSelectedProjectId(project.id);
       setEditProjectName(project.name);
       setProjectMemo(project.memo || '');
