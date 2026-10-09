@@ -97,6 +97,10 @@ export function VotizTab({ user }) {
       { key: 'copyright', label: '저작권' },
       { key: 'youtube', label: '유튜브' },
   ];
+  // 매니지먼트는 정산 분야가 아니라 별도 메뉴라 그룹을 따로 둔다(색도 분리).
+  const MANAGEMENT_TABS = [
+      { key: 'management', label: '매니지먼트' },
+  ];
 
   return (
     <div className="flex flex-col h-full w-full gap-6 p-4 md:p-8 lg:px-12 pb-20 overflow-y-auto font-sans">
@@ -152,14 +156,24 @@ export function VotizTab({ user }) {
             ))}
         </div>
 
-        {/* 분야 탭 (4개) */}
-        <div className="shrink-0 bg-gray-200/70 p-1 rounded-2xl flex gap-1 w-full md:w-fit">
-          {DIVISION_TABS.map(({ key, label }) => (
-            <button key={key} onClick={() => setActiveTab(key)}
-              className={`flex-1 md:flex-none py-2 px-5 rounded-xl text-sm font-bold transition-all whitespace-nowrap ${activeTab === key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
-              {label}
-            </button>
-          ))}
+        {/* 분야 탭 (4개) + 매니지먼트 (별도 그룹) */}
+        <div className="shrink-0 flex flex-col md:flex-row gap-2 w-full md:w-fit">
+          <div className="bg-gray-200/70 p-1 rounded-2xl flex gap-1 w-full md:w-fit">
+            {DIVISION_TABS.map(({ key, label }) => (
+              <button key={key} onClick={() => setActiveTab(key)}
+                className={`flex-1 md:flex-none py-2 px-5 rounded-xl text-sm font-bold transition-all whitespace-nowrap ${activeTab === key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="bg-emerald-200/70 p-1 rounded-2xl flex gap-1 w-full md:w-fit">
+            {MANAGEMENT_TABS.map(({ key, label }) => (
+              <button key={key} onClick={() => setActiveTab(key)}
+                className={`flex-1 md:flex-none py-2 px-5 rounded-xl text-sm font-bold transition-all whitespace-nowrap ${activeTab === key ? 'bg-white text-emerald-700 shadow-sm' : 'text-emerald-800/60 hover:text-emerald-900'}`}>
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* 선택 분야 상세 */}
@@ -168,6 +182,7 @@ export function VotizTab({ user }) {
           {activeTab === 'votiz' && <Votiz user={user} projects={projects} filteredTransactions={filteredTransactions} allTransactions={transactions} refresh={fetchData} categories={votizCategories} subCats={productionSub} isSummaryMode={selectedMonth === 'all' || selectedYear === 'all'} onMonthClick={handleMonthClick} resetPeriod={resetPeriod} />}
           {activeTab === 'copyright' && <CopyrightSection user={user} transactions={filteredTransactions} refresh={fetchData} isSummaryMode={selectedYear === 'all'} />}
           {activeTab === 'youtube' && <YoutubeSection user={user} transactions={filteredTransactions} refresh={fetchData} isSummaryMode={selectedYear === 'all'} />}
+          {activeTab === 'management' && <ManagementSection />}
         </div>
     </div>
   );
@@ -1233,5 +1248,17 @@ function YoutubeTransactionList({ list, onEdit, onDelete }) {
             </li>
         )})}
         </ul>
+  );
+}
+
+// ──[ 10. 매니지먼트 ]──
+// 정산 분야(보이스튜닝·보티즈·저작권·유튜브)와 별개 메뉴. 들어갈 내용은 아직 미정.
+function ManagementSection() {
+  return (
+    <div className="bg-white p-10 rounded-2xl shadow-sm border-2 border-emerald-100 text-center">
+      <div className="text-3xl mb-3">🗂️</div>
+      <h3 className="font-bold text-gray-800">매니지먼트</h3>
+      <p className="text-sm text-gray-400 mt-2">내용 준비 중입니다.</p>
+    </div>
   );
 }
