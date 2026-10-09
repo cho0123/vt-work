@@ -715,6 +715,14 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
           setFilterKeyword(null);
           return;
       }
+      // 다른 프로젝트로 넘어갈 때도 수정 상태를 푼다. 안 풀면 '수정 완료' 를 누를 때
+      // handleSubmit 의 projectId = selectedProjectId 때문에 앞 프로젝트의 내역이
+      // 지금 고른 프로젝트로 옮겨간다. 금액·메모는 앞 프로젝트 값이라 폼의 '취소'
+      // 버튼과 똑같은 방식으로 비운다(날짜·종류·분류는 그대로 둔다).
+      if (editingId) {
+          setEditingId(null);
+          setForm({ ...form, amount: '', memo: '', vatIncluded: false });
+      }
       setSelectedProjectId(project.id);
       setEditProjectName(project.name);
       setProjectMemo(project.memo || '');
