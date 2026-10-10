@@ -2,8 +2,12 @@
 // 자체 로그인/App 래퍼는 걷어내고, 스케쥴 앱의 공유 db·로그인(user)을 그대로 쓴다.
 // 컬렉션은 스케쥴 데이터와 분리하기 위해 acc_projects / acc_transactions 사용.
 import React, { useState, useEffect } from 'react';
-import { collection, addDoc, getDocs, doc, deleteDoc, updateDoc, query, where } from 'firebase/firestore';
+import { collection, addDoc, getDocs, doc, deleteDoc, updateDoc, deleteField, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
+import { ManagementTab } from './ManagementTab.jsx';
+import { isOwner } from '../constants/owners.js';
+import { ArtistShareEditor } from './ArtistShareEditor.jsx';
+import { validateShares, normalizeShares, artistNamesOf } from '../utils/artistShares.js';
 
 // ──[ 1. 유틸리티 함수 ]──
 const formatNumber = (num) => {
@@ -24,6 +28,11 @@ export function VotizTab({ user }) {
   const [transactions, setTransactions] = useState([]);
   const [projects, setProjects] = useState([]);
   
+  // 곡-아티스트 연결용 목록. 원장 계정일 때만 읽는다(아티스트 수만큼이라 매우 작다).
+  const [artistList, setArtistList] = useState([]);
+  // 곡 연결에서 '곡 수익을 넣을 항목' 을 고를 때 쓴다(매니지먼트 공통 항목).
+  const [mgmtCats, setMgmtCats] = useState([]);
+
   const [selectedYear, setSelectedYear] = useState('all');
   const [selectedMonth, setSelectedMonth] = useState('all');
 
@@ -52,6 +61,24 @@ export function VotizTab({ user }) {
   };
 
   useEffect(() => { fetchData(); }, []);
+
+  // refresh() 때마다 다시 읽지 않도록 fetchData 와 따로 둔다.
+  useEffect(() => {
+    if (!isOwner(user)) return;
+    let alive = true;
+    const loadArtists = async () => {
+      try {
+        const snap = await getDocs(query(collection(db, 'artists'), where('uid', '==', user.uid)));
+        if (alive) setArtistList(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        const catSnap = await getDocs(query(collection(db, 'mgmtCategories'), where('uid', '==', user.uid)));
+        if (alive) setMgmtCats(catSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      } catch (e) {
+        console.warn('아티스트 목록을 못 읽었습니다(곡 연결 입력칸만 영향).', e && e.message);
+      }
+    };
+    loadArtists();
+    return () => { alive = false; };
+  }, [user]);
 
   const filteredTransactions = transactions.filter(t => {
       if (selectedYear === 'all') return true;
@@ -98,9 +125,10 @@ export function VotizTab({ user }) {
       { key: 'youtube', label: '유튜브' },
   ];
   // 매니지먼트는 정산 분야가 아니라 별도 메뉴라 그룹을 따로 둔다(색도 분리).
-  const MANAGEMENT_TABS = [
-      { key: 'management', label: '매니지먼트' },
-  ];
+  // 원장 계정에만 보인다. 화면에서 숨기는 건 보안이 아니고, 실제 차단은 firestore.rules 가 한다.
+  const MANAGEMENT_TABS = isOwner(user)
+      ? [{ key: 'management', label: '매니지먼트' }]
+      : [];
 
   return (
     <div className="flex flex-col h-full w-full gap-6 p-4 md:p-8 lg:px-12 pb-20 overflow-y-auto font-sans">
@@ -166,23 +194,27 @@ export function VotizTab({ user }) {
               </button>
             ))}
           </div>
-          <div className="bg-emerald-200/70 p-1 rounded-2xl flex gap-1 w-full md:w-fit">
-            {MANAGEMENT_TABS.map(({ key, label }) => (
-              <button key={key} onClick={() => setActiveTab(key)}
-                className={`flex-1 md:flex-none py-2 px-5 rounded-xl text-sm font-bold transition-all whitespace-nowrap ${activeTab === key ? 'bg-white text-emerald-700 shadow-sm' : 'text-emerald-800/60 hover:text-emerald-900'}`}>
-                {label}
-              </button>
-            ))}
-          </div>
+          {MANAGEMENT_TABS.length > 0 && (
+            <div className="bg-emerald-200/70 p-1 rounded-2xl flex gap-1 w-full md:w-fit">
+              {MANAGEMENT_TABS.map(({ key, label }) => (
+                <button key={key} onClick={() => setActiveTab(key)}
+                  className={`flex-1 md:flex-none py-2 px-5 rounded-xl text-sm font-bold transition-all whitespace-nowrap ${activeTab === key ? 'bg-white text-emerald-700 shadow-sm' : 'text-emerald-800/60 hover:text-emerald-900'}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* 선택 분야 상세 */}
         <div>
           {activeTab === 'voicetuning' && <VoiceTuning user={user} transactions={filteredTransactions} refresh={fetchData} isSummaryMode={selectedYear === 'all'} categoryMap={votizCategories} />}
-          {activeTab === 'votiz' && <Votiz user={user} projects={projects} filteredTransactions={filteredTransactions} allTransactions={transactions} refresh={fetchData} categories={votizCategories} subCats={productionSub} isSummaryMode={selectedMonth === 'all' || selectedYear === 'all'} onMonthClick={handleMonthClick} resetPeriod={resetPeriod} />}
+          {activeTab === 'votiz' && <Votiz user={user} projects={projects} filteredTransactions={filteredTransactions} allTransactions={transactions} refresh={fetchData} categories={votizCategories} subCats={productionSub} isSummaryMode={selectedMonth === 'all' || selectedYear === 'all'} onMonthClick={handleMonthClick} resetPeriod={resetPeriod} artistList={artistList} mgmtCats={mgmtCats} canLinkArtists={isOwner(user)} />}
           {activeTab === 'copyright' && <CopyrightSection user={user} transactions={filteredTransactions} refresh={fetchData} isSummaryMode={selectedYear === 'all'} />}
           {activeTab === 'youtube' && <YoutubeSection user={user} transactions={filteredTransactions} refresh={fetchData} isSummaryMode={selectedYear === 'all'} />}
-          {activeTab === 'management' && <ManagementSection />}
+          {activeTab === 'management' && isOwner(user) && (
+            <ManagementTab user={user} projects={projects} allTransactions={transactions} />
+          )}
         </div>
     </div>
   );
@@ -680,8 +712,12 @@ function MonthItem({ monthKey, transactions, refresh, allowDelete, onDelete }) {
 }
 
 // ──[ 8. Votiz (수정 완료됨) ]──
-function Votiz({ user, projects, filteredTransactions, allTransactions, refresh, categories, subCats, isSummaryMode, onMonthClick, resetPeriod }) {
+function Votiz({ user, projects, filteredTransactions, allTransactions, refresh, categories, subCats, isSummaryMode, onMonthClick, resetPeriod, artistList, mgmtCats, canLinkArtists }) {
   const [selectedProjectId, setSelectedProjectId] = useState(null);
+  // 곡에 연결한 아티스트. 생성용과 수정용을 따로 둔다.
+  const [newArtists, setNewArtists] = useState([]);
+  const [projectArtists, setProjectArtists] = useState([]);
+  const [artistsMsg, setArtistsMsg] = useState('');
   // 왼쪽 입력폼(아코디언)이 열린 프로젝트. 선택(selectedProjectId)과 따로 둔다 —
   // 접어도 오른쪽 상세는 그 프로젝트를 계속 보여주기 위해.
   const [formOpenId, setFormOpenId] = useState(null);
@@ -696,15 +732,31 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
   const [filterKeyword, setFilterKeyword] = useState(null);
 
   const handleProjectAdd = async () => { 
-    if (!newProjectName) return; 
+    if (!newProjectName) return;
+    const msg = validateShares(newArtists);
+    if (msg) { setArtistsMsg(msg); return; }
+    setArtistsMsg(''); 
     await addDoc(collection(db, "acc_projects"), { 
         name: newProjectName, 
         uid: user.uid, // [보안 추가] 프로젝트 생성시 주인 정보 기록
+        ...(newArtists.length > 0 ? { artists: normalizeShares(newArtists) } : {}),
         createdAt: new Date() 
     }); 
-    setNewProjectName(''); refresh(); 
+    setNewProjectName(''); setNewArtists([]); refresh(); 
   };
   
+  // 아티스트 연결만 따로 저장한다. 이름·메모 저장(handleUpdateProject)은 메모 자동저장에도
+  // 쓰이므로 건드리지 않는다 — 지분 검사 때문에 메모 저장이 막히면 안 된다.
+  const handleSaveArtists = async () => {
+    const msg = validateShares(projectArtists);
+    if (msg) { setArtistsMsg(msg); return; }
+    setArtistsMsg('');
+    // 연결을 다 해제하면 필드 자체를 지운다 — 연결한 적 없는 곡과 똑같은 상태로 되돌리기 위해.
+    const payload = projectArtists.length > 0 ? normalizeShares(projectArtists) : deleteField();
+    await updateDoc(doc(db, "acc_projects", selectedProjectId), { artists: payload });
+    refresh();
+  };
+
   // 카드 클릭: 선택(오른쪽 상세)과 왼쪽 입력폼 열림을 따로 다룬다.
   // (입력폼에 타이핑해 둔 값은 일부러 안 지운다 — 다시 펼치면 그대로 있다.)
   const handleSelectProject = (project) => {
@@ -725,6 +777,10 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
       }
       setSelectedProjectId(project.id);
       setFormOpenId(project.id);
+      setProjectArtists(Array.isArray(project.artists)
+          ? project.artists.map((a) => ({ ...a, share: a.share === null || a.share === undefined ? '' : a.share }))
+          : []);
+      setArtistsMsg('');
       setEditProjectName(project.name);
       setProjectMemo(project.memo || '');
       setShowStats(false);
@@ -823,6 +879,12 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
             <input type="text" placeholder="새 프로젝트 만들기" className={`${inputClass} bg-white`} value={newProjectName} onChange={e => setNewProjectName(e.target.value)} />
             <button onClick={handleProjectAdd} className="bg-blue-600 text-white px-4 rounded-xl font-bold shadow-md hover:bg-blue-700 shrink-0">생성</button>
         </div>
+        {canLinkArtists && (
+          <>
+            <ArtistShareEditor title="아티스트 연결 (선택)" artistList={artistList} categories={mgmtCats} value={newArtists} onChange={setNewArtists} />
+            {artistsMsg && <div className="rounded-xl bg-red-50 border border-red-200 p-2.5 text-xs font-bold text-red-700">{artistsMsg}</div>}
+          </>
+        )}
         <div className="space-y-2">
             <h3 className="font-bold text-gray-500 text-sm ml-1">📂 프로젝트 목록</h3>
             {projects.map(p => {
@@ -840,6 +902,11 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
                             <div className="flex justify-between items-center gap-2">
                                 <div className="flex items-center gap-1.5 min-w-0">
                                     <span className={`font-bold truncate ${active ? 'text-blue-700' : 'text-gray-800'}`}>{p.name}</span>
+                                    {artistNamesOf(p, artistList) && (
+                                        <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700 ring-1 ring-emerald-200">
+                                            {artistNamesOf(p, artistList)}
+                                        </span>
+                                    )}
                                     <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold ${lastIncome ? 'bg-blue-50 text-blue-600' : 'bg-gray-100 text-gray-400'}`}>
                                         {lastIncome ? `수익 ~${lastIncome.replace(/-/g, '.')}` : '수익 미등록'}
                                     </span>
@@ -893,6 +960,15 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
                     rows="2" value={projectMemo} onChange={e => setProjectMemo(e.target.value)} onBlur={handleUpdateProject} />
                  <div className="absolute bottom-2 right-2 text-[10px] text-gray-400 pointer-events-none">자동저장</div>
               </div>
+              {canLinkArtists && (
+                <div className="mt-3 space-y-2">
+                    <ArtistShareEditor title="아티스트 연결" artistList={artistList} categories={mgmtCats} value={projectArtists} onChange={setProjectArtists} />
+                    {artistsMsg && <div className="rounded-xl bg-red-50 border border-red-200 p-2.5 text-xs font-bold text-red-700">{artistsMsg}</div>}
+                    <button onClick={handleSaveArtists} className="rounded-full bg-emerald-600 px-4 py-2 text-xs font-bold text-white shadow-sm hover:bg-emerald-700 active:scale-95 transition">
+                        아티스트 연결 저장
+                    </button>
+                </div>
+              )}
           </div>
 
           <div className="bg-white p-5 rounded-2xl shadow-sm border border-blue-100">
@@ -1271,17 +1347,5 @@ function YoutubeTransactionList({ list, onEdit, onDelete }) {
             </li>
         )})}
         </ul>
-  );
-}
-
-// ──[ 10. 매니지먼트 ]──
-// 정산 분야(보이스튜닝·보티즈·저작권·유튜브)와 별개 메뉴. 들어갈 내용은 아직 미정.
-function ManagementSection() {
-  return (
-    <div className="bg-white p-10 rounded-2xl shadow-sm border-2 border-emerald-100 text-center">
-      <div className="text-3xl mb-3">🗂️</div>
-      <h3 className="font-bold text-gray-800">매니지먼트</h3>
-      <p className="text-sm text-gray-400 mt-2">내용 준비 중입니다.</p>
-    </div>
   );
 }

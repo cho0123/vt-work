@@ -34,6 +34,39 @@ service cloud.firestore {
              ];
     }
 
+    // ── 매니지먼트(아티스트) 전용 — 2026-10-10 추가
+    //
+    //   artists            아티스트 일반정보 + 정산비율
+    //   artistPrivate      민감정보(생년월일·주소·계좌). 문서 ID 는 artists 와 동일
+    //   mgmtCategories     공통 수익·지출 항목
+    //   artistLedger       아티스트별 수입·지출 장부
+    //   artistCases        별도정산 건 (2026-10-10 2단계 추가)
+    //   artistSettlements  (다음 단계) 정산 결과
+    //
+    // 아티스트 개인정보·계약·정산이 들어가므로 원장(허용 UID) 전용이다.
+    // ⚠️ 솔직히 적어두면: 아래 /{document=**} 규칙이 이미 '허용 UID 외 전부 차단' 이라
+    //    이 블록은 기능상 새 제한이 아니고 '의도를 명시' 하는 것이다. Firestore 규칙은
+    //    여러 match 가 OR 로 합쳐지므로, 여기에 적어도 기존 규칙이 느슨해지지는 않는다.
+    //    나중에 원장 외 계정(예: 아티스트 본인 열람)을 허용할 때 여기만 고치면 된다.
+    match /artists/{docId} {
+      allow read, write: if isAllowedUser();
+    }
+    match /artistPrivate/{docId} {
+      allow read, write: if isAllowedUser();
+    }
+    match /mgmtCategories/{docId} {
+      allow read, write: if isAllowedUser();
+    }
+    match /artistLedger/{docId} {
+      allow read, write: if isAllowedUser();
+    }
+    match /artistCases/{docId} {
+      allow read, write: if isAllowedUser();
+    }
+    match /artistSettlements/{docId} {
+      allow read, write: if isAllowedUser();
+    }
+
     // 이 앱의 모든 데이터(students, schedules, attendance, expenses,
     // weekly_memos/locks, settlement_memos, site_settings,
     // schedule_cancellations, students/*/payments)는 운영자 전용이다.
