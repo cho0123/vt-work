@@ -714,8 +714,7 @@ function MonthItem({ monthKey, transactions, refresh, allowDelete, onDelete }) {
 // ──[ 8. Votiz (수정 완료됨) ]──
 function Votiz({ user, projects, filteredTransactions, allTransactions, refresh, categories, subCats, isSummaryMode, onMonthClick, resetPeriod, artistList, mgmtCats, canLinkArtists }) {
   const [selectedProjectId, setSelectedProjectId] = useState(null);
-  // 곡에 연결한 아티스트. 생성용과 수정용을 따로 둔다.
-  const [newArtists, setNewArtists] = useState([]);
+  // 곡에 연결한 아티스트. 생성할 때는 안 받고 오른쪽 상세에서만 연결한다.
   const [projectArtists, setProjectArtists] = useState([]);
   const [artistsMsg, setArtistsMsg] = useState('');
   // 왼쪽 입력폼(아코디언)이 열린 프로젝트. 선택(selectedProjectId)과 따로 둔다 —
@@ -733,16 +732,12 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
 
   const handleProjectAdd = async () => { 
     if (!newProjectName) return;
-    const msg = validateShares(newArtists);
-    if (msg) { setArtistsMsg(msg); return; }
-    setArtistsMsg(''); 
     await addDoc(collection(db, "acc_projects"), { 
         name: newProjectName, 
         uid: user.uid, // [보안 추가] 프로젝트 생성시 주인 정보 기록
-        ...(newArtists.length > 0 ? { artists: normalizeShares(newArtists) } : {}),
         createdAt: new Date() 
     }); 
-    setNewProjectName(''); setNewArtists([]); refresh(); 
+    setNewProjectName(''); refresh(); 
   };
   
   // 아티스트 연결만 따로 저장한다. 이름·메모 저장(handleUpdateProject)은 메모 자동저장에도
@@ -879,12 +874,6 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
             <input type="text" placeholder="새 프로젝트 만들기" className={`${inputClass} bg-white`} value={newProjectName} onChange={e => setNewProjectName(e.target.value)} />
             <button onClick={handleProjectAdd} className="bg-blue-600 text-white px-4 rounded-xl font-bold shadow-md hover:bg-blue-700 shrink-0">생성</button>
         </div>
-        {canLinkArtists && (
-          <>
-            <ArtistShareEditor title="아티스트 연결 (선택)" artistList={artistList} categories={mgmtCats} value={newArtists} onChange={setNewArtists} />
-            {artistsMsg && <div className="rounded-xl bg-red-50 border border-red-200 p-2.5 text-xs font-bold text-red-700">{artistsMsg}</div>}
-          </>
-        )}
         <div className="space-y-2">
             <h3 className="font-bold text-gray-500 text-sm ml-1">📂 프로젝트 목록</h3>
             {projects.map(p => {
