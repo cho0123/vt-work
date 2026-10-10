@@ -4,7 +4,8 @@
 // window.open 은 팝업 차단에 걸리고, 현재 창 인쇄는 앱 화면을 건드린다.
 // 파일명은 최상위 document.title 로 넘긴다.
 //
-// ⚠️ 계좌번호는 뒤 4자리만 찍는다.
+// ⚠️ 계좌번호는 뒤 4자리만 찍는다 — 받는 쪽(payee) 정보는 이미 마스킹된 상태로 넘어온다
+//    (마스킹은 src/domain/artistProfile.js 의 payeeInfo 가 한다).
 
 const won = (n) => Number(n || 0).toLocaleString('ko-KR');
 
@@ -15,14 +16,6 @@ const esc = (s) =>
         .split('>').join('&gt;');
 
 const pct = (n) => (Math.round(Number(n || 0) * 100) / 100) + '%';
-
-// 뒤 4자리만. 저장된 값 자체는 건드리지 않는다.
-const maskAccount = (v) => {
-    const s = String(v || '').trim();
-    if (!s) return '';
-    if (s.length <= 4) return s;
-    return '****' + s.slice(-4);
-};
 
 function buildHtml(p) {
     const catRows = (p.rows || [])
@@ -84,11 +77,18 @@ function buildHtml(p) {
       <tr><th>소득세 (3%)</th><td class="r neg">-${won(pay.incomeTax)}</td></tr>
       <tr><th>지방소득세 (소득세의 10%)</th><td class="r neg">-${won(pay.localTax)}</td></tr>`;
 
+    // 돈 받는 쪽(지급처). 소속사 지급이면 소속사 이름·사업자번호·계좌가 들어간다.
+    const payee = p.payee || {};
+    const invoiceFrom = payee.payee === 'agency'
+        ? (payee.name || '소속사')
+        : (p.artistName || '');
+
     const payTypeLine = !pay
         ? ''
         : `<p class="muted small">세무 유형: ${pay.taxType === 'invoice' ? '세금계산서 (사업자)' : '원천징수 (개인)'}` +
           `${pay.needsInvoice ? ' · <b>세금계산서 수취 필요</b>' : ''}` +
-          `${pay.needsInvoice && p.bizNo ? ' · 사업자등록번호 ' + esc(p.bizNo) : ''}</p>`;
+          `${pay.needsInvoice ? ' · 발행처 ' + esc(invoiceFrom) : ''}` +
+          `${pay.needsInvoice && payee.bizNo ? ' (사업자등록번호 ' + esc(payee.bizNo) + ')' : ''}</p>`;
 
     const payBlock = `
     <h2>지급</h2>
@@ -143,7 +143,8 @@ function buildHtml(p) {
   <table class="info">
     <tr><th>아티스트</th><td>${esc(p.artistName)}${p.realName ? ' (' + esc(p.realName) + ')' : ''}</td></tr>
     <tr><th>정산 기간</th><td>${esc(p.periodLabel)}${p.months ? ' · ' + esc(p.months) : ''}</td></tr>
-    <tr><th>입금 계좌</th><td>${esc(p.bank)} ${maskAccount(p.accountNumber)}${p.accountHolder ? ' (' + esc(p.accountHolder) + ')' : ''}</td></tr>
+    <tr><th>지급처</th><td>${esc(payee.payeeLabel || '')}${payee.name ? ' · ' + esc(payee.name) : ''}${payee.bizNo ? ' (사업자등록번호 ' + esc(payee.bizNo) + ')' : ''}</td></tr>
+    <tr><th>입금 계좌</th><td>${esc(payee.bank || '')} ${esc(payee.accountMasked || '')}${payee.holder ? ' (' + esc(payee.holder) + ')' : ''}</td></tr>
   </table>
 
   <h2>항목별 내역</h2>

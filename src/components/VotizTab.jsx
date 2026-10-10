@@ -212,8 +212,10 @@ export function VotizTab({ user }) {
           {activeTab === 'votiz' && <Votiz user={user} projects={projects} filteredTransactions={filteredTransactions} allTransactions={transactions} refresh={fetchData} categories={votizCategories} subCats={productionSub} isSummaryMode={selectedMonth === 'all' || selectedYear === 'all'} onMonthClick={handleMonthClick} resetPeriod={resetPeriod} artistList={artistList} mgmtCats={mgmtCats} canLinkArtists={isOwner(user)} />}
           {activeTab === 'copyright' && <CopyrightSection user={user} transactions={filteredTransactions} refresh={fetchData} isSummaryMode={selectedYear === 'all'} />}
           {activeTab === 'youtube' && <YoutubeSection user={user} transactions={filteredTransactions} refresh={fetchData} isSummaryMode={selectedYear === 'all'} />}
+          {/* 매니지먼트에서 아티스트를 고치면 곡 연결 드롭다운(artistList)도 같이 맞춘다.
+              둘 다 같은 목록이라 다시 읽지 않고 메모리에서만 넘겨받는다(추가 조회 0회). */}
           {activeTab === 'management' && isOwner(user) && (
-            <ManagementTab user={user} projects={projects} allTransactions={transactions} />
+            <ManagementTab user={user} projects={projects} allTransactions={transactions} onArtistsChange={setArtistList} />
           )}
         </div>
     </div>

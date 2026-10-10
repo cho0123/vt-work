@@ -1,23 +1,33 @@
 // 매니지먼트 탭 — 아티스트 등록·관리, 공통 수익/지출 항목, 아티스트별 정산비율.
 //
-// 1단계(이 파일)는 '등록과 설정'까지다. 수입·지출 장부와 정산 계산
-// (artistLedger / artistSettlements)은 다음 단계에서 만든다.
+// 화면은 보티즈 탭과 같은 좌우 구조다.
+//   왼쪽  등록 버튼 · 항목 관리 · 구분/상태 필터 · 이름 검색 · 아티스트 목록
+//   오른쪽 고른 아티스트의 상세(정보 · 정산비율 · 장부 · 정산)
+// 휴대폰 폭에서는 위아래로 쌓이고, 상세 위의 '목록으로' 버튼으로 목록에 돌아간다.
 //
 // 쓰는 컬렉션 — 전부 새로 만든 것이라 기존 데이터와 겹치지 않는다.
-//   artists/{id}        일반정보 + 정산비율
-//   artistPrivate/{id}  민감정보(생년월일·주소·계좌). 문서 ID 는 artists 와 같다.
+//   artists/{id}        일반정보 + 정산비율 + 구분(category)·지급처(payee)·소속사명
+//   artistPrivate/{id}  민감정보(생년월일·주소·계좌·사업자번호 + 소속사 계좌).
+//                       문서 ID 는 artists 와 같다.
 //   mgmtCategories/{id} 공통 수익·지출 항목
+//
+// 구분(소속/콜라보)과 지급처(본인/소속사) 규칙은 src/domain/artistProfile.js 한 곳에 있다.
+// 옛 문서에는 두 필드가 없다 — 없으면 소속·본인으로 보고, 데이터는 고치지 않는다.
 //
 // 보티즈-정산 탭의 하위 탭으로 들어간다 — 바깥 여백과 스크롤은 부모(VotizTab)가 맡는다.
 //
 // 읽기 한도(하루 5만)를 아끼려고:
 //   - 목록·항목은 탭을 열 때 한 번만 읽고, 저장 뒤에는 메모리 상태만 갱신한다.
 //   - artistPrivate 는 상세를 열 때 그 아티스트 1건만 읽는다(목록에는 안 쓴다).
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { collection, addDoc, getDocs, getDoc, doc, setDoc, deleteDoc, updateDoc, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { ArtistWorkspace } from './ArtistWorkspace.jsx';
-import { TAX_TYPES, taxTypeOf } from '../domain/artistPayout.js';
+import { TAX_TYPES, TAX_TYPE_LABEL, taxTypeOf } from '../domain/artistPayout.js';
+import {
+    ARTIST_CATEGORIES, CATEGORY_LABEL, PAYEES,
+    categoryOf, payeeOf, effectiveTaxType,
+} from '../domain/artistProfile.js';
 
 const inputClass = "w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-gray-800 outline-none transition text-sm";
 const selectClass = inputClass + " appearance-none";
@@ -34,12 +44,18 @@ const EMPTY_ARTIST = {
     realName: '', stageName: '', phone: '', email: '',
     contractStart: '', contractEnd: '', settlementCycle: 'month',
     status: 'active', memo: '',
-    taxType: 'withholding',   // 없으면 원천징수로 본다(옛 문서는 고치지 않는다)
+    category: 'member',       // 없으면 소속으로 본다(옛 문서는 고치지 않는다)
+    payee: 'self',            // 없으면 본인으로 본다
+    agencyName: '', agencyMemo: '',
+    taxType: 'withholding',   // 없으면 원천징수로 본다
     ratioUniform: true,
     uniformRatio: { company: 50, artist: 50 },
     ratios: {},
 };
-const EMPTY_PRIVATE = { birth: '', address: '', bank: '', accountNumber: '', accountHolder: '', bizNo: '' };
+const EMPTY_PRIVATE = {
+    birth: '', address: '', bank: '', accountNumber: '', accountHolder: '', bizNo: '',
+    agencyBizNo: '', agencyBank: '', agencyAccount: '', agencyHolder: '',
+};
 
 // 'YYYY-MM-DD' 까지 남은 일수. 한국에서만 쓰므로 로컬 자정 기준으로 센다.
 const daysUntil = (ymd) => {
@@ -79,21 +95,36 @@ const clampPercent = (raw) => {
 };
 
 // projects / allTransactions 는 보티즈 탭이 이미 받아둔 것을 그대로 받는다(추가 조회 0회).
-export function ManagementTab({ user, projects, allTransactions }) {
+export function ManagementTab({ user, projects, allTransactions, onArtistsChange }) {
     const [artists, setArtists] = useState([]);
     const [categories, setCategories] = useState([]);
     const [loaded, setLoaded] = useState(false);
     const [loadError, setLoadError] = useState('');
 
     const [statusFilter, setStatusFilter] = useState('all');
+    const [categoryFilter, setCategoryFilter] = useState('all');
+    const [keyword, setKeyword] = useState('');
     const [openId, setOpenId] = useState(null);   // 상세가 열린 아티스트 id
     const [isNew, setIsNew] = useState(false);    // 신규 등록 폼이 열렸는지
     const [form, setForm] = useState(EMPTY_ARTIST);
     const [priv, setPriv] = useState(EMPTY_PRIVATE);
     const [showAccount, setShowAccount] = useState(false);
+    const [showAgencyAccount, setShowAgencyAccount] = useState(false);
     const [formError, setFormError] = useState('');
     const [saving, setSaving] = useState(false);
     const [showCats, setShowCats] = useState(false);
+
+    // 휴대폰 폭에서 목록·상세가 위아래로 쌓일 때 서로 오가기 위한 기준점.
+    const listRef = useRef(null);
+    const detailRef = useRef(null);
+    const isNarrow = () => typeof window !== 'undefined' && window.innerWidth < 1024;
+    const scrollTo = (ref) => {
+        if (!isNarrow() || !ref.current) return;
+        // 렌더가 끝난 뒤에 옮긴다.
+        setTimeout(() => {
+            if (ref.current) ref.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 50);
+    };
 
     // 탭을 열 때 한 번만 읽는다.
     useEffect(() => {
@@ -119,38 +150,60 @@ export function ManagementTab({ user, projects, allTransactions }) {
         return () => { alive = false; };
     }, [user]);
 
+    // 목록이 바뀌면 보티즈 탭의 곡 연결 드롭다운도 같은 목록을 쓰게 올려 보낸다.
+    // (같은 데이터라 다시 읽지 않는다.)
+    useEffect(() => {
+        if (!loaded || !onArtistsChange) return;
+        onArtistsChange(artists);
+    }, [artists, loaded, onArtistsChange]);
+
     const incomeCats = useMemo(
         () => categories.filter((c) => c.kind === 'income' && !c.hidden).sort(byOrder),
         [categories]
     );
 
     const visibleArtists = useMemo(() => {
-        const list = artists.filter((a) => statusFilter === 'all' || (a.status || 'active') === statusFilter);
+        const k = keyword.trim().toLowerCase();
+        const list = artists
+            .filter((a) => statusFilter === 'all' || (a.status || 'active') === statusFilter)
+            .filter((a) => categoryFilter === 'all' || categoryOf(a) === categoryFilter)
+            .filter((a) => !k
+                || (a.stageName || '').toLowerCase().includes(k)
+                || (a.realName || '').toLowerCase().includes(k)
+                || (a.agencyName || '').toLowerCase().includes(k));
         return list.sort((a, b) => {
             const sa = (a.status || 'active') === 'active' ? 0 : 1;
             const sb = (b.status || 'active') === 'active' ? 0 : 1;
             if (sa !== sb) return sa - sb;
             return (a.stageName || '').localeCompare(b.stageName || '');
         });
-    }, [artists, statusFilter]);
+    }, [artists, statusFilter, categoryFilter, keyword]);
 
     const openArtist = async (a) => {
-        if (openId === a.id && !isNew) { setOpenId(null); return; }  // 같은 줄을 다시 누르면 접힌다
         setIsNew(false);
         setOpenId(a.id);
         setFormError('');
-        setShowAccount(false);
+        // 비어 있는 계좌칸은 바로 입력할 수 있게 열어 둔다. 값이 있으면 가린 채로 시작한다
+        // (불러오기 전에는 비어 있으므로 일단 연다 — 불러온 뒤 아래에서 다시 정한다).
+        setShowAccount(true);
+        setShowAgencyAccount(true);
         setForm({
             ...EMPTY_ARTIST,
             ...a,
+            category: categoryOf(a),
+            payee: payeeOf(a),
             taxType: taxTypeOf(a),
             uniformRatio: { ...EMPTY_ARTIST.uniformRatio, ...(a.uniformRatio || {}) },
             ratios: { ...(a.ratios || {}) },
         });
         setPriv(EMPTY_PRIVATE);
+        scrollTo(detailRef);
         try {
             const snap = await getDoc(doc(db, 'artistPrivate', a.id));
-            setPriv(snap.exists() ? { ...EMPTY_PRIVATE, ...snap.data() } : EMPTY_PRIVATE);
+            const loaded = snap.exists() ? { ...EMPTY_PRIVATE, ...snap.data() } : EMPTY_PRIVATE;
+            setPriv(loaded);
+            setShowAccount(!(loaded.accountNumber || '').trim());
+            setShowAgencyAccount(!(loaded.agencyAccount || '').trim());
         } catch (e) {
             setFormError('민감정보를 불러오지 못했습니다: ' + (e && e.message ? e.message : ''));
         }
@@ -161,8 +214,10 @@ export function ManagementTab({ user, projects, allTransactions }) {
         setOpenId(null);
         setForm(EMPTY_ARTIST);
         setPriv(EMPTY_PRIVATE);
-        setShowAccount(true);  // 새로 넣는 계좌는 가릴 게 없다
+        setShowAccount(true);        // 새로 넣는 계좌는 가릴 게 없다
+        setShowAgencyAccount(true);
         setFormError('');
+        scrollTo(detailRef);
     };
 
     const closeForm = () => { setIsNew(false); setOpenId(null); setFormError(''); };
@@ -195,8 +250,11 @@ export function ManagementTab({ user, projects, allTransactions }) {
             return { ...f, ratioUniform: false, ratios: next };
         });
 
+    // 콜라보는 계약·정산비율 칸을 안 보여주므로 그 검사도 하지 않는다.
+    // (값은 그대로 두고 숨기기만 하므로, 저장해도 기존 값은 지워지지 않는다.)
     const validate = () => {
         if (!(form.stageName || '').trim()) return '활동명을 입력해 주세요.';
+        if (form.category === 'collab') return '';
         if (form.contractStart && form.contractEnd && form.contractEnd < form.contractStart)
             return '계약 종료일이 계약일보다 앞섭니다.';
         if (form.ratioUniform) {
@@ -233,6 +291,10 @@ export function ManagementTab({ user, projects, allTransactions }) {
                 stageName: (form.stageName || '').trim(),
                 phone: (form.phone || '').trim(),
                 email: (form.email || '').trim(),
+                category: form.category === 'collab' ? 'collab' : 'member',
+                payee: form.payee === 'agency' ? 'agency' : 'self',
+                agencyName: (form.agencyName || '').trim(),
+                agencyMemo: (form.agencyMemo || '').trim(),
                 contractStart: form.contractStart || '',
                 contractEnd: form.contractEnd || '',
                 settlementCycle: form.settlementCycle || 'month',
@@ -255,6 +317,10 @@ export function ManagementTab({ user, projects, allTransactions }) {
                 accountNumber: (priv.accountNumber || '').trim(),
                 accountHolder: (priv.accountHolder || '').trim(),
                 bizNo: (priv.bizNo || '').trim(),
+                agencyBizNo: (priv.agencyBizNo || '').trim(),
+                agencyBank: (priv.agencyBank || '').trim(),
+                agencyAccount: (priv.agencyAccount || '').trim(),
+                agencyHolder: (priv.agencyHolder || '').trim(),
                 updatedAt: new Date(),
             };
 
@@ -264,7 +330,8 @@ export function ManagementTab({ user, projects, allTransactions }) {
                 setArtists((prev) => [...prev, { id: ref.id, ...base }]);
                 setIsNew(false);
                 setOpenId(ref.id);
-                setShowAccount(false);
+                setShowAccount(!privData.accountNumber);
+                setShowAgencyAccount(!privData.agencyAccount);
             } else {
                 await updateDoc(doc(db, 'artists', openId), base);
                 await setDoc(doc(db, 'artistPrivate', openId), privData, { merge: true });
@@ -304,36 +371,24 @@ export function ManagementTab({ user, projects, allTransactions }) {
         }
     };
 
-    const formOpen = isNew || !!openId;
     const current = openId ? artists.find((a) => a.id === openId) : null;
+    const backToList = () => scrollTo(listRef);
+
+    const artistForm = (
+        <ArtistForm
+            isNew={isNew} form={form} priv={priv} setField={setField} setPrivField={setPrivField}
+            showAccount={showAccount} setShowAccount={setShowAccount}
+            showAgencyAccount={showAgencyAccount} setShowAgencyAccount={setShowAgencyAccount}
+            incomeCats={incomeCats} setUniform={setUniform} setRatio={setRatio} toggleUniform={toggleUniform}
+            formError={formError} saving={saving} onSave={handleSave} onClose={closeForm}
+            onEnd={!isNew && current ? () => handleEnd(current) : null}
+            onDelete={!isNew && current ? () => handleDelete(current) : null}
+            onBackToList={backToList}
+        />
+    );
 
     return (
-        <div className="flex flex-col w-full gap-5">
-            {/* 상단 */}
-            <div className="shrink-0 flex flex-wrap items-center gap-3">
-                <h2 className="text-lg font-extrabold text-gray-800">아티스트</h2>
-                <div className="flex gap-1 bg-gray-200/70 p-1 rounded-2xl">
-                    {[
-                        { key: 'all', label: '전체' },
-                        { key: 'active', label: '진행중' },
-                        { key: 'ended', label: '종료' },
-                    ].map(({ key, label }) => (
-                        <button key={key} onClick={() => setStatusFilter(key)}
-                            className={`px-4 py-1.5 rounded-xl text-sm font-bold transition ${statusFilter === key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
-                            {label}
-                        </button>
-                    ))}
-                </div>
-                <div className="ml-auto flex gap-2">
-                    <button onClick={() => setShowCats((v) => !v)} className={`${pill} bg-white text-gray-700 ring-1 ring-gray-200 hover:bg-gray-50`}>
-                        항목 관리
-                    </button>
-                    <button onClick={startNew} className={`${pill} bg-emerald-600 text-white hover:bg-emerald-700`}>
-                        + 아티스트 등록
-                    </button>
-                </div>
-            </div>
-
+        <div className="w-full space-y-5">
             {showCats && (
                 <CategoryManager user={user} categories={categories} setCategories={setCategories} onClose={() => setShowCats(false)} />
             )}
@@ -344,97 +399,170 @@ export function ManagementTab({ user, projects, allTransactions }) {
                 </div>
             )}
 
-            {/* 목록 — 활동명·계약기간·상태만 */}
-            <div className="space-y-2">
-                {!loaded && <div className="text-sm text-gray-400 px-1">불러오는 중...</div>}
-                {loaded && visibleArtists.length === 0 && (
-                    <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-8 text-center text-sm font-medium text-gray-400">
-                        등록된 아티스트가 없습니다. 오른쪽 위 '+ 아티스트 등록'으로 추가하세요.
+            <div className="grid grid-cols-1 lg:grid-cols-[minmax(280px,1fr)_1.7fr] gap-6 items-start">
+                {/* 왼쪽: 등록 · 필터 · 목록 */}
+                <div className="space-y-3" ref={listRef}>
+                    <div className="flex gap-2">
+                        <button onClick={startNew} className={`${pill} flex-1 bg-emerald-600 text-white hover:bg-emerald-700`}>
+                            + 아티스트 등록
+                        </button>
+                        <button onClick={() => setShowCats((v) => !v)} className={`${pill} shrink-0 bg-white text-gray-700 ring-1 ring-gray-200 hover:bg-gray-50`}>
+                            항목 관리
+                        </button>
                     </div>
-                )}
-                {visibleArtists.map((a) => {
-                    const active = (a.status || 'active') === 'active';
-                    const left = daysUntil(a.contractEnd);
-                    const isOpen = openId === a.id && !isNew;
-                    return (
-                        <div key={a.id}>
-                            <div onClick={() => openArtist(a)}
-                                className={`cursor-pointer rounded-xl border p-3 transition ${isOpen ? 'border-emerald-400 bg-emerald-50/60 ring-1 ring-emerald-200' : 'border-gray-100 bg-white hover:border-emerald-300 hover:shadow-sm'}`}>
-                                <div className="flex items-center justify-between gap-2 flex-wrap">
-                                    <div className="flex items-center gap-2 min-w-0">
-                                        <span className={`font-bold truncate ${isOpen ? 'text-emerald-800' : 'text-gray-800'}`}>{a.stageName || '(활동명 없음)'}</span>
-                                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ring-1 ${active ? 'bg-green-50 text-green-700 ring-green-200' : 'bg-gray-100 text-gray-500 ring-gray-200'}`}>
-                                            {active ? '진행중' : '종료'}
-                                        </span>
-                                        {active && left !== null && left < 0 && (
-                                            <span className="shrink-0 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-700 ring-1 ring-red-200">
-                                                계약 만료 ({0 - left}일 지남)
-                                            </span>
-                                        )}
-                                        {active && left !== null && left >= 0 && left <= 30 && (
-                                            <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800 ring-1 ring-amber-200">
-                                                계약 만료 D-{left}
-                                            </span>
-                                        )}
-                                    </div>
-                                    <span className="shrink-0 text-xs font-medium text-gray-500">
-                                        {a.contractStart || '?'} ~ {a.contractEnd || '?'}
-                                    </span>
-                                </div>
+
+                    <div className="space-y-2">
+                        <Toggle
+                            value={categoryFilter} onChange={setCategoryFilter}
+                            options={[{ key: 'all', label: '전체' }, { key: 'member', label: '소속' }, { key: 'collab', label: '콜라보' }]}
+                        />
+                        <Toggle
+                            value={statusFilter} onChange={setStatusFilter}
+                            options={[{ key: 'all', label: '전체' }, { key: 'active', label: '진행중' }, { key: 'ended', label: '종료' }]}
+                        />
+                        <input className={inputClass + ' bg-white'} placeholder="이름 검색 (활동명 · 본명 · 소속사)"
+                            value={keyword} onChange={(e) => setKeyword(e.target.value)} />
+                    </div>
+
+                    <div className="space-y-2">
+                        <h3 className="font-bold text-gray-500 text-sm ml-1">🎤 아티스트 ({visibleArtists.length})</h3>
+                        {!loaded && <div className="text-sm text-gray-400 px-1">불러오는 중...</div>}
+                        {loaded && visibleArtists.length === 0 && (
+                            <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-6 text-center text-sm font-medium text-gray-400">
+                                {artists.length === 0 ? "등록된 아티스트가 없습니다. '+ 아티스트 등록'으로 추가하세요." : '조건에 맞는 아티스트가 없습니다.'}
                             </div>
-                            {isOpen && (
-                                <>
-                                    <ArtistForm
-                                        isNew={false} form={form} priv={priv} setField={setField} setPrivField={setPrivField}
-                                        showAccount={showAccount} setShowAccount={setShowAccount}
-                                        incomeCats={incomeCats} setUniform={setUniform} setRatio={setRatio} toggleUniform={toggleUniform}
-                                        formError={formError} saving={saving} onSave={handleSave} onClose={closeForm}
-                                        onEnd={current ? () => handleEnd(current) : null}
-                                        onDelete={current ? () => handleDelete(current) : null}
-                                    />
-                                    {current && (
-                                        <ArtistWorkspace
-                                            user={user} artist={current} categories={categories}
-                                            projects={projects} allTransactions={allTransactions}
-                                            priv={priv}
-                                        />
-                                    )}
-                                </>
-                            )}
+                        )}
+                        {visibleArtists.map((a) => (
+                            <ArtistCard key={a.id} artist={a} active={openId === a.id && !isNew} onClick={() => openArtist(a)} />
+                        ))}
+                    </div>
+                </div>
+
+                {/* 오른쪽: 상세 */}
+                <div ref={detailRef}>
+                    {isNew ? artistForm : current ? (
+                        <div className="space-y-3">
+                            {artistForm}
+                            <ArtistWorkspace
+                                user={user} artist={current} categories={categories}
+                                projects={projects} allTransactions={allTransactions}
+                                priv={priv}
+                            />
                         </div>
-                    );
-                })}
+                    ) : (
+                        <div className="flex items-center justify-center min-h-[320px] rounded-2xl border border-dashed border-gray-200 bg-gray-50 text-sm font-medium text-gray-400">
+                            아티스트를 선택하세요
+                        </div>
+                    )}
+                </div>
             </div>
+        </div>
+    );
+}
 
-            {/* 신규 등록 폼 */}
-            {isNew && (
-                <ArtistForm
-                    isNew form={form} priv={priv} setField={setField} setPrivField={setPrivField}
-                    showAccount={showAccount} setShowAccount={setShowAccount}
-                    incomeCats={incomeCats} setUniform={setUniform} setRatio={setRatio} toggleUniform={toggleUniform}
-                    formError={formError} saving={saving} onSave={handleSave} onClose={closeForm}
-                    onEnd={null} onDelete={null}
-                />
-            )}
+// 공통 pill 토글(필터).
+function Toggle({ value, onChange, options }) {
+    return (
+        <div className="flex gap-1 bg-gray-200/70 p-1 rounded-2xl">
+            {options.map(({ key, label }) => (
+                <button key={key} onClick={() => onChange(key)}
+                    className={`flex-1 px-3 py-1.5 rounded-xl text-sm font-bold transition ${value === key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+                    {label}
+                </button>
+            ))}
+        </div>
+    );
+}
 
-            {!formOpen && loaded && visibleArtists.length > 0 && (
-                <div className="text-xs text-gray-400 px-1">아티스트를 누르면 상세가 열립니다. 한 번 더 누르면 접힙니다.</div>
-            )}
+// ──[ 목록 카드 ]──
+// 소속은 계약기간·만료 배지를, 콜라보는 소속사명을 보여준다(계약 만료 개념이 없다).
+function ArtistCard({ artist, active, onClick }) {
+    const a = artist;
+    const alive = (a.status || 'active') === 'active';
+    const collab = categoryOf(a) === 'collab';
+    const left = daysUntil(a.contractEnd);
+    return (
+        <div onClick={onClick}
+            className={`cursor-pointer rounded-xl border p-3 transition ${active ? 'border-emerald-400 bg-emerald-50/60 ring-1 ring-emerald-200' : 'border-gray-100 bg-white hover:border-emerald-300 hover:shadow-sm'}`}>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-1.5 min-w-0">
+                    <span className={`font-bold truncate ${active ? 'text-emerald-800' : 'text-gray-800'}`}>{a.stageName || '(활동명 없음)'}</span>
+                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ring-1 ${collab ? 'bg-violet-50 text-violet-700 ring-violet-200' : 'bg-emerald-50 text-emerald-700 ring-emerald-200'}`}>
+                        {CATEGORY_LABEL[categoryOf(a)]}
+                    </span>
+                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ring-1 ${alive ? 'bg-green-50 text-green-700 ring-green-200' : 'bg-gray-100 text-gray-500 ring-gray-200'}`}>
+                        {alive ? '진행중' : '종료'}
+                    </span>
+                    {!collab && alive && left !== null && left < 0 && (
+                        <span className="shrink-0 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-700 ring-1 ring-red-200">
+                            계약 만료 ({0 - left}일 지남)
+                        </span>
+                    )}
+                    {!collab && alive && left !== null && left >= 0 && left <= 30 && (
+                        <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800 ring-1 ring-amber-200">
+                            계약 만료 D-{left}
+                        </span>
+                    )}
+                </div>
+                {collab ? (
+                    a.agencyName ? (
+                        <span className="shrink-0 text-xs font-medium text-gray-500 truncate">🏢 {a.agencyName}</span>
+                    ) : null
+                ) : (
+                    <span className="shrink-0 text-xs font-medium text-gray-500">
+                        {a.contractStart || '?'} ~ {a.contractEnd || '?'}
+                    </span>
+                )}
+            </div>
         </div>
     );
 }
 
 // ──[ 아티스트 상세/등록 폼 ]──
 function ArtistForm({ isNew, form, priv, setField, setPrivField, showAccount, setShowAccount,
-    incomeCats, setUniform, setRatio, toggleUniform, formError, saving, onSave, onClose, onEnd, onDelete }) {
+    showAgencyAccount, setShowAgencyAccount,
+    incomeCats, setUniform, setRatio, toggleUniform, formError, saving, onSave, onClose, onEnd, onDelete, onBackToList }) {
 
+    const collab = form.category === 'collab';
+    const agency = form.payee === 'agency';
+    // 소속사가 받으면 세금계산서로 고정한다. 저장된 taxType 값 자체는 덮지 않는다.
+    const taxType = effectiveTaxType(form);
+    // 열림/가림은 불러올 때 한 번 정한다 — 입력 중에 가려지면 글자를 못 친다.
     const hasAccount = (priv.accountNumber || '').length > 0;
-    const accountVisible = showAccount || !hasAccount;
+    const accountVisible = showAccount;
+    const hasAgencyAccount = (priv.agencyAccount || '').length > 0;
+    const agencyAccountVisible = showAgencyAccount;
     const uniSum = sumOf(form.uniformRatio);
 
     return (
-        <div className="mt-2 rounded-2xl border-2 border-emerald-100 bg-white p-5 shadow-sm space-y-6">
-            <h3 className="font-bold text-gray-800">{isNew ? '아티스트 등록' : '아티스트 정보'}</h3>
+        <div className="rounded-2xl border-2 border-emerald-100 bg-white p-5 shadow-sm space-y-6">
+            <div className="flex items-center justify-between gap-2">
+                <h3 className="font-bold text-gray-800">{isNew ? '아티스트 등록' : '아티스트 정보'}</h3>
+                <button type="button" onClick={onBackToList} className="lg:hidden text-xs font-bold text-gray-500 hover:text-gray-800">
+                    ↑ 목록으로
+                </button>
+            </div>
+
+            {/* 구분 · 지급처 */}
+            <section className="grid grid-cols-1 md:grid-cols-2 gap-3 rounded-xl bg-emerald-50/50 p-4">
+                <label className="block">
+                    <span className="text-xs font-bold text-gray-500">구분</span>
+                    <select className={selectClass} value={form.category} onChange={(e) => setField('category', e.target.value)}>
+                        {ARTIST_CATEGORIES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+                    </select>
+                </label>
+                <label className="block">
+                    <span className="text-xs font-bold text-gray-500">지급처</span>
+                    <select className={selectClass} value={form.payee} onChange={(e) => setField('payee', e.target.value)}>
+                        {PAYEES.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+                    </select>
+                </label>
+                <p className="md:col-span-2 text-[11px] font-medium text-gray-500">
+                    {collab
+                        ? '콜라보는 계약·정산비율을 쓰지 않습니다. 곡 단위 조건은 보티즈 탭의 곡 상세에서 정합니다.'
+                        : '소속은 계약기간과 정산비율로 정기 정산합니다.'}
+                </p>
+            </section>
 
             {/* 일반정보 */}
             <section className="space-y-3">
@@ -456,25 +584,35 @@ function ArtistForm({ isNew, form, priv, setField, setPrivField, showAccount, se
                         <span className="text-xs font-bold text-gray-500">이메일</span>
                         <input className={inputClass} value={form.email} onChange={(e) => setField('email', e.target.value)} />
                     </label>
-                    <label className="block">
-                        <span className="text-xs font-bold text-gray-500">계약일</span>
-                        <input type="date" className={inputClass} value={form.contractStart} onChange={(e) => setField('contractStart', e.target.value)} />
-                    </label>
-                    <label className="block">
-                        <span className="text-xs font-bold text-gray-500">종료일</span>
-                        <input type="date" className={inputClass} value={form.contractEnd} onChange={(e) => setField('contractEnd', e.target.value)} />
-                    </label>
-                    <label className="block">
-                        <span className="text-xs font-bold text-gray-500">정산주기</span>
-                        <select className={selectClass} value={form.settlementCycle} onChange={(e) => setField('settlementCycle', e.target.value)}>
-                            {CYCLES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
-                        </select>
-                    </label>
+                    {!collab && (
+                        <>
+                            <label className="block">
+                                <span className="text-xs font-bold text-gray-500">계약일</span>
+                                <input type="date" className={inputClass} value={form.contractStart} onChange={(e) => setField('contractStart', e.target.value)} />
+                            </label>
+                            <label className="block">
+                                <span className="text-xs font-bold text-gray-500">종료일</span>
+                                <input type="date" className={inputClass} value={form.contractEnd} onChange={(e) => setField('contractEnd', e.target.value)} />
+                            </label>
+                            <label className="block">
+                                <span className="text-xs font-bold text-gray-500">정산주기</span>
+                                <select className={selectClass} value={form.settlementCycle} onChange={(e) => setField('settlementCycle', e.target.value)}>
+                                    {CYCLES.map((c) => <option key={c.key} value={c.key}>{c.label}</option>)}
+                                </select>
+                            </label>
+                        </>
+                    )}
                     <label className="block">
                         <span className="text-xs font-bold text-gray-500">세무 유형</span>
-                        <select className={selectClass} value={form.taxType || 'withholding'} onChange={(e) => setField('taxType', e.target.value)}>
-                            {TAX_TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
-                        </select>
+                        {agency ? (
+                            <div className={inputClass + ' font-bold text-gray-700 select-none'}>
+                                {TAX_TYPE_LABEL.invoice} <span className="text-[10px] font-bold text-gray-400">· 지급처가 소속사라 고정</span>
+                            </div>
+                        ) : (
+                            <select className={selectClass} value={form.taxType || 'withholding'} onChange={(e) => setField('taxType', e.target.value)}>
+                                {TAX_TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+                            </select>
+                        )}
                     </label>
                     <label className="block">
                         <span className="text-xs font-bold text-gray-500">상태</span>
@@ -489,6 +627,65 @@ function ArtistForm({ isNew, form, priv, setField, setPrivField, showAccount, se
                     <input className={inputClass} value={form.memo} onChange={(e) => setField('memo', e.target.value)} />
                 </label>
             </section>
+
+            {/* 소속사 정보 — 콜라보이거나 지급처가 소속사일 때만 */}
+            {(collab || agency) && (
+                <section className="space-y-3 rounded-xl bg-violet-50/60 p-4">
+                    <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-bold text-gray-500">소속사 정보</span>
+                        {agency && (
+                            <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-violet-700 ring-1 ring-violet-200">
+                                세금계산서 발행처
+                            </span>
+                        )}
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <label className="block">
+                            <span className="text-xs font-bold text-gray-500">소속사명</span>
+                            <input className={inputClass} value={form.agencyName || ''} onChange={(e) => setField('agencyName', e.target.value)} />
+                        </label>
+                        <label className="block">
+                            <span className="text-xs font-bold text-gray-500">사업자등록번호</span>
+                            <input className={inputClass} value={priv.agencyBizNo || ''} onChange={(e) => setPrivField('agencyBizNo', e.target.value)} placeholder="000-00-00000" />
+                        </label>
+                        <label className="block">
+                            <span className="text-xs font-bold text-gray-500">은행</span>
+                            <input className={inputClass} value={priv.agencyBank || ''} onChange={(e) => setPrivField('agencyBank', e.target.value)} />
+                        </label>
+                        <label className="block">
+                            <span className="text-xs font-bold text-gray-500">예금주</span>
+                            <input className={inputClass} value={priv.agencyHolder || ''} onChange={(e) => setPrivField('agencyHolder', e.target.value)} />
+                        </label>
+                        <label className="block md:col-span-2">
+                            <span className="text-xs font-bold text-gray-500">소속사 계좌</span>
+                            <div className="flex gap-2">
+                                {agencyAccountVisible ? (
+                                    <input className={inputClass} value={priv.agencyAccount || ''} onChange={(e) => setPrivField('agencyAccount', e.target.value)} placeholder="숫자만 또는 하이픈 포함" />
+                                ) : (
+                                    <div className={inputClass + ' font-bold text-gray-700 select-none'}>{maskAccount(priv.agencyAccount)}</div>
+                                )}
+                                {hasAgencyAccount && (
+                                    <button type="button" onClick={() => setShowAgencyAccount(!showAgencyAccount)}
+                                        className={`${pill} shrink-0 bg-white text-gray-700 ring-1 ring-gray-200 hover:bg-gray-50`}>
+                                        {showAgencyAccount ? '가리기' : '보기'}
+                                    </button>
+                                )}
+                            </div>
+                        </label>
+                        <label className="block md:col-span-2">
+                            <span className="text-xs font-bold text-gray-500">소속사 메모</span>
+                            <input className={inputClass} value={form.agencyMemo || ''} onChange={(e) => setField('agencyMemo', e.target.value)} />
+                        </label>
+                    </div>
+                    {agency && (
+                        <p className="text-[11px] font-bold text-violet-700">
+                            정산금은 소속사 계좌로 지급하고, 세금계산서는 소속사
+                            {form.agencyName ? ' ' + form.agencyName : ''}
+                            {priv.agencyBizNo ? ' (' + priv.agencyBizNo + ')' : ''} 에서 받습니다.
+                        </p>
+                    )}
+                </section>
+            )}
 
             {/* 민감정보 */}
             <section className="space-y-3 rounded-xl bg-gray-50 p-4">
@@ -515,7 +712,7 @@ function ArtistForm({ isNew, form, priv, setField, setPrivField, showAccount, se
                         <span className="text-xs font-bold text-gray-500">예금주</span>
                         <input className={inputClass} value={priv.accountHolder} onChange={(e) => setPrivField('accountHolder', e.target.value)} />
                     </label>
-                    {form.taxType === 'invoice' && (
+                    {taxType === 'invoice' && !agency && (
                         <label className="block md:col-span-2">
                             <span className="text-xs font-bold text-gray-500">사업자등록번호</span>
                             <input className={inputClass} value={priv.bizNo || ''} onChange={(e) => setPrivField('bizNo', e.target.value)} placeholder="000-00-00000" />
@@ -540,57 +737,59 @@ function ArtistForm({ isNew, form, priv, setField, setPrivField, showAccount, se
                 </div>
             </section>
 
-            {/* 정산비율 */}
-            <section className="space-y-3">
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                    <span className="text-xs font-bold text-gray-400">정산비율 (회사 : 아티스트)</span>
-                    <label className="flex items-center gap-2 cursor-pointer select-none">
-                        <input type="checkbox" className="w-4 h-4 rounded" checked={!!form.ratioUniform} onChange={(e) => toggleUniform(e.target.checked)} />
-                        <span className="text-xs font-bold text-gray-600">모든 수익항목에 같은 비율 적용</span>
-                    </label>
-                </div>
+            {/* 정산비율 — 소속만 */}
+            {!collab && (
+                <section className="space-y-3">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <span className="text-xs font-bold text-gray-400">정산비율 (회사 : 아티스트)</span>
+                        <label className="flex items-center gap-2 cursor-pointer select-none">
+                            <input type="checkbox" className="w-4 h-4 rounded" checked={!!form.ratioUniform} onChange={(e) => toggleUniform(e.target.checked)} />
+                            <span className="text-xs font-bold text-gray-600">모든 수익항목에 같은 비율 적용</span>
+                        </label>
+                    </div>
 
-                {form.ratioUniform ? (
-                    <div className="flex items-end gap-2 rounded-xl bg-emerald-50/60 p-4 flex-wrap">
-                        <label className="block">
-                            <span className="text-xs font-bold text-gray-500">회사 %</span>
-                            <input type="number" min="0" max="100" className={inputClass + ' w-28'} value={form.uniformRatio.company} onChange={(e) => setUniform('company', e.target.value)} />
-                        </label>
-                        <span className="pb-3 font-bold text-gray-400">:</span>
-                        <label className="block">
-                            <span className="text-xs font-bold text-gray-500">아티스트 %</span>
-                            <input type="number" min="0" max="100" className={inputClass + ' w-28'} value={form.uniformRatio.artist} onChange={(e) => setUniform('artist', e.target.value)} />
-                        </label>
-                        <span className={`pb-3 text-sm font-bold ${uniSum === 100 ? 'text-gray-400' : 'text-red-500'}`}>
-                            합 {uniSum === null ? '-' : uniSum + '%'}
-                        </span>
-                    </div>
-                ) : incomeCats.length === 0 ? (
-                    <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 p-5 text-center text-sm text-gray-400">
-                        수익 항목이 없습니다. 위 '항목 관리'에서 수익 항목을 먼저 추가하세요.
-                    </div>
-                ) : (
-                    <div className="space-y-2">
-                        {incomeCats.map((c) => {
-                            const p = form.ratios[c.id];
-                            const s = sumOf(p);
-                            return (
-                                <div key={c.id} className="flex items-center gap-2 rounded-xl bg-gray-50 px-3 py-2 flex-wrap">
-                                    <span className="w-32 shrink-0 text-sm font-bold text-gray-700 truncate">{c.name}</span>
-                                    <input type="number" min="0" max="100" className={inputClass + ' w-24'} placeholder="회사"
-                                        value={p && p.company !== undefined ? p.company : ''} onChange={(e) => setRatio(c.id, 'company', e.target.value)} />
-                                    <span className="font-bold text-gray-400">:</span>
-                                    <input type="number" min="0" max="100" className={inputClass + ' w-24'} placeholder="아티스트"
-                                        value={p && p.artist !== undefined ? p.artist : ''} onChange={(e) => setRatio(c.id, 'artist', e.target.value)} />
-                                    <span className={`text-sm font-bold ${s === 100 ? 'text-gray-400' : 'text-red-500'}`}>
-                                        합 {s === null ? '-' : s + '%'}
-                                    </span>
-                                </div>
-                            );
-                        })}
-                    </div>
-                )}
-            </section>
+                    {form.ratioUniform ? (
+                        <div className="flex items-end gap-2 rounded-xl bg-emerald-50/60 p-4 flex-wrap">
+                            <label className="block">
+                                <span className="text-xs font-bold text-gray-500">회사 %</span>
+                                <input type="number" min="0" max="100" className={inputClass + ' w-28'} value={form.uniformRatio.company} onChange={(e) => setUniform('company', e.target.value)} />
+                            </label>
+                            <span className="pb-3 font-bold text-gray-400">:</span>
+                            <label className="block">
+                                <span className="text-xs font-bold text-gray-500">아티스트 %</span>
+                                <input type="number" min="0" max="100" className={inputClass + ' w-28'} value={form.uniformRatio.artist} onChange={(e) => setUniform('artist', e.target.value)} />
+                            </label>
+                            <span className={`pb-3 text-sm font-bold ${uniSum === 100 ? 'text-gray-400' : 'text-red-500'}`}>
+                                합 {uniSum === null ? '-' : uniSum + '%'}
+                            </span>
+                        </div>
+                    ) : incomeCats.length === 0 ? (
+                        <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50 p-5 text-center text-sm text-gray-400">
+                            수익 항목이 없습니다. 왼쪽 '항목 관리'에서 수익 항목을 먼저 추가하세요.
+                        </div>
+                    ) : (
+                        <div className="space-y-2">
+                            {incomeCats.map((c) => {
+                                const p = form.ratios[c.id];
+                                const s = sumOf(p);
+                                return (
+                                    <div key={c.id} className="flex items-center gap-2 rounded-xl bg-gray-50 px-3 py-2 flex-wrap">
+                                        <span className="w-32 shrink-0 text-sm font-bold text-gray-700 truncate">{c.name}</span>
+                                        <input type="number" min="0" max="100" className={inputClass + ' w-24'} placeholder="회사"
+                                            value={p && p.company !== undefined ? p.company : ''} onChange={(e) => setRatio(c.id, 'company', e.target.value)} />
+                                        <span className="font-bold text-gray-400">:</span>
+                                        <input type="number" min="0" max="100" className={inputClass + ' w-24'} placeholder="아티스트"
+                                            value={p && p.artist !== undefined ? p.artist : ''} onChange={(e) => setRatio(c.id, 'artist', e.target.value)} />
+                                        <span className={`text-sm font-bold ${s === 100 ? 'text-gray-400' : 'text-red-500'}`}>
+                                            합 {s === null ? '-' : s + '%'}
+                                        </span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                </section>
+            )}
 
             {formError && (
                 <div className="rounded-xl bg-red-50 border border-red-200 p-3 text-sm font-bold text-red-700">{formError}</div>

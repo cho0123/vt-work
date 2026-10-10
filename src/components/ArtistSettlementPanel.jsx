@@ -14,7 +14,8 @@ import {
     monthsOfPeriod, periodLabel, periodKey, periodCount, linkTypeOf,
 } from '../domain/artistSettlement.js';
 import { printArtistSettlement } from '../utils/artistSettlementDoc.js';
-import { computePayout, payoutSnapshot, payoutOfSettlement, taxTypeOf, TAX_TYPE_LABEL } from '../domain/artistPayout.js';
+import { computePayout, payoutSnapshot, payoutOfSettlement, TAX_TYPE_LABEL } from '../domain/artistPayout.js';
+import { effectiveTaxType, payeeInfo, payeeSnapshot, payeeOfSettlement } from '../domain/artistProfile.js';
 
 const inputClass = "w-full p-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-gray-800 outline-none transition text-sm";
 const selectClass = inputClass + " appearance-none";
@@ -111,7 +112,10 @@ export function ArtistSettlementPanel({
     const missingCats = useMemo(() => membersMissingCategory(projects, artistId), [projects, artistId]);
 
     // 아티스트 몫 이후 단계(세금). 몫 계산은 3단계 그대로 두고 여기서 받아서만 쓴다.
-    const taxType = taxTypeOf(artist);
+    // 지급처가 소속사면 세금계산서로 고정된다(domain/artistProfile.js).
+    const taxType = effectiveTaxType(artist);
+    // 지금 기준 지급처. 확정할 때 스냅샷으로 함께 저장한다.
+    const payeeNow = useMemo(() => payeeInfo(artist, priv), [artist, priv]);
     const payout = useMemo(() => computePayout({ artistShare: result.artistShare, taxType }), [result.artistShare, taxType]);
 
     // 콜라보 곡 — 기간과 무관한 전체 진행 + 이 기간에 생긴 공유액
@@ -172,6 +176,7 @@ export function ArtistSettlementPanel({
                 artistRatePercent: result.artistRatePercent,
                 artistShare: result.artistShare, carryOut: result.carryOut,
                 ...payoutSnapshot(payout),
+                ...payeeSnapshot(artist, priv),
                 status: 'confirmed', paidAt: '', confirmedAt: new Date(),
             });
         } catch (e) {
@@ -198,6 +203,7 @@ export function ArtistSettlementPanel({
                 })),
                 artistShare: collabPeriodTotal,
                 ...payoutSnapshot(computePayout({ artistShare: collabPeriodTotal, taxType })),
+                ...payeeSnapshot(artist, priv),
                 status: 'confirmed', paidAt: '', confirmedAt: new Date(),
             });
         } catch (e) {
@@ -225,6 +231,7 @@ export function ArtistSettlementPanel({
                 artistRatePercent: calc.artistRatePercent,
                 artistShare: calc.artistShare, carryOut: 0,
                 ...payoutSnapshot(computePayout({ artistShare: calc.artistShare, taxType })),
+                ...payeeSnapshot(artist, priv),
                 status: 'confirmed', paidAt: '', confirmedAt: new Date(),
             });
             await updateDoc(doc(db, 'artistCases', c.id), { status: 'done' });
@@ -281,9 +288,8 @@ export function ArtistSettlementPanel({
             months: (s.months || []).length ? s.months[0] + ' ~ ' + s.months[s.months.length - 1] : '',
             basisLabel: AMOUNT_BASIS_LABEL[s.basis || AMOUNT_BASIS],
             issueDate: todayStr(),
-            bank: (priv && priv.bank) || '',
-            accountNumber: (priv && priv.accountNumber) || '',
-            accountHolder: (priv && priv.accountHolder) || '',
+            // 지급처는 확정 당시 스냅샷을 쓴다. 그 전에 확정한 건은 지금 정보로 적는다.
+            payee: payeeOfSettlement(s) || payeeNow,
             rows: s.rows || [],
             songs: s.songs || [],
             collabs: s.collabs || [],
@@ -296,7 +302,6 @@ export function ArtistSettlementPanel({
             carryOut: s.carryOut || 0,
             artistShare: s.artistShare || 0,
             payout: payoutOfSettlement(s),
-            bizNo: (priv && priv.bizNo) || '',
         });
     };
 
@@ -311,6 +316,11 @@ export function ArtistSettlementPanel({
                     <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-500">
                         {CYCLE_LABEL[cycle]} 단위 · {AMOUNT_BASIS_LABEL[AMOUNT_BASIS]} · {TAX_TYPE_LABEL[taxType]}
                     </span>
+                    {payeeNow.payee === 'agency' && (
+                        <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[10px] font-bold text-violet-700 ring-1 ring-violet-200">
+                            지급처: 소속사 {payeeNow.name || '(이름 없음)'}
+                        </span>
+                    )}
                 </div>
                 <div className="flex items-center gap-2">
                     <select className={selectClass + ' w-28'} value={year} onChange={(e) => setYear(Number(e.target.value))}>
@@ -544,6 +554,7 @@ export function ArtistSettlementPanel({
                                                 <span className="text-xs font-bold text-green-700">
                                                     실지급 {payoutOfSettlement(s) ? won(payoutOfSettlement(s).netPayout) : won(s.artistShare)}원
                                                 </span>
+                                                <PayeeLine info={payeeOfSettlement(s) || payeeNow} />
                                                 <input type="date" className={inputClass + ' w-40'} value={payDate} onChange={(e) => setPayDate(e.target.value)} />
                                                 <button disabled={busy} onClick={() => markPaid(s)} className={`${pill} bg-green-600 text-white hover:bg-green-700`}>지급 확인</button>
                                                 <button onClick={() => setPayFor(null)} className={`${pill} bg-gray-200 text-gray-600`}>취소</button>
@@ -561,7 +572,7 @@ export function ArtistSettlementPanel({
                                     )}
                                 </div>
 
-                                {openDoc === s.id && <DocPreview s={s} priv={priv} artist={artist} />}
+                                {openDoc === s.id && <DocPreview s={s} payeeNow={payeeNow} artist={artist} />}
                             </div>
                         );
                     })
@@ -606,13 +617,23 @@ function Box({ label, value, tone }) {
     );
 }
 
+// 돈 받는 쪽 한 줄. 지급처가 소속사면 소속사 이름·계좌를 보여준다(계좌는 뒤 4자리만).
+function PayeeLine({ info }) {
+    if (!info) return null;
+    return (
+        <span className="text-[11px] font-bold text-gray-600">
+            → {info.payeeLabel}
+            {info.name ? ' ' + info.name : ''}
+            {info.bank || info.accountMasked ? ' · ' + (info.bank || '') + ' ' + (info.accountMasked || '') : ''}
+            {info.holder ? ' (' + info.holder + ')' : ''}
+        </span>
+    );
+}
+
 // 화면에서 바로 보는 정산서(인쇄본과 같은 내용).
-function DocPreview({ s, priv, artist }) {
-    const mask = (v) => {
-        const t = String(v || '').trim();
-        if (!t) return '';
-        return t.length <= 4 ? t : '****' + t.slice(-4);
-    };
+// 지급처는 확정 당시 스냅샷을 쓰고, 그 전에 확정한 건만 지금 정보(payeeNow)로 보여준다.
+function DocPreview({ s, payeeNow, artist }) {
+    const payeeInfoHere = payeeOfSettlement(s) || payeeNow;
     return (
         <div className="rounded-xl bg-white ring-1 ring-gray-200 p-4 text-sm space-y-3">
             <div className="flex justify-between items-end border-b-2 border-gray-900 pb-2">
@@ -622,7 +643,10 @@ function DocPreview({ s, priv, artist }) {
                 </div>
                 <div className="text-[10px] text-gray-400 text-right">
                     금액 기준: {AMOUNT_BASIS_LABEL[s.basis || AMOUNT_BASIS]}<br />
-                    입금 계좌: {(priv && priv.bank) || '-'} {mask(priv && priv.accountNumber)}
+                    지급처: {payeeInfoHere.payeeLabel}{payeeInfoHere.name ? ' ' + payeeInfoHere.name : ''}
+                    {payeeInfoHere.bizNo ? ' (' + payeeInfoHere.bizNo + ')' : ''}<br />
+                    입금 계좌: {payeeInfoHere.bank || '-'} {payeeInfoHere.accountMasked}
+                    {payeeInfoHere.holder ? ' (' + payeeInfoHere.holder + ')' : ''}
                 </div>
             </div>
 

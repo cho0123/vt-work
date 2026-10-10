@@ -19,6 +19,10 @@ import {
     computePayout, payoutSnapshot, payoutOfSettlement, taxTypeOf,
     WITHHOLDING_RATE, LOCAL_TAX_RATE, VAT_RATE,
 } from '../src/domain/artistPayout.js';
+import {
+    categoryOf, payeeOf, effectiveTaxType,
+    payeeInfo, payeeSnapshot, payeeOfSettlement,
+} from '../src/domain/artistProfile.js';
 
 let pass = 0;
 let fail = 0;
@@ -286,6 +290,87 @@ eq('스냅샷 지급액 1,000,000', payoutOfSettlement(invSnap).netPayout, 10000
 // 공급가를 안 담고 확정했던 옛 문서는 몫 - 부가세 로 되돌린다
 eq('공급가 없는 옛 확정분은 몫-부가세로 복원',
     payoutOfSettlement({ taxType: 'invoice', artistShare: 851321, vat: 77393, netPayout: 851321 }).supplyAmount, 773928);
+
+// ──[ 7. 구분(소속/콜라보) · 지급처(본인/소속사) ]───────────────────────
+console.log('\n── 7. 구분 · 지급처 — 옛 문서 호환과 확정 스냅샷');
+
+// 필드가 없는 옛 아티스트 문서는 소속·본인으로 본다(데이터는 고치지 않는다).
+eq('category 없으면 소속(member)', categoryOf({ stageName: '옛데이터' }), 'member');
+eq('category 빈 문자열도 소속', categoryOf({ category: '' }), 'member');
+eq("category 'collab' 은 콜라보", categoryOf({ category: 'collab' }), 'collab');
+eq('payee 없으면 본인(self)', payeeOf({ stageName: '옛데이터' }), 'self');
+eq("payee 'agency' 는 소속사", payeeOf({ payee: 'agency' }), 'agency');
+
+// 옛 문서는 세무 유형도 전과 똑같이 나와야 한다.
+eq('옛 문서 세무 유형 그대로 원천징수', effectiveTaxType({ stageName: '옛데이터' }), 'withholding');
+eq('본인 지급 + 세금계산서 설정이면 세금계산서',
+    effectiveTaxType({ payee: 'self', taxType: 'invoice' }), 'invoice');
+// 소속사가 받으면 저장된 taxType 과 무관하게 세금계산서로 고정한다.
+eq('소속사 지급이면 세금계산서로 고정',
+    effectiveTaxType({ payee: 'agency', taxType: 'withholding' }), 'invoice');
+eq('소속사 지급이어도 저장된 taxType 값 자체는 그대로',
+    taxTypeOf({ payee: 'agency', taxType: 'withholding' }), 'withholding');
+
+// 지급처 정보 — 소속사면 소속사 쪽, 본인이면 아티스트 쪽. 계좌는 뒤 4자리만.
+const selfArtist = { stageName: '테스트가수', payee: 'self' };
+const selfPriv = { bank: '국민', accountNumber: '123456789012', accountHolder: '김본명', bizNo: '111-11-11111' };
+const selfInfo = payeeInfo(selfArtist, selfPriv);
+eq('본인 지급: 받는 쪽 이름 = 활동명', selfInfo.name, '테스트가수');
+eq('본인 지급: 계좌는 뒤 4자리만', selfInfo.accountMasked, '****9012');
+
+const agencyArtist = { stageName: '테스트가수', payee: 'agency', agencyName: '테스트기획', taxType: 'withholding' };
+const agencyPriv = {
+    bank: '국민', accountNumber: '123456789012', accountHolder: '김본명', bizNo: '111-11-11111',
+    agencyBank: '신한', agencyAccount: '987654321098', agencyHolder: '(주)테스트기획', agencyBizNo: '222-22-22222',
+};
+const agencyInfo = payeeInfo(agencyArtist, agencyPriv);
+eq('소속사 지급: 받는 쪽 이름 = 소속사명', agencyInfo.name, '테스트기획');
+eq('소속사 지급: 사업자번호는 소속사 것', agencyInfo.bizNo, '222-22-22222');
+eq('소속사 지급: 은행·계좌도 소속사 것', [agencyInfo.bank, agencyInfo.accountMasked], ['신한', '****1098']);
+
+// 소속사 지급은 세금계산서 규칙으로 계산된다(몫 = 부가세 포함 지급액).
+const agencyPayout = computePayout({ artistShare: 1000000, taxType: effectiveTaxType(agencyArtist) });
+eq('소속사 지급: 지급액 = 몫 1,000,000', agencyPayout.netPayout, 1000000);
+eq('소속사 지급: 공급가 909,091', agencyPayout.supplyAmount, 909091);
+eq('소속사 지급: 원천세 없음', [agencyPayout.incomeTax, agencyPayout.localTax], [0, 0]);
+
+// 확정 스냅샷 — 확정 뒤 소속사 정보를 바꿔도 확정분은 그대로여야 한다.
+const agencyConfirmed = {
+    artistShare: 1000000,
+    ...payoutSnapshot(agencyPayout),
+    ...payeeSnapshot(agencyArtist, agencyPriv),
+};
+const frozenPayee = JSON.parse(JSON.stringify(agencyConfirmed));
+// 확정 후 소속사를 바꾸고 계좌도 교체
+agencyArtist.agencyName = '바뀐기획';
+agencyPriv.agencyAccount = '555555555555';
+agencyPriv.agencyBizNo = '333-33-33333';
+const changedInfo = payeeInfo(agencyArtist, agencyPriv);
+eq('지금 정보는 바뀐다', [changedInfo.name, changedInfo.accountMasked, changedInfo.bizNo],
+    ['바뀐기획', '****5555', '333-33-33333']);
+eq('확정분 지급처 이름은 그대로 테스트기획', payeeOfSettlement(frozenPayee).name, '테스트기획');
+eq('확정분 계좌도 그대로 ****1098', payeeOfSettlement(frozenPayee).accountMasked, '****1098');
+eq('확정분 사업자번호도 그대로', payeeOfSettlement(frozenPayee).bizNo, '222-22-22222');
+eq('확정분 지급처 구분은 소속사', payeeOfSettlement(frozenPayee).payee, 'agency');
+eq('확정 스냅샷에는 전체 계좌번호를 담지 않는다',
+    JSON.stringify(frozenPayee).includes('987654321098'), false);
+
+// 본인 지급 확정분
+const selfSnap = { artistShare: 500000, ...payeeSnapshot(selfArtist, selfPriv) };
+eq('본인 지급 확정분 라벨', payeeOfSettlement(selfSnap).payeeLabel, '본인');
+
+// 이 기능 이전에 확정된 건에는 payee 가 없다 — 화면이 지금 정보로 보여주도록 null 을 준다.
+eq('옛 확정분은 지급처 정보 없음(null)', payeeOfSettlement({ artistShare: 500000 }), null);
+
+// 구분·지급처는 몫 계산에 영향을 주지 않는다(1번 사례와 같은 값이 나와야 한다).
+const asCollabPayee = computeGeneralSettlement({
+    artist: { ...artistWeighted, category: 'collab', payee: 'agency' },
+    categories: CATS,
+    ledgerRows: [row('income', 'ev', 1500), row('income', 'mu', 500), row('expense', 'ex', 400)],
+    songRows: [],
+    carryIn: 0,
+});
+eq('구분·지급처를 붙여도 몫은 그대로 560', asCollabPayee.artistShare, 560);
 
 // ──[ 결과 ]──────────────────────────────────────────────────────────────
 console.log(`\n${pass}/${pass + fail} 통과` + (fail ? ` — 실패 ${fail}건` : ''));
