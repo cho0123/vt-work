@@ -2,7 +2,7 @@
 // 자체 로그인/App 래퍼는 걷어내고, 스케쥴 앱의 공유 db·로그인(user)을 그대로 쓴다.
 // 컬렉션은 스케쥴 데이터와 분리하기 위해 acc_projects / acc_transactions 사용.
 import React, { useState, useEffect } from 'react';
-import { collection, addDoc, getDocs, doc, deleteDoc, updateDoc, deleteField, query, where } from 'firebase/firestore';
+import { collection, addDoc, getDocs, getDoc, doc, setDoc, deleteDoc, updateDoc, deleteField, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { ManagementTab } from './ManagementTab.jsx';
 import { isOwner } from '../constants/owners.js';
@@ -10,6 +10,8 @@ import { ArtistShareEditor } from './ArtistShareEditor.jsx';
 import { validateShares, normalizeShares, artistNamesOf } from '../utils/artistShares.js';
 import { PhotoPicker, PhotoBadge, PhotoModal } from './PhotoAttach.jsx';
 import { addPhotos, deleteAllPhotos } from '../utils/photos.js';
+import { backupVotiz, getLastBackup, BACKUP_KINDS } from '../utils/backup.js';
+import { formatWhen, isWithin24h } from '../utils/datetime.js';
 
 // ──[ 1. 유틸리티 함수 ]──
 const formatNumber = (num) => {
@@ -35,6 +37,12 @@ export function VotizTab({ user }) {
   // 곡 연결에서 '곡 수익을 넣을 항목' 을 고를 때 쓴다(매니지먼트 공통 항목).
   const [mgmtCats, setMgmtCats] = useState([]);
 
+  // '최종정리' — 보티즈·매니지먼트 데이터를 한 묶음으로 백업한다.
+  // 마지막으로 누른 시각은 학생관리 '입금확인 처리' 와 같은 방식으로 site_settings 에 적어 둔다
+  // (백업 목록을 매번 훑지 않으려고. 24시간 규칙은 누를 때 백업 목록에서 직접 확인한다).
+  const [cleanupAt, setCleanupAt] = useState(null);
+  const [cleanupBusy, setCleanupBusy] = useState(false);
+
   const [selectedYear, setSelectedYear] = useState('all');
   const [selectedMonth, setSelectedMonth] = useState('all');
 
@@ -42,6 +50,35 @@ export function VotizTab({ user }) {
   const patchTransaction = (id, fields) =>
       setTransactions((prev) => prev.map((t) => (t.id === id ? { ...t, ...fields } : t)));
 
+
+  /** '최종정리' — 보티즈·매니지먼트 묶음 백업. 24시간 안에 받아뒀으면 건너뛴다. */
+  const handleFinalCleanup = async () => {
+      if (cleanupBusy) return;
+      if (!window.confirm('보티즈·매니지먼트 데이터를 백업합니다.\n(곡·수입지출·아티스트·장부·정산 — 사진은 제외)')) return;
+      setCleanupBusy(true);
+      try {
+          let last = null;
+          try {
+              last = await getLastBackup(db, BACKUP_KINDS.VOTIZ);
+          } catch (e) {
+              console.error('최근 보티즈 백업 조회 실패', e);   // 조회 실패는 안전장치일 뿐이라 그냥 진행
+          }
+          if (isWithin24h(last && last.at)) {   // 24시간 규칙은 주간마감·입금확인과 같은 함수를 쓴다
+              alert('마지막 최종정리: ' + formatWhen(last.at) + '\n24시간 안에 이미 받아둬서 이번엔 백업을 건너뜁니다.');
+              return;
+          }
+          const { count, chunkCount } = await backupVotiz(db, '최종정리');
+          const now = new Date().toISOString();
+          await setDoc(doc(db, 'site_settings', 'votiz_tab'), { cleanupAt: now }, { merge: true });
+          setCleanupAt(now);
+          alert('최종정리 완료 — ' + count.toLocaleString() + '건을 백업했습니다 (조각 ' + chunkCount + '개).');
+      } catch (e) {
+          console.error('최종정리 실패', e);
+          alert('최종정리(백업)에 실패했습니다. 데이터에는 이상 없습니다.');
+      } finally {
+          setCleanupBusy(false);
+      }
+  };
 
   const handleMonthClick = (year, month) => {
       setSelectedYear(year);
@@ -79,6 +116,8 @@ export function VotizTab({ user }) {
         if (alive) setArtistList(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
         const catSnap = await getDocs(query(collection(db, 'mgmtCategories'), where('uid', '==', user.uid)));
         if (alive) setMgmtCats(catSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        const st = await getDoc(doc(db, 'site_settings', 'votiz_tab'));
+        if (alive && st.exists()) setCleanupAt(st.data().cleanupAt || null);
       } catch (e) {
         console.warn('아티스트 목록을 못 읽었습니다(곡 연결 입력칸만 영향).', e && e.message);
       }
@@ -157,6 +196,18 @@ export function VotizTab({ user }) {
             </div>
             <span className="text-xs font-medium text-gray-400">현재 조회: {getPeriodText()}</span>
 
+            {/* 최종정리 — 보티즈·매니지먼트 백업. 원장 계정에만 보인다. */}
+            {isOwner(user) && (
+                <div className="md:ml-auto flex items-center gap-2">
+                    {cleanupAt && (
+                        <span className="text-xs font-medium text-gray-400">마지막 최종정리: {formatWhen(cleanupAt)}</span>
+                    )}
+                    <button onClick={handleFinalCleanup} disabled={cleanupBusy}
+                        className={`shrink-0 rounded-full px-4 py-2 text-sm font-bold shadow-sm transition active:scale-95 ${cleanupBusy ? 'bg-gray-200 text-gray-400' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}>
+                        {cleanupBusy ? '정리 중...' : '최종정리'}
+                    </button>
+                </div>
+            )}
         </div>
 
         {/* 상단 총정산 요약 카드 (총수입·총지출·순수익) */}

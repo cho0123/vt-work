@@ -57,7 +57,7 @@ import {
     writeBatch,
     runTransaction,
 } from 'firebase/firestore';
-import { backupToFirestore, backupToLocalFile, getLastBackup } from './utils/backup.js';
+import { backupToFirestore, backupToLocalFile, getLastBackup, backupVoicetuning, BACKUP_KINDS } from './utils/backup.js';
 import { bulkCompleteTargets } from './domain/bulkComplete.js';
 import {
     formatDateLocal,
@@ -100,24 +100,10 @@ import {
 } from './domain/rotation.js';
 import { printStudentRecordPdf } from './utils/studentRecordDoc.js';
 import { fixedScheduleOccursOn } from './domain/fixedRecurrence.js';
+// 날짜 표시·24시간 판정은 보티즈 탭도 같이 쓴다(utils/datetime.js 한 벌).
+import { formatWhen, isWithin24h } from './utils/datetime.js';
 
 const WEEKDAY_LABELS = ['일', '월', '화', '수', '목', '금', '토'];
-
-/** 화면에 보여줄 날짜/시각 (예: 7월 22일(수) 오후 06:40). 값이 없으면 null. */
-function formatWhen(value) {
-    if (!value) return null;
-    const d = value instanceof Date ? value : new Date(value);
-    if (isNaN(d.getTime())) return null;
-    const time = d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
-    return `${d.getMonth() + 1}월 ${d.getDate()}일(${WEEKDAY_LABELS[d.getDay()]}) ${time}`;
-}
-
-/** 하루(24시간) 안에 있었던 일인지. 백업을 또 할지 말지 판단하는 공통 기준. */
-function isWithin24h(value) {
-    if (!value) return false;
-    const d = value instanceof Date ? value : new Date(value);
-    return !isNaN(d.getTime()) && Date.now() - d.getTime() < 24 * 60 * 60 * 1000;
-}
 
 /** 파일 다운로드가 마땅치 않은 기기(핸드폰·태블릿)인지. 로컬 백업을 건너뛸 때 쓴다. */
 function isMobileDevice() {
@@ -256,6 +242,32 @@ function App() {
     };
 
     // [NEW] 정산 마감 토글 핸들러
+    /**
+     * 보이스튜닝 정산 묶음 백업 — '정산예정'(그 달 마감) 버튼 뒤에 붙는다.
+     * 24시간 안에 같은 묶음을 받아뒀으면 건너뛴다(같은 내용이 두 벌 쌓이는 걸 막는다).
+     * 마감 자체를 막지 않도록, 실패해도 알림만 띄운다.
+     */
+    const runVoicetuningBackup = async (reason) => {
+        let last = null;
+        try {
+            last = await getLastBackup(db, BACKUP_KINDS.VOICETUNING);
+        } catch (e) {
+            // 조회 실패는 안전장치일 뿐이라 그냥 백업을 진행한다.
+            console.error('최근 보이스튜닝 백업 조회 실패', e);
+        }
+        if (isWithin24h(last?.at)) {
+            alert('보이스튜닝 정산 백업: ' + formatWhen(last.at) + ' 에 받아둬서 이번엔 건너뜁니다.');
+            return;
+        }
+        try {
+            const { count, chunkCount } = await backupVoicetuning(db, reason);
+            alert('보이스튜닝 정산 백업 완료 (' + count.toLocaleString() + '건 · 조각 ' + chunkCount + '개).');
+        } catch (e) {
+            console.error('보이스튜닝 백업 실패', e);
+            alert('정산 마감은 완료되었습니다.\n다만 보이스튜닝 정산 백업에는 실패했습니다(데이터에는 이상 없음).');
+        }
+    };
+
     const handleToggleSettlementStatus = async () => {
         const year = currentDate.getFullYear();
         const month = String(currentDate.getMonth() + 1).padStart(2, '0');
@@ -294,7 +306,12 @@ function App() {
             } catch (e) {
                 console.error(e);
                 alert('처리 중 오류가 발생했습니다.');
+                return;
             }
+
+            // 마감이 끝난 뒤 보이스튜닝 정산 데이터를 따로 백업해 둔다(안전장치).
+            // 마감은 위에서 이미 끝났으므로, 여기서 실패해도 되돌리지 않고 알리기만 한다.
+            await runVoicetuningBackup('정산마감 ' + yearMonth);
         } else {
             // 완료 -> 예정으로 복구
             if (
