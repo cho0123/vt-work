@@ -12,6 +12,8 @@ import { PhotoPicker, PhotoBadge, PhotoModal } from './PhotoAttach.jsx';
 import { addPhotos, deleteAllPhotos } from '../utils/photos.js';
 import { backupVotiz, getLastBackup, BACKUP_KINDS } from '../utils/backup.js';
 import { formatWhen, isWithin24h } from '../utils/datetime.js';
+import { PROJECT_TYPES, PROJECT_TYPE_FILTERS, UNSET_TYPE, projectTypeOf, projectTypeInfo, isSaleProject } from '../constants/projectTypes.js';
+import { SongSaleInfo } from './SongSaleInfo.jsx';
 
 // ──[ 1. 유틸리티 함수 ]──
 const formatNumber = (num) => {
@@ -133,8 +135,11 @@ export function VotizTab({ user }) {
       return t.date.startsWith(`${selectedYear}-${formattedMonth}`);
   });
 
+  // 수입·지출 분류(하드코딩). 보이스튜닝 탭은 입력에 분류를 안 쓰고 라벨 표시용으로만 받는다.
+  // 'sale'(곡 판매)은 곡 판매 대금이 들어왔을 때 쓰는 수입 분류다 —
+  // 세부 통계(CategoryStats)는 지출만 모으므로 기존 집계에 영향이 없다.
   const votizCategories = {
-    income: { source: '음원수익', performance: '공연수익', other: '기타수익' }, 
+    income: { source: '음원수익', performance: '공연수익', sale: '곡 판매', other: '기타수익' }, 
     expense: { production: '제작비', marketing: '마케팅비' }
   };
   
@@ -790,6 +795,7 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
   const [projectMemo, setProjectMemo] = useState('');
   const [showStats, setShowStats] = useState(false);
   const [filterKeyword, setFilterKeyword] = useState(null);
+  const [typeFilter, setTypeFilter] = useState('all');   // 곡 목록 위 종류 필터(표시용)
   // 사진(영수증) — 폼에서 고른 파일은 저장이 끝난 뒤 올린다(새 내역은 아직 문서가 없다).
   const [photoFiles, setPhotoFiles] = useState([]);
   const [photoFor, setPhotoFor] = useState(null);   // 사진 창을 연 내역
@@ -845,6 +851,14 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
       setProjectMemo(project.memo || '');
       setShowStats(false);
       setFilterKeyword(null);
+  };
+
+  // 곡 종류는 고르는 즉시 저장한다(표시·분류용이라 되돌리기 쉬운 값).
+  // 곡별 계산·아티스트 연결과는 무관하다.
+  const handleTypeChange = async (value) => {
+      if (!selectedProjectId) return;
+      await updateDoc(doc(db, "acc_projects", selectedProjectId), { projectType: value });
+      refresh();
   };
 
   const handleUpdateProject = async () => {
@@ -928,6 +942,9 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
   const expenseMark = pTotalExpense.filter(t=>t.category === 'marketing').reduce((acc,cur)=>acc + (cur.totalAmount||cur.amount), 0);
   const totalExp = expenseProd + expenseMark;
 
+  const visibleProjects = typeFilter === 'all' ? projects : projects.filter((p) => projectTypeOf(p) === typeFilter);
+  const selectedProject = projects.find((p) => p.id === selectedProjectId) || null;
+
   // 입력폼 — 선택한 프로젝트 카드 바로 아래에 아코디언처럼 끼워 넣는다.
   const projectForm = (
     <form onSubmit={handleSubmit} className={`mt-2 p-4 rounded-2xl shadow-sm border-2 relative overflow-hidden space-y-3 transition-colors ${editingId ? 'bg-blue-50 border-blue-300' : 'bg-white border-blue-100'}`}>
@@ -964,9 +981,18 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
             <input type="text" placeholder="새 프로젝트 만들기" className={`${inputClass} bg-white`} value={newProjectName} onChange={e => setNewProjectName(e.target.value)} />
             <button onClick={handleProjectAdd} className="bg-blue-600 text-white px-4 rounded-xl font-bold shadow-md hover:bg-blue-700 shrink-0">생성</button>
         </div>
+        {/* 곡 종류 필터 — 표시·분류용. 곡별 계산에는 영향이 없다. */}
+        <div className="flex gap-1 bg-gray-200/70 p-1 rounded-2xl">
+            {PROJECT_TYPE_FILTERS.map(({ key, label }) => (
+                <button key={key} onClick={() => setTypeFilter(key)}
+                    className={`flex-1 px-2 py-1.5 rounded-xl text-xs font-bold transition ${typeFilter === key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
+                    {label}
+                </button>
+            ))}
+        </div>
         <div className="space-y-2">
-            <h3 className="font-bold text-gray-500 text-sm ml-1">📂 프로젝트 목록</h3>
-            {projects.map(p => {
+            <h3 className="font-bold text-gray-500 text-sm ml-1">📂 프로젝트 목록 ({visibleProjects.length})</h3>
+            {visibleProjects.map(p => {
                 const pTrans = allTransactions.filter(t => t.projectId === p.id && t.division === 'votiz');
                 const income = pTrans.filter(t=>t.type==='income').reduce((acc,cur)=>acc + (cur.totalAmount||cur.amount), 0);
                 const expense = pTrans.filter(t=>t.type==='expense').reduce((acc,cur)=>acc + (cur.totalAmount||cur.amount), 0);
@@ -981,6 +1007,9 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
                             <div className="flex justify-between items-center gap-2">
                                 <div className="flex items-center gap-1.5 min-w-0">
                                     <span className={`font-bold truncate ${active ? 'text-blue-700' : 'text-gray-800'}`}>{p.name}</span>
+                                    <span className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold ring-1 ${projectTypeInfo(p).badge}`}>
+                                        {projectTypeInfo(p).label}
+                                    </span>
                                     {artistNamesOf(p, artistList) && (
                                         <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700 ring-1 ring-emerald-200">
                                             {artistNamesOf(p, artistList)}
@@ -1008,6 +1037,9 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
                 );
             })}
             {projects.length === 0 && <div className="text-xs text-gray-400 px-1">프로젝트를 먼저 만들어주세요.</div>}
+            {projects.length > 0 && visibleProjects.length === 0 && (
+                <div className="text-xs text-gray-400 px-1">이 종류에 해당하는 곡이 없습니다.</div>
+            )}
         </div>
       </div>
 
@@ -1028,9 +1060,15 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
                         <button onClick={()=>setIsEditingProject(false)} className="bg-gray-200 text-gray-600 px-3 rounded-lg font-bold text-sm">취소</button>
                     </div>
                 ) : (
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                         <span className="font-extrabold text-2xl text-gray-800">{editProjectName}</span>
                         <button onClick={()=>setIsEditingProject(true)} className="text-gray-400 hover:text-blue-500">✏️</button>
+                        {/* 곡 종류 — 고르면 바로 저장된다(표시·분류용) */}
+                        <select value={projectTypeOf(selectedProject)} onChange={(e) => handleTypeChange(e.target.value)}
+                            className="bg-gray-50 border border-gray-200 rounded-lg px-2 py-1 text-xs font-bold text-gray-700 outline-none cursor-pointer">
+                            <option value={UNSET_TYPE.key}>{UNSET_TYPE.label}</option>
+                            {PROJECT_TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+                        </select>
                     </div>
                 )}
               </div>
@@ -1039,6 +1077,13 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
                     rows="2" value={projectMemo} onChange={e => setProjectMemo(e.target.value)} onBlur={handleUpdateProject} />
                  <div className="absolute bottom-2 right-2 text-[10px] text-gray-400 pointer-events-none">자동저장</div>
               </div>
+              {/* 곡 판매일 때만 — 판매 정보. 계산·연결에는 영향 없다. */}
+              {selectedProject && isSaleProject(selectedProject) && (
+                <div className="mt-3">
+                    <SongSaleInfo project={selectedProject} allTransactions={allTransactions} user={user} onSaved={refresh} />
+                </div>
+              )}
+
               {canLinkArtists && (
                 <div className="mt-3 space-y-2">
                     <ArtistShareEditor title="아티스트 연결" artistList={artistList} categories={mgmtCats} value={projectArtists} onChange={setProjectArtists} />
