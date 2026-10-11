@@ -20,6 +20,8 @@ import { db } from '../firebase';
 import { ArtistSettlementPanel } from './ArtistSettlementPanel.jsx';
 import { isDateLocked, linkTypeOf } from '../domain/artistSettlement.js';
 import { linkTypeLabel } from '../utils/artistShares.js';
+import { PhotoPicker, PhotoBadge, PhotoModal } from './PhotoAttach.jsx';
+import { addPhotos, deleteAllPhotos } from '../utils/photos.js';
 
 const inputClass = "w-full p-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-gray-800 outline-none transition text-sm";
 const selectClass = inputClass + " appearance-none";
@@ -68,6 +70,10 @@ export function ArtistWorkspace({ user, artist, priv, categories, projects, allT
     const [editingId, setEditingId] = useState(null);
     const [rowErr, setRowErr] = useState('');
     const [busy, setBusy] = useState(false);
+
+    // 사진(영수증) — 폼에서 고른 파일은 장부 줄이 저장된 뒤에 올린다.
+    const [photoFiles, setPhotoFiles] = useState([]);
+    const [photoFor, setPhotoFor] = useState(null);   // 사진 창을 연 장부 줄
 
     const [showCaseForm, setShowCaseForm] = useState(false);
     const [caseForm, setCaseForm] = useState(EMPTY_CASE);
@@ -232,6 +238,7 @@ export function ArtistWorkspace({ user, artist, priv, categories, projects, allT
         setRow({ ...EMPTY_ROW, date: todayStr(), type: row.type });
         setEditingId(null);
         setRowErr('');
+        setPhotoFiles([]);
     };
 
     const saveRow = async () => {
@@ -264,14 +271,31 @@ export function ArtistWorkspace({ user, artist, priv, categories, projects, allT
                 caseId: row.caseId || '',     // 빈 문자열이면 일반 장부
                 updatedAt: new Date(),
             };
+            let targetId = editingId;
+            // 수정이면 이미 붙어 있는 장수를 이어받는다(건에 묶인 줄은 caseRowsMap 에 있다).
+            const known = editingId
+                ? (ledger.find((r) => r.id === editingId)
+                    || Object.values(caseRowsMap).flat().find((r) => r.id === editingId))
+                : null;
+            let photoCount = Number((known || {}).photoCount || 0);
             if (editingId) {
                 await updateDoc(doc(db, 'artistLedger', editingId), data);
-                upsertLocal({ id: editingId, ...data });
             } else {
                 const ref = await addDoc(collection(db, 'artistLedger'), { ...data, createdAt: new Date() });
-                upsertLocal({ id: ref.id, ...data });
+                targetId = ref.id;
             }
-            resetRow();
+
+            // 고른 사진은 문서가 생긴 뒤에 올린다(하위 컬렉션 photos).
+            let photoErr = '';
+            if (photoFiles.length > 0 && targetId) {
+                const { added, errors } = await addPhotos(db, 'artistLedger', targetId, photoFiles, user.uid);
+                photoCount += added;
+                if (errors.length) photoErr = '일부 사진을 올리지 못했습니다 — ' + errors.join(' / ');
+            }
+
+            upsertLocal({ id: targetId, ...data, photoCount });
+            resetRow();                        // 입력칸과 고른 사진을 비운다
+            if (photoErr) setRowErr(photoErr); // 비운 뒤에 알려야 메시지가 안 지워진다
         } catch (e) {
             setRowErr('저장 실패: ' + (e && e.message ? e.message : ''));
         } finally { setBusy(false); }
@@ -281,6 +305,7 @@ export function ArtistWorkspace({ user, artist, priv, categories, projects, allT
         if (isRowLocked(r)) { setRowErr('정산이 확정된 내역이라 수정할 수 없습니다.'); return; }
         setEditingId(r.id);
         setRowErr('');
+        setPhotoFiles([]);   // 앞 줄에 붙이려던 사진이 따라가지 않게 비운다
         setRow({
             date: r.date || '',
             type: r.type || 'income',
@@ -297,8 +322,12 @@ export function ArtistWorkspace({ user, artist, priv, categories, projects, allT
         const label = (catById[r.categoryId] ? catById[r.categoryId].name : '내역') + ' ' + won(r.totalAmount) + '원';
         if (!window.confirm(r.date + ' ' + label + ' 을(를) 삭제합니다. 되돌릴 수 없습니다.')) return;
         try {
+            // 하위 컬렉션은 부모 문서를 지워도 같이 안 지워진다 — 사진부터 지운다.
+            try { await deleteAllPhotos(db, 'artistLedger', r.id); }
+            catch (e2) { console.warn('사진 삭제 실패(내역은 계속 삭제):', e2 && e2.message); }
             await deleteDoc(doc(db, 'artistLedger', r.id));
             removeLocal(r.id);
+            if (photoFor && photoFor.id === r.id) setPhotoFor(null);
             if (editingId === r.id) resetRow();
         } catch (e) {
             alert('삭제 실패: ' + (e && e.message ? e.message : ''));
@@ -419,7 +448,8 @@ export function ArtistWorkspace({ user, artist, priv, categories, projects, allT
                                             {rows.length === 0 ? (
                                                 <div className="text-xs text-gray-400">이 건에 묶인 내역이 없습니다. 아래 장부에서 '별도정산 건'을 이 건으로 고르고 저장하세요.</div>
                                             ) : (
-                                                <LedgerRows rows={rows.sort((a, b) => String(b.date).localeCompare(String(a.date)))}
+                                                <LedgerRows onOpenPhotos={setPhotoFor}
+                                                    rows={rows.sort((a, b) => String(b.date).localeCompare(String(a.date)))}
                                                     catById={catById} onEdit={editRow} onDelete={deleteRow} isLocked={isRowLocked} />
                                             )}
                                             <button onClick={() => toggleCaseStatus(c)} className={`${pill} bg-white text-gray-600 ring-1 ring-gray-200 hover:bg-gray-50`}>
@@ -493,10 +523,12 @@ export function ArtistWorkspace({ user, artist, priv, categories, projects, allT
                         <option value="">일반 장부</option>
                         {cases.map((c) => <option key={c.id} value={c.id}>건 · {c.name}</option>)}
                     </select>
-                    <div className="md:col-span-7 flex gap-2">
+                    <div className="md:col-span-7 flex gap-2 flex-wrap items-center">
                         <button disabled={busy} onClick={saveRow} className={`${pill} bg-emerald-600 text-white hover:bg-emerald-700`}>
                             {editingId ? '수정 완료' : '추가'}
                         </button>
+                        {/* 사진은 장부 줄이 저장된 뒤에 올라간다 — 여기서는 파일만 골라 둔다. */}
+                        <PhotoPicker files={photoFiles} onChange={setPhotoFiles} disabled={busy} />
                         {editingId && (
                             <button onClick={resetRow} className={`${pill} bg-gray-200 text-gray-600 hover:bg-gray-300`}>취소</button>
                         )}
@@ -537,7 +569,7 @@ export function ArtistWorkspace({ user, artist, priv, categories, projects, allT
                         {periodMode === 'month' ? ym + ' 에 일반 장부 내역이 없습니다.' : '일반 장부 내역이 없습니다.'}
                     </div>
                 ) : (
-                    <LedgerRows rows={generalRows} catById={catById} onEdit={editRow} onDelete={deleteRow} isLocked={isRowLocked} />
+                    <LedgerRows rows={generalRows} catById={catById} onEdit={editRow} onDelete={deleteRow} isLocked={isRowLocked} onOpenPhotos={setPhotoFor} />
                 )}
             </section>
 
@@ -577,12 +609,27 @@ export function ArtistWorkspace({ user, artist, priv, categories, projects, allT
                     </div>
                 )}
             </section>
+
+            {/* 장부 줄의 📎 를 누르면 뜨는 사진 창. 정산이 확정된 줄은 보기만 된다. */}
+            {photoFor && (
+                <PhotoModal
+                    title={'사진 — ' + (photoFor.date || '') + ' ' + ((catById[photoFor.categoryId] || {}).name || '')}
+                    parentPath="artistLedger" parentId={photoFor.id} uid={user.uid}
+                    readOnly={isRowLocked(photoFor)}
+                    onCountChange={(n) => {
+                        const next = { ...photoFor, photoCount: n };
+                        setPhotoFor(next);
+                        upsertLocal(next);
+                    }}
+                    onClose={() => setPhotoFor(null)}
+                />
+            )}
         </div>
     );
 }
 
 // ──[ 장부 줄 목록 ]──
-function LedgerRows({ rows, catById, onEdit, onDelete, isLocked }) {
+function LedgerRows({ rows, catById, onEdit, onDelete, isLocked, onOpenPhotos }) {
     return (
         <div className="space-y-1">
             {rows.map((r) => {
@@ -602,6 +649,7 @@ function LedgerRows({ rows, catById, onEdit, onDelete, isLocked }) {
                             <span className="shrink-0 text-[10px] text-gray-400">공급가 {won(r.amount)} + VAT {won(r.vat)}</span>
                         )}
                         <span className="flex-1 min-w-0 truncate text-xs text-gray-500">{r.memo}</span>
+                        {onOpenPhotos && <PhotoBadge count={r.photoCount} onClick={() => onOpenPhotos(r)} />}
                         {isLocked && isLocked(r) ? (
                             <span className="shrink-0 rounded-full bg-gray-200 px-2 py-0.5 text-[10px] font-bold text-gray-500" title="정산 확정됨">🔒 정산확정</span>
                         ) : (

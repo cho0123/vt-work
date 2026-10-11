@@ -8,6 +8,8 @@ import { ManagementTab } from './ManagementTab.jsx';
 import { isOwner } from '../constants/owners.js';
 import { ArtistShareEditor } from './ArtistShareEditor.jsx';
 import { validateShares, normalizeShares, artistNamesOf } from '../utils/artistShares.js';
+import { PhotoPicker, PhotoBadge, PhotoModal } from './PhotoAttach.jsx';
+import { addPhotos, deleteAllPhotos } from '../utils/photos.js';
 
 // ──[ 1. 유틸리티 함수 ]──
 const formatNumber = (num) => {
@@ -35,6 +37,11 @@ export function VotizTab({ user }) {
 
   const [selectedYear, setSelectedYear] = useState('all');
   const [selectedMonth, setSelectedMonth] = useState('all');
+
+  // 사진 장수처럼 한 건만 바뀔 때 쓰는 가벼운 갱신. 전체 다시 읽기(fetchData)를 피한다.
+  const patchTransaction = (id, fields) =>
+      setTransactions((prev) => prev.map((t) => (t.id === id ? { ...t, ...fields } : t)));
+
 
   const handleMonthClick = (year, month) => {
       setSelectedYear(year);
@@ -149,6 +156,7 @@ export function VotizTab({ user }) {
                 <button onClick={resetPeriod} className="text-xs font-bold bg-gray-800 text-white px-3 py-2 rounded-lg hover:bg-gray-700">전체 기간</button>
             </div>
             <span className="text-xs font-medium text-gray-400">현재 조회: {getPeriodText()}</span>
+
         </div>
 
         {/* 상단 총정산 요약 카드 (총수입·총지출·순수익) */}
@@ -209,7 +217,7 @@ export function VotizTab({ user }) {
         {/* 선택 분야 상세 */}
         <div>
           {activeTab === 'voicetuning' && <VoiceTuning user={user} transactions={filteredTransactions} refresh={fetchData} isSummaryMode={selectedYear === 'all'} categoryMap={votizCategories} />}
-          {activeTab === 'votiz' && <Votiz user={user} projects={projects} filteredTransactions={filteredTransactions} allTransactions={transactions} refresh={fetchData} categories={votizCategories} subCats={productionSub} isSummaryMode={selectedMonth === 'all' || selectedYear === 'all'} onMonthClick={handleMonthClick} resetPeriod={resetPeriod} artistList={artistList} mgmtCats={mgmtCats} canLinkArtists={isOwner(user)} />}
+          {activeTab === 'votiz' && <Votiz user={user} projects={projects} filteredTransactions={filteredTransactions} allTransactions={transactions} refresh={fetchData} patchTransaction={patchTransaction} categories={votizCategories} subCats={productionSub} isSummaryMode={selectedMonth === 'all' || selectedYear === 'all'} onMonthClick={handleMonthClick} resetPeriod={resetPeriod} artistList={artistList} mgmtCats={mgmtCats} canLinkArtists={isOwner(user)} />}
           {activeTab === 'copyright' && <CopyrightSection user={user} transactions={filteredTransactions} refresh={fetchData} isSummaryMode={selectedYear === 'all'} />}
           {activeTab === 'youtube' && <YoutubeSection user={user} transactions={filteredTransactions} refresh={fetchData} isSummaryMode={selectedYear === 'all'} />}
           {/* 매니지먼트에서 아티스트를 고치면 곡 연결 드롭다운(artistList)도 같이 맞춘다.
@@ -714,7 +722,7 @@ function MonthItem({ monthKey, transactions, refresh, allowDelete, onDelete }) {
 }
 
 // ──[ 8. Votiz (수정 완료됨) ]──
-function Votiz({ user, projects, filteredTransactions, allTransactions, refresh, categories, subCats, isSummaryMode, onMonthClick, resetPeriod, artistList, mgmtCats, canLinkArtists }) {
+function Votiz({ user, projects, filteredTransactions, allTransactions, refresh, patchTransaction, categories, subCats, isSummaryMode, onMonthClick, resetPeriod, artistList, mgmtCats, canLinkArtists }) {
   const [selectedProjectId, setSelectedProjectId] = useState(null);
   // 곡에 연결한 아티스트. 생성할 때는 안 받고 오른쪽 상세에서만 연결한다.
   const [projectArtists, setProjectArtists] = useState([]);
@@ -731,6 +739,10 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
   const [projectMemo, setProjectMemo] = useState('');
   const [showStats, setShowStats] = useState(false);
   const [filterKeyword, setFilterKeyword] = useState(null);
+  // 사진(영수증) — 폼에서 고른 파일은 저장이 끝난 뒤 올린다(새 내역은 아직 문서가 없다).
+  const [photoFiles, setPhotoFiles] = useState([]);
+  const [photoFor, setPhotoFor] = useState(null);   // 사진 창을 연 내역
+  const [photoBusy, setPhotoBusy] = useState(false);
 
   const handleProjectAdd = async () => { 
     if (!newProjectName) return;
@@ -807,12 +819,34 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
         category: form.category || '', subDetail: form.subDetail || '', memo: form.memo || '', vat: vat, totalAmount: baseAmount + vat
     };
 
+    let targetId = editingId;
     if(editingId) { await updateDoc(doc(db, "acc_transactions", editingId), data); setEditingId(null); } 
-    else { await addDoc(collection(db, "acc_transactions"), { ...data, createdAt: new Date() }); }
+    else { const ref = await addDoc(collection(db, "acc_transactions"), { ...data, createdAt: new Date() }); targetId = ref.id; }
+
+    // 고른 사진은 문서가 생긴 뒤에 올린다(하위 컬렉션 photos).
+    if (photoFiles.length > 0 && targetId) {
+        setPhotoBusy(true);
+        try {
+            const { errors } = await addPhotos(db, "acc_transactions", targetId, photoFiles, user.uid);
+            if (errors.length) alert('일부 사진을 올리지 못했습니다 — ' + errors.join(' / '));
+        } catch (err) {
+            alert('사진 저장 실패: ' + (err && err.message ? err.message : ''));
+        } finally { setPhotoBusy(false); }
+        setPhotoFiles([]);
+    }
+
     setForm({ date: '', amount: '', type: form.type, category: form.category, subDetail: '', memo: '', vatIncluded: false }); refresh();
   };
 
-  const handleDelete = async (id) => { if(window.confirm("삭제하시겠습니까?")) { await deleteDoc(doc(db, "acc_transactions", id)); refresh(); } };
+  const handleDelete = async (id) => {
+      if(!window.confirm("삭제하시겠습니까? 붙은 사진도 함께 지워집니다.")) return;
+      // 하위 컬렉션은 부모 문서를 지워도 같이 안 지워진다 — 사진부터 지운다.
+      try { await deleteAllPhotos(db, "acc_transactions", id); }
+      catch (e) { console.warn('사진 삭제 실패(내역은 계속 삭제):', e && e.message); }
+      await deleteDoc(doc(db, "acc_transactions", id));
+      if (photoFor && photoFor.id === id) setPhotoFor(null);
+      refresh();
+  };
   const handleEdit = (item) => { 
       setForm({
           date: item.date, amount: formatNumber(item.amount), type: item.type,
@@ -820,6 +854,7 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
           subDetail: item.subDetail || '', memo: item.memo || '', vatIncluded: item.vat > 0
       }); 
       setEditingId(item.id);
+      setPhotoFiles([]);                // 앞 내역에 붙이려던 사진이 따라가지 않게 비운다
       setFormOpenId(selectedProjectId); // 접혀 있으면 펼친다 — 수정 입력창이 이 폼이다
       window.scrollTo(0, 0);
   };
@@ -864,7 +899,9 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
             <label className="absolute right-2 top-2 bottom-2 flex items-center bg-gray-100 px-3 rounded-lg cursor-pointer hover:bg-gray-200 transition select-none"><input type="checkbox" className="w-4 h-4 text-blue-600 rounded mr-2" checked={form.vatIncluded} onChange={e => setForm({...form, vatIncluded: e.target.checked})} /><span className="text-xs font-bold text-gray-600">VAT 별도</span></label>
         </div>
         <input type="text" placeholder="메모" className={inputClass} value={form.memo} onChange={e => setForm({...form, memo: e.target.value})} />
-        <div className="flex gap-2"><button className={`flex-1 text-white py-3 rounded-xl font-bold transition ${editingId ? 'bg-blue-600' : 'bg-blue-500 shadow-md'}`}>{editingId ? '수정 완료' : '추가하기'}</button>{editingId && <button type="button" onClick={() => {setEditingId(null); setForm({...form, amount: '', memo: '', vatIncluded: false});}} className="px-4 bg-gray-200 rounded-xl font-bold text-gray-600">취소</button>}</div>
+        {/* 사진은 문서가 생긴 뒤에 올라간다 — 여기서는 파일만 골라 둔다. */}
+        <PhotoPicker files={photoFiles} onChange={setPhotoFiles} disabled={photoBusy} />
+        <div className="flex gap-2"><button className={`flex-1 text-white py-3 rounded-xl font-bold transition ${editingId ? 'bg-blue-600' : 'bg-blue-500 shadow-md'}`}>{editingId ? '수정 완료' : '추가하기'}</button>{editingId && <button type="button" onClick={() => {setEditingId(null); setPhotoFiles([]); setForm({...form, amount: '', memo: '', vatIncluded: false});}} className="px-4 bg-gray-200 rounded-xl font-bold text-gray-600">취소</button>}</div>
     </form>
   );
 
@@ -994,12 +1031,22 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
                 </div>
             )}
             {showStats ? ( <CategoryStats list={projectTrans} onCategoryClick={handleCategoryClick} /> ) : (
-                <TransactionList list={finalList} showVat={true} onEdit={handleEdit} onDelete={handleDelete} isSummaryMode={false} onMonthClick={onMonthClick} categoryMap={categories} />
+                <TransactionList list={finalList} showVat={true} onEdit={handleEdit} onDelete={handleDelete} isSummaryMode={false} onMonthClick={onMonthClick} categoryMap={categories} onOpenPhotos={setPhotoFor} />
             )}
           </div>
         </div>
         )}
       </div>
+
+      {/* 내역의 📎 를 누르면 뜨는 사진 창. 닫을 때가 아니라 장수가 바뀔 때 목록을 다시 읽는다. */}
+      {photoFor && (
+        <PhotoModal
+            title={'사진 — ' + photoFor.date + (photoFor.memo ? ' ' + photoFor.memo : '')}
+            parentPath="acc_transactions" parentId={photoFor.id} uid={user.uid}
+            onCountChange={(n) => { patchTransaction(photoFor.id, { photoCount: n }); setPhotoFor({ ...photoFor, photoCount: n }); }}
+            onClose={() => setPhotoFor(null)}
+        />
+      )}
     </div>
   );
 }
@@ -1028,7 +1075,8 @@ function CategoryStats({ list, onCategoryClick }) {
     )
 }
 
-function TransactionList({ list, showVat, onEdit, onDelete, isSummaryMode, onMonthClick, categoryMap }) {
+// onOpenPhotos 를 넘긴 곳(보티즈)만 📎 배지를 그린다. 보이스튜닝·저작권·유튜브는 안 넘기므로 그대로다.
+function TransactionList({ list, showVat, onEdit, onDelete, isSummaryMode, onMonthClick, categoryMap, onOpenPhotos }) {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 25;
   const totalPages = Math.ceil(list.length / itemsPerPage);
@@ -1099,7 +1147,8 @@ function TransactionList({ list, showVat, onEdit, onDelete, isSummaryMode, onMon
                         {(displayTitle !== item.memo && item.memo) && <span className="text-gray-400 font-normal"> ({item.memo})</span>}
                     </span>
                 </div>
-                <div className="flex gap-1">
+                <div className="flex items-center gap-1">
+                    {onOpenPhotos && <PhotoBadge count={item.photoCount} onClick={() => onOpenPhotos(item)} />}
                     <button onClick={() => onEdit(item)} className="p-1 text-gray-300 hover:text-blue-500"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4"><path d="m5.433 13.917 1.262-3.155A4 4 0 0 1 7.58 9.42l6.92-6.918a2.121 2.121 0 0 1 3 3l-6.92 6.918c-.383.383-.84.685-1.343.886l-3.154 1.262a.5.5 0 0 1-.65-.65Z" /></svg></button>
                     <button onClick={() => onDelete(item.id)} className="p-1 text-gray-300 hover:text-red-500"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4"><path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" /></svg></button>
                 </div>
