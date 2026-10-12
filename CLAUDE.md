@@ -814,7 +814,8 @@ StudentRotationInfo:41 의 setState-in-effect eslint 에러는 기존 건(범위
 3. **앱 백업 보관 개수 조정** — 지금은 묶음마다 20개. 묶음이 셋이라 총량을 다시 볼 것.
 4. ~~곡 종류에 '곡 판매' 추가~~ → 완료(2026-10-11).
 5. 기본 수익/지출 항목 등록 · 정산서에 회사 정보(상호·사업자번호·직인) 넣을지 결정 ·
-   개발DB 테스트 데이터 정리 · **운영 배포(+ `firestore.rules` 배포)는 회사 PC에서만.**
+   개발DB 테스트 데이터 정리.
+   ~~운영 배포(+ `firestore.rules` 배포)~~ → **2026-10-12 완료**(위 배포 항목 참고).
 
 ### 2026-10-11 추가 (보티즈 수입·지출 · 매니지먼트 장부에 사진(영수증) 등록)
 
@@ -961,6 +962,47 @@ expense: { production: 제작비, marketing: 마케팅비 }
 테스트로 바꾼 종류·판매 정보·내역·사진은 전부 되돌렸다(곡 5개 모두 projectType 없는 상태).
 
 ⚠️ **`npm run build` 는 집 PC에서 못 돌렸다**(기존 환경 문제). **회사 PC에서 확인할 것.**
+
+### 2026-10-12 매니지먼트 운영 배포 완료 ✅
+
+회사 PC에서 배포. **`main` 은 `09aa113` 로 fast-forward**(되돌릴 지점 태그 `prod-before-mgmt-deploy` = `f2e5cd2`).
+
+| | |
+|---|---|
+| 배포 커밋 | `09aa113` (main..refactor 6커밋: `ee28665` `37e095c` `19991ae` `fe61cb8` `c730eab` `09aa113`) |
+| 라이브 번들 | `index-IGMjm-35.js` → **`index-iR6LtXMW.js`** (회사 PC 빌드 산출물과 같은 이름) |
+| 보안규칙 | **운영에 배포함** — 룰셋 `790f6912-f952-4fc9-ab10-7c98cd44fde6`, 릴리스 `cloud.firestore` |
+| 운영 백업 | 배포 전 `backup/prod-2026-10-12-08-21-55.json` (6,086건 / 41MB, verify-backup 통과) |
+
+**포함 기능**: 매니지먼트 1~4단계(아티스트 등록·장부·별도정산 건·정산 계산·확정/잠금/취소·
+정산서 인쇄·세무 유형과 실지급액), 매니지먼트 좌우 분할 + 소속/콜라보 구분 + 지급처(소속사),
+보티즈 아티스트 연결(검색해서 추가)·곡 종류·곡 판매 정보, 수입·지출과 장부에 사진(영수증),
+앱 백업 3묶음(학원/보이스튜닝/보티즈) + 보티즈 '최종정리' 버튼.
+
+**배포 전에 확인한 것**
+- `main` 이 브랜치의 조상 → **fast-forward**(병합 커밋 없음).
+- `firestore.rules` 는 **추가 33줄뿐**이고 기존 규칙은 한 줄도 안 바뀌었다(삭제·수정 0).
+  새 `match` 6개(artists/artistPrivate/mgmtCategories/artistLedger/artistCases/artistSettlements)는
+  전부 `isAllowedUser()` 다. 맨 아래 `/{document=**}` 가 이미 같은 일을 하므로 느슨해지는 건 없다.
+- **Firebase 설정 파일은 `firestore.rules` 하나뿐이다.** `firebase.json`·`firestore.indexes.json`·
+  `storage.rules`·`.firebaserc` 가 **저장소에 없다** → 색인·Hosting·Functions 배포 대상이 애초에 없다.
+  `deploy-rules.js` 도 `releases/cloud.firestore` 하나만 갱신한다(다른 대상 안 건드림).
+- 새 코드에 `orderBy` + `where` 조합이 없다 → **복합 색인이 새로 필요하지 않다**(전부 '같음' 조건).
+- `src/constants/owners.js` 에 운영 원장 UID `xA6nm0L4uBTyRBctRRNqzKND1oW2` 가 들어 있다
+  (규칙의 허용 목록과 같음) → 운영에서 매니지먼트 탭·'최종정리' 가 보인다.
+
+**배포 후 확인 (운영 데이터는 읽기만, 버튼 안 누름)**
+- 사이트 정상, 로그인 화면 표시, **콘솔 오류 0**.
+- 배포된 번들에 운영 설정(`vt-schedule-12568`)만 있고 개발 설정은 없다.
+  매니지먼트·최종정리·곡 판매 문자열과 운영 원장 UID 포함 확인.
+- 실제 로그인·버튼 동작 확인은 **사장님이 직접** 한다.
+
+⚠️ **운영에는 아직 매니지먼트 데이터가 없다.** 배포 직후 운영 백업에 `artists` 등 6개 컬렉션은 0건이다.
+아티스트를 등록하면 생긴다. PC 백업(`export-prod.js`)은 컬렉션을 `listCollections()` 로 훑으므로
+**새 컬렉션과 `photos` 하위 컬렉션이 자동으로 들어간다**(스크립트 손댈 것 없음).
+
+⚠️ **운영 정산탭을 처음 열면 `expenseDefaults` 로 고정지출이 자동 seed 된다**(2026-07-26 항목).
+이건 이번 배포와 무관한 기존 동작이다.
 
 ### 다음 단계
 
