@@ -1,12 +1,19 @@
 // 짱구 어카운트(보티즈-정산) — 스케쥴 앱에 통합한 버전.
 // 자체 로그인/App 래퍼는 걷어내고, 스케쥴 앱의 공유 db·로그인(user)을 그대로 쓴다.
 // 컬렉션은 스케쥴 데이터와 분리하기 위해 acc_projects / acc_transactions 사용.
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { collection, addDoc, getDocs, getDoc, doc, setDoc, deleteDoc, updateDoc, deleteField, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { ManagementTab } from './ManagementTab.jsx';
 import { isOwner } from '../constants/owners.js';
 import { ArtistShareEditor } from './ArtistShareEditor.jsx';
+import {
+    collabLinksOf, allocationForIncome, payoutAmounts, payoutMemo,
+    findPayoutExpense, payoutExpensesOf, isAutoPayout,
+    SKIP_FIELD, skipIdsOf, mergeSkipIds,
+    PAYOUT_CATEGORY, PAYOUT_CATEGORY_LABEL, SOURCE_INCOME_CATEGORY, NEW_INCOME_ID,
+} from '../domain/collabPayout.js';
+import { effectiveTaxType } from '../domain/artistProfile.js';
 import { validateShares, normalizeShares, artistNamesOf } from '../utils/artistShares.js';
 import { PhotoPicker, PhotoBadge, PhotoModal } from './PhotoAttach.jsx';
 import { addPhotos, deleteAllPhotos } from '../utils/photos.js';
@@ -139,7 +146,8 @@ export function VotizTab({ user }) {
   // 'sale'(곡 판매)은 곡 판매 대금이 들어왔을 때 쓰는 수입 분류다 —
   // 세부 통계(CategoryStats)는 지출만 모으므로 기존 집계에 영향이 없다.
   const votizCategories = {
-    income: { source: '음원수익', performance: '공연수익', sale: '곡 판매', other: '기타수익' }, 
+    // '수익배분' 은 콜라보 자동 배분이 만드는 줄이다 — 지출이 아니라 **마이너스 수익**이다.
+    income: { source: '음원수익', performance: '공연수익', sale: '곡 판매', [PAYOUT_CATEGORY]: PAYOUT_CATEGORY_LABEL, other: '기타수익' }, 
     expense: { production: '제작비', marketing: '마케팅비' }
   };
   
@@ -783,6 +791,9 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
   // 곡에 연결한 아티스트. 생성할 때는 안 받고 오른쪽 상세에서만 연결한다.
   const [projectArtists, setProjectArtists] = useState([]);
   const [artistsMsg, setArtistsMsg] = useState('');
+  // 콜라보 자동 배분 입력값. { [artistId]: { amount, skip, touched, saved } }
+  // touched/saved 가 아니면 화면에는 계산값을 그대로 보여준다(상태에 안 넣는다).
+  const [alloc, setAlloc] = useState({});
   // 왼쪽 입력폼(아코디언)이 열린 프로젝트. 선택(selectedProjectId)과 따로 둔다 —
   // 접어도 오른쪽 상세는 그 프로젝트를 계속 보여주기 위해.
   const [formOpenId, setFormOpenId] = useState(null);
@@ -795,6 +806,8 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
   const [projectMemo, setProjectMemo] = useState('');
   const [showStats, setShowStats] = useState(false);
   const [filterKeyword, setFilterKeyword] = useState(null);
+  // 요약 박스의 분류 줄을 눌렀을 때 내역 리스트를 거르는 값. { type, category }
+  const [catFilter, setCatFilter] = useState(null);
   const [typeFilter, setTypeFilter] = useState('all');   // 곡 목록 위 종류 필터(표시용)
   // 사진(영수증) — 폼에서 고른 파일은 저장이 끝난 뒤 올린다(새 내역은 아직 문서가 없다).
   const [photoFiles, setPhotoFiles] = useState([]);
@@ -851,6 +864,7 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
       setProjectMemo(project.memo || '');
       setShowStats(false);
       setFilterKeyword(null);
+      setCatFilter(null);
   };
 
   // 곡 종류는 고르는 즉시 저장한다(표시·분류용이라 되돌리기 쉬운 값).
@@ -872,6 +886,68 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
     setForm({ ...form, amount: formatNumber(num) });
   };
 
+  // ── 콜라보 자동 배분 ────────────────────────────────────────────────
+  // 조건: 이 곡에 '콜라보(제작비 회수 후 공유)' 연결이 있고, 수입 분류가 음원수익이고,
+  //       날짜가 그 아티스트의 공유 기간 안일 때만 줄이 나온다.
+  // selectedProject 는 아래쪽에 이미 선언돼 있다. 여기서 또 만들면 중복이고,
+  // 의존성 배열이 렌더 중에 평가될 때 TDZ 로 터진다 — memo 안에서 직접 찾는다.
+  const allocTargets = useMemo(() => {
+    const proj = (projects || []).find((p) => p.id === selectedProjectId);
+    if (!proj || form.type !== 'income' || form.category !== SOURCE_INCOME_CATEGORY) return [];
+    const base = parseNumber(form.amount);
+    const vat = form.vatIncluded ? Math.round(base * 0.1) : 0;
+    const income = { id: editingId || NEW_INCOME_ID, date: form.date, amount: base, totalAmount: base + vat };
+    return collabLinksOf(proj)
+      .map((link) => {
+        const calc = allocationForIncome({ transactions: allTransactions, projectId: selectedProjectId, link, income });
+        if (!calc.inWindow) return null;
+        const artist = (artistList || []).find((a) => a.id === link.artistId);
+        return {
+          link, artist, artistId: link.artistId,
+          name: artist ? (artist.stageName || '(이름없음)') : '(삭제된 아티스트)',
+          taxType: effectiveTaxType(artist), calc,
+        };
+      })
+      .filter(Boolean);
+  }, [projects, selectedProjectId, form.type, form.category, form.amount, form.vatIncluded, form.date, editingId, allTransactions, artistList]);
+
+  // 사용자가 직접 고친 적 없고 저장된 값도 아니면 계산값을 그대로 쓴다.
+  const allocValue = (t) => {
+    const e = alloc[t.artistId];
+    return e && (e.touched || e.saved) ? e.amount : formatNumber(t.calc.amount);
+  };
+  const allocSkipped = (t) => !!(alloc[t.artistId] && alloc[t.artistId].skip);
+  const setAllocAmount = (artistId, raw) =>
+    setAlloc((prev) => ({ ...prev, [artistId]: { ...(prev[artistId] || {}), amount: formatNumber(raw.replace(/[^0-9]/g, '')), touched: true } }));
+  const setAllocSkip = (artistId, skip) =>
+    setAlloc((prev) => ({ ...prev, [artistId]: { ...(prev[artistId] || {}), skip } }));
+
+  // 수익 1건 × 아티스트 1명 = 배분 지출 1건. 없으면 만들고, 있으면 금액만 갱신한다.
+  const syncPayouts = async (sourceId, incomeDate) => {
+    for (const t of allocTargets) {
+      const existing = findPayoutExpense(allTransactions, sourceId, t.artistId);
+      const value = parseNumber(allocValue(t));
+      if (allocSkipped(t) || value <= 0) {
+        if (existing) {
+          const ok = window.confirm(t.name + ' 의 자동배분 내역 ' + formatNumber(existing.totalAmount || existing.amount) + '원을 삭제할까요?');
+          if (ok) await deleteDoc(doc(db, 'acc_transactions', existing.id));
+        }
+        continue;
+      }
+      const money = payoutAmounts(value, t.taxType);
+      const data = {
+        uid: user.uid, projectId: selectedProjectId, division: 'votiz',
+        date: incomeDate, type: 'income', category: PAYOUT_CATEGORY, subDetail: '',
+        memo: payoutMemo({ artistName: t.name, sharePercent: t.link.sharePercent, incomeDate }),
+        amount: money.amount, vat: money.vat, totalAmount: money.totalAmount,
+        payoutSourceId: sourceId, payoutArtistId: t.artistId,
+        payoutSharePercent: Number(t.link.sharePercent || 0),
+      };
+      if (existing) await updateDoc(doc(db, 'acc_transactions', existing.id), data);
+      else await addDoc(collection(db, 'acc_transactions'), { ...data, createdAt: new Date() });
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!form.date || !form.amount) return alert('필수 항목 입력');
@@ -883,6 +959,17 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
         projectId: selectedProjectId, division: 'votiz', date: form.date, amount: baseAmount, type: form.type,
         category: form.category || '', subDetail: form.subDetail || '', memo: form.memo || '', vat: vat, totalAmount: baseAmount + vat
     };
+
+    // '배분 안 함' 표시는 원본 수익 문서에 남긴다 — 다른 이유로 다시 저장해도 배분이 되살아나지 않게.
+    // 배분 줄이 나올 수 있는 상태(음원수익 + 콜라보 연결)에서만 건드린다. 그 밖에서는 손대지 않는다.
+    if (allocTargets.length > 0) {
+      const prevSkip = editingId ? skipIdsOf((allTransactions || []).find((t) => t.id === editingId)) : [];
+      data[SKIP_FIELD] = mergeSkipIds(
+        prevSkip,
+        allocTargets.map((t) => t.artistId),
+        allocTargets.filter((t) => allocSkipped(t)).map((t) => t.artistId),
+      );
+    }
 
     let targetId = editingId;
     if(editingId) { await updateDoc(doc(db, "acc_transactions", editingId), data); setEditingId(null); } 
@@ -900,10 +987,26 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
         setPhotoFiles([]);
     }
 
+    // 수익이 저장된 뒤에 배분 지출을 맞춘다(새 수익은 여기서야 id 가 생긴다).
+    if (targetId && allocTargets.length > 0) {
+      try { await syncPayouts(targetId, data.date); }
+      catch (err) { alert('자동배분 지출 저장 실패: ' + (err && err.message ? err.message : '')); }
+    }
+    setAlloc({});
     setForm({ date: '', amount: '', type: form.type, category: form.category, subDetail: '', memo: '', vatIncluded: false }); refresh();
   };
 
   const handleDelete = async (id) => {
+      const linked = payoutExpensesOf(allTransactions, id);
+      if (linked.length > 0) {
+          const alsoDelete = window.confirm('연결된 자동배분 내역 ' + linked.length + '건도 삭제할까요?\n[확인] 같이 삭제 · [취소] 수익만 삭제');
+          if (alsoDelete) {
+              for (const t of linked) {
+                  try { await deleteAllPhotos(db, 'acc_transactions', t.id); } catch { /* 사진 없으면 그냥 넘어간다 */ }
+                  await deleteDoc(doc(db, 'acc_transactions', t.id));
+              }
+          }
+      }
       if(!window.confirm("삭제하시겠습니까? 붙은 사진도 함께 지워집니다.")) return;
       // 하위 컬렉션은 부모 문서를 지워도 같이 안 지워진다 — 사진부터 지운다.
       try { await deleteAllPhotos(db, "acc_transactions", id); }
@@ -919,6 +1022,19 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
           subDetail: item.subDetail || '', memo: item.memo || '', vatIncluded: item.vat > 0
       }); 
       setEditingId(item.id);
+      // 이미 저장된 배분 금액은 그대로 띄우고, 수익 금액을 바꿔도 따라 변하지 않게 saved 로 표시한다.
+      const saved = {};
+      payoutExpensesOf(allTransactions, item.id).forEach((t) => {
+          // 저장된 값은 마이너스 수익이라 음수다. 입력칸에는 '배분 금액'(양수)으로 보여준다 —
+          // 음수가 그대로 들어가면 value <= 0 으로 보고 삭제 경로로 빠진다.
+          saved[t.payoutArtistId] = { amount: formatNumber(Math.abs(t.totalAmount || t.amount)), skip: false, saved: true, touched: false };
+      });
+      // 원본 수익에 적어둔 '배분 안 함' 을 체크 상태로 되살린다.
+      // 금액은 일부러 안 넣는다 — 체크를 풀면 그 자리에서 계산값이 보여야 한다.
+      skipIdsOf(item).forEach((artistId) => {
+          saved[artistId] = { ...(saved[artistId] || {}), skip: true };
+      });
+      setAlloc(saved);
       setPhotoFiles([]);                // 앞 내역에 붙이려던 사진이 따라가지 않게 비운다
       setFormOpenId(selectedProjectId); // 접혀 있으면 펼친다 — 수정 입력창이 이 폼이다
       window.scrollTo(0, 0);
@@ -928,13 +1044,32 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
 
   // 선택된 프로젝트 상세 집계 (기간 필터 반영). 선택 전이면 빈 목록.
   const projectTrans = filteredTransactions.filter(t => t.projectId === selectedProjectId && t.division === 'votiz').sort((a,b) => b.date.localeCompare(a.date));
-  const finalList = filterKeyword ? projectTrans.filter(t => {
+  const catFiltered = catFilter
+      ? projectTrans.filter((t) => t.type === catFilter.type && (t.category || '') === catFilter.category)
+      : projectTrans;
+  const finalList = filterKeyword ? catFiltered.filter(t => {
         let key = '';
         if (t.subDetail) { if (t.subDetail.includes('-')) key = t.subDetail.split('-')[1]; else key = t.subDetail; }
         else { key = t.category === 'marketing' ? '마케팅비' : t.category; }
         if (!key || key === 'undefined') key = '미분류';
         return key === filterKeyword;
-    }) : projectTrans;
+    }) : catFiltered;
+
+  // 분류별 합계 — 그 곡에 실제로 있는 분류만. 합이 총 수입·총 지출과 맞는다.
+  const groupByCategory = (type) => {
+      const map = {};
+      projectTrans.filter((t) => t.type === type).forEach((t) => {
+          const key = t.category || '';
+          if (!map[key]) map[key] = { category: key, type, label: (categories[type] && categories[type][key]) || key || '미분류', total: 0, count: 0 };
+          map[key].total += (t.totalAmount || t.amount || 0);
+          map[key].count += 1;
+      });
+      return Object.values(map).sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
+  };
+  const incomeGroups = groupByCategory('income');
+  const expenseGroups = groupByCategory('expense');
+  const sameCat = (g) => catFilter && catFilter.type === g.type && catFilter.category === g.category;
+  const toggleCat = (g) => setCatFilter(sameCat(g) ? null : { type: g.type, category: g.category, label: g.label });
 
   const pIncome = projectTrans.filter(t=>t.type==='income').reduce((acc,cur)=>acc + (cur.totalAmount||cur.amount), 0);
   const pTotalExpense = projectTrans.filter(t=>t.type==='expense');
@@ -967,9 +1102,46 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
             <label className="absolute right-2 top-2 bottom-2 flex items-center bg-gray-100 px-3 rounded-lg cursor-pointer hover:bg-gray-200 transition select-none"><input type="checkbox" className="w-4 h-4 text-blue-600 rounded mr-2" checked={form.vatIncluded} onChange={e => setForm({...form, vatIncluded: e.target.checked})} /><span className="text-xs font-bold text-gray-600">VAT 별도</span></label>
         </div>
         <input type="text" placeholder="메모" className={inputClass} value={form.memo} onChange={e => setForm({...form, memo: e.target.value})} />
+        {allocTargets.length > 0 && (
+            <div className="rounded-xl border border-indigo-200 bg-indigo-50/60 p-3 space-y-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-bold text-indigo-700">자동 배분 (콜라보)</span>
+                    <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-gray-500">저장하면 '수익배분' 마이너스 수익이 만들어집니다</span>
+                </div>
+                {allocTargets.map((t) => {
+                    const skipped = allocSkipped(t);
+                    return (
+                        <div key={t.artistId} className="rounded-lg bg-white px-3 py-2 space-y-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-sm font-bold text-gray-800">{t.name}</span>
+                                <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-bold text-indigo-700">공유 {Number(t.link.sharePercent || 0)}%</span>
+                                <span className="text-[11px] text-gray-400">계산값 {formatNumber(t.calc.amount)}원</span>
+                                {t.calc.remainingRecoup > 0 && (
+                                    <span className="text-[11px] font-bold text-amber-600">제작비 {formatNumber(t.calc.remainingRecoup)} 남음</span>
+                                )}
+                                <label className="ml-auto flex items-center gap-1 cursor-pointer select-none">
+                                    <input type="checkbox" className="w-4 h-4 rounded" checked={skipped} onChange={(ev) => setAllocSkip(t.artistId, ev.target.checked)} />
+                                    <span className="text-[11px] font-bold text-gray-500">배분 안 함</span>
+                                </label>
+                            </div>
+                            {!skipped && (
+                                <div className="flex items-center gap-2">
+                                    <input type="text" className={`${inputClass} py-2 text-right font-bold`} value={allocValue(t)}
+                                        onChange={(ev) => setAllocAmount(t.artistId, ev.target.value)} />
+                                    <span className="shrink-0 text-xs font-bold text-gray-400">원</span>
+                                </div>
+                            )}
+                            {!skipped && t.taxType === 'invoice' && (
+                                <div className="text-[10px] text-gray-400">세금계산서 — 공급가 {formatNumber(payoutAmounts(parseNumber(allocValue(t)), 'invoice').amount)} / 부가세 {formatNumber(payoutAmounts(parseNumber(allocValue(t)), 'invoice').vat)} (마이너스 수익)</div>
+                            )}
+                        </div>
+                    );
+                })}
+            </div>
+        )}
         {/* 사진은 문서가 생긴 뒤에 올라간다 — 여기서는 파일만 골라 둔다. */}
         <PhotoPicker files={photoFiles} onChange={setPhotoFiles} disabled={photoBusy} />
-        <div className="flex gap-2"><button className={`flex-1 text-white py-3 rounded-xl font-bold transition ${editingId ? 'bg-blue-600' : 'bg-blue-500 shadow-md'}`}>{editingId ? '수정 완료' : '추가하기'}</button>{editingId && <button type="button" onClick={() => {setEditingId(null); setPhotoFiles([]); setForm({...form, amount: '', memo: '', vatIncluded: false});}} className="px-4 bg-gray-200 rounded-xl font-bold text-gray-600">취소</button>}</div>
+        <div className="flex gap-2"><button className={`flex-1 text-white py-3 rounded-xl font-bold transition ${editingId ? 'bg-blue-600' : 'bg-blue-500 shadow-md'}`}>{editingId ? '수정 완료' : '추가하기'}</button>{editingId && <button type="button" onClick={() => {setEditingId(null); setPhotoFiles([]); setAlloc({}); setForm({...form, amount: '', memo: '', vatIncluded: false});}} className="px-4 bg-gray-200 rounded-xl font-bold text-gray-600">취소</button>}</div>
     </form>
   );
 
@@ -1106,9 +1278,35 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
                       <div className="font-bold text-red-500 text-lg">-{formatNumber(totalExp)}</div>
                   </div>
               </div>
-              <div className="bg-gray-50 p-3 rounded-xl space-y-1 mb-3 text-xs">
-                  <div className="flex justify-between"><span>🛠️ 제작비</span> <span>{formatNumber(expenseProd)}원</span></div>
-                  <div className="flex justify-between"><span>📢 마케팅비</span> <span>{formatNumber(expenseMark)}원</span></div>
+              {/* 분류별 모아보기 — 누르면 아래 내역 리스트가 그 분류만 보인다. */}
+              <div className="bg-gray-50 p-3 rounded-xl space-y-2 mb-3 text-xs">
+                  {incomeGroups.length > 0 && (
+                      <div className="space-y-1">
+                          <div className="text-[10px] font-bold text-blue-400">수입</div>
+                          {incomeGroups.map((g) => (
+                              <button type="button" key={'i-' + g.category} onClick={() => toggleCat(g)}
+                                  className={`w-full flex justify-between items-center px-2 py-1 rounded-lg transition ${sameCat(g) ? 'bg-blue-100 ring-1 ring-blue-300 font-bold' : 'hover:bg-white'}`}>
+                                  <span className="text-gray-600">{g.label} <span className="text-gray-400 font-normal">({g.count})</span></span>
+                                  <span className={`font-bold ${g.total < 0 ? 'text-red-500' : 'text-blue-600'}`}>{formatNumber(g.total)}원</span>
+                              </button>
+                          ))}
+                      </div>
+                  )}
+                  {expenseGroups.length > 0 && (
+                      <div className="space-y-1">
+                          <div className="text-[10px] font-bold text-red-400">지출</div>
+                          {expenseGroups.map((g) => (
+                              <button type="button" key={'e-' + g.category} onClick={() => toggleCat(g)}
+                                  className={`w-full flex justify-between items-center px-2 py-1 rounded-lg transition ${sameCat(g) ? 'bg-red-100 ring-1 ring-red-300 font-bold' : 'hover:bg-white'}`}>
+                                  <span className="text-gray-600">{g.label} <span className="text-gray-400 font-normal">({g.count})</span></span>
+                                  <span className="font-bold text-red-500">{formatNumber(g.total)}원</span>
+                              </button>
+                          ))}
+                      </div>
+                  )}
+                  {incomeGroups.length === 0 && expenseGroups.length === 0 && (
+                      <div className="text-gray-400">내역이 없습니다.</div>
+                  )}
               </div>
               <div className="border-t pt-3 flex justify-between items-end">
                   <span className="font-bold text-gray-600">예상 순수익</span>
@@ -1126,8 +1324,20 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
                     <span>🔍 '{filterKeyword}' 내역만 보는 중</span><span className="text-yellow-500 ml-1">✕ 해제</span>
                 </div>
             )}
+            {catFilter && (
+                <div className="flex items-center gap-2 flex-wrap mb-3">
+                    <span className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-full text-xs font-bold ${catFilter.type === 'income' ? 'bg-blue-100 text-blue-800' : 'bg-red-100 text-red-700'}`}>
+                        {catFilter.label} {finalList.length}건 · 합계 {formatNumber(finalList.reduce((a, c) => a + (c.totalAmount || c.amount || 0), 0))}원
+                    </span>
+                    <button type="button" onClick={() => setCatFilter(null)} className="rounded-full bg-gray-200 px-3 py-1.5 text-xs font-bold text-gray-600 hover:bg-gray-300">전체 보기</button>
+                </div>
+            )}
             {showStats ? ( <CategoryStats list={projectTrans} onCategoryClick={handleCategoryClick} /> ) : (
-                <TransactionList list={finalList} showVat={true} onEdit={handleEdit} onDelete={handleDelete} isSummaryMode={false} onMonthClick={onMonthClick} categoryMap={categories} onOpenPhotos={setPhotoFor} />
+                <TransactionList list={finalList} showVat={true} onEdit={handleEdit} onDelete={handleDelete} isSummaryMode={false} onMonthClick={onMonthClick} categoryMap={categories} onOpenPhotos={setPhotoFor} onShowSource={(item) => {
+                  const src = allTransactions.find((x) => x.id === item.payoutSourceId);
+                  if (src) handleEdit(src);
+                  else alert('원본 수익을 찾지 못했습니다. 이미 삭제된 것 같습니다.');
+              }} />
             )}
           </div>
         </div>
@@ -1172,7 +1382,7 @@ function CategoryStats({ list, onCategoryClick }) {
 }
 
 // onOpenPhotos 를 넘긴 곳(보티즈)만 📎 배지를 그린다. 보이스튜닝·저작권·유튜브는 안 넘기므로 그대로다.
-function TransactionList({ list, showVat, onEdit, onDelete, isSummaryMode, onMonthClick, categoryMap, onOpenPhotos }) {
+function TransactionList({ list, showVat, onEdit, onDelete, isSummaryMode, onMonthClick, categoryMap, onOpenPhotos, onShowSource }) {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 25;
   const totalPages = Math.ceil(list.length / itemsPerPage);
@@ -1242,6 +1452,11 @@ function TransactionList({ list, showVat, onEdit, onDelete, isSummaryMode, onMon
                         {displayTitle}
                         {(displayTitle !== item.memo && item.memo) && <span className="text-gray-400 font-normal"> ({item.memo})</span>}
                     </span>
+                    {isAutoPayout(item) && (
+                        <button type="button" onClick={() => onShowSource && onShowSource(item)}
+                            className="shrink-0 rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-extrabold text-indigo-700 hover:bg-indigo-200"
+                            title="원본 수익으로 이동">자동배분</button>
+                    )}
                 </div>
                 <div className="flex items-center gap-1">
                     {onOpenPhotos && <PhotoBadge count={item.photoCount} onClick={() => onOpenPhotos(item)} />}

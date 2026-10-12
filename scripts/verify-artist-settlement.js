@@ -20,6 +20,11 @@ import {
     WITHHOLDING_RATE, LOCAL_TAX_RATE, VAT_RATE,
 } from '../src/domain/artistPayout.js';
 import {
+    allocationForIncome, payoutAmounts, payoutMemo, findPayoutExpense,
+    isAutoPayout, collabLinksOf, isWithinShareWindow, sourceIncomeOnly, PAYOUT_CATEGORY,
+    SKIP_FIELD, skipIdsOf, isPayoutSkipped, mergeSkipIds,
+} from '../src/domain/collabPayout.js';
+import {
     categoryOf, payeeOf, effectiveTaxType,
     payeeInfo, payeeSnapshot, payeeOfSettlement,
 } from '../src/domain/artistProfile.js';
@@ -371,6 +376,202 @@ const asCollabPayee = computeGeneralSettlement({
     carryIn: 0,
 });
 eq('구분·지급처를 붙여도 몫은 그대로 560', asCollabPayee.artistShare, 560);
+
+// ──[ 7. 콜라보 음원수익 자동 배분 ]──────────────────────────────────────
+console.log('\n── 7. 콜라보 자동 배분 (제작비 1,000 / 30% / 36개월)');
+
+const payLink = { type: 'collab_recoup', recoupAmount: 1000, sharePercent: 30, startMonth: '2026-01', periodMonths: 36 };
+const pm = monthRange('2026-01', 38);
+// 음원수익만 누적 대상이다(category 'source').
+const src = (id, ym, amt) => ({ id, projectId: 'P', division: 'votiz', type: 'income', category: 'source', date: ym + '-10', amount: amt, totalAmount: amt });
+
+// 1~9개월차 누적 900
+const hist = [];
+for (let i = 0; i < 9; i++) hist.push(src('h' + i, pm[i], 100));
+
+// 누적 900 까지는 배분 0
+const before900 = allocationForIncome({ transactions: hist, projectId: 'P', link: payLink, income: hist[8] });
+eq('누적 900 안에서는 배분 0', [before900.shareable, before900.amount], [0, 0]);
+
+// 다음 수익 300 → 넘친 200 × 30% = 60
+const rowA = src('a', pm[9], 300);
+const allocA = allocationForIncome({ transactions: hist.concat([rowA]), projectId: 'P', link: payLink, income: rowA });
+eq('제작비를 넘기는 건: 공유 대상 200', allocA.shareable, 200);
+eq('제작비를 넘기는 건: 배분 60', allocA.amount, 60);
+
+// 그다음 수익 200 → 전액 공유 대상 → 60
+const rowB = src('b', pm[10], 200);
+const allocB = allocationForIncome({ transactions: hist.concat([rowA, rowB]), projectId: 'P', link: payLink, income: rowB });
+eq('회수 뒤 건: 공유 대상 200', allocB.shareable, 200);
+eq('회수 뒤 건: 배분 60', allocB.amount, 60);
+
+// 기간 밖 수익 → 영역 미표시(inWindow false)
+const rowOut = src('c', pm[36], 500);
+const allocOut = allocationForIncome({ transactions: hist.concat([rowA, rowB, rowOut]), projectId: 'P', link: payLink, income: rowOut });
+eq('기간 밖 수익은 배분 영역 미표시', [allocOut.inWindow, allocOut.amount], [false, 0]);
+eq('기간 판정: 1개월차 안', isWithinShareWindow(payLink, pm[0] + '-10'), true);
+eq('기간 판정: 37개월차 밖', isWithinShareWindow(payLink, pm[36] + '-10'), false);
+
+// 배분한 건들의 합은 콜라보 정산의 누적 공유액과 같아야 한다(쪼개 쓴 것이니까)
+const allRows = hist.concat([rowA, rowB]);
+const sumAlloc = allRows.reduce((acc, r) => acc + allocationForIncome({ transactions: allRows, projectId: 'P', link: payLink, income: r }).amount, 0);
+eq('건별 배분 합 = 콜라보 누적 공유액', sumAlloc, computeCollab({ transactions: allRows, projectId: 'P', link: payLink }).artistShare);
+
+// 공급가·부가세
+// 배분 줄은 '마이너스 수익' 이라 금액이 전부 음수다.
+eq('원천징수: 마이너스 수익 -60, 부가세 없음', payoutAmounts(60, 'withholding'), { amount: -60, vat: 0, totalAmount: -60 });
+eq('세금계산서: 1,000,000 → 공급가 -909,091 / 부가세 -90,909',
+    payoutAmounts(1000000, 'invoice'), { amount: -909091, vat: -90909, totalAmount: -1000000 });
+eq('세금계산서: 공급가 + 부가세 = -배분 금액',
+    payoutAmounts(60, 'invoice').amount + payoutAmounts(60, 'invoice').vat, -60);
+
+// 배분 줄('수익배분' 분류)은 자동 배분 계산의 누적에 안 들어간다 — 음원수익만 센다.
+const withPayoutRow = hist.concat([rowA, {
+    id: 'pay1', projectId: 'P', division: 'votiz', type: 'income', category: PAYOUT_CATEGORY,
+    date: pm[9] + '-11', amount: -60, totalAmount: -60,
+    payoutSourceId: 'a', payoutArtistId: 'C',
+}, rowB]);
+const allocBWithPayout = allocationForIncome({ transactions: withPayoutRow, projectId: 'P', link: payLink, income: rowB });
+eq('수익배분 줄이 있어도 배분 계산은 그대로 60', allocBWithPayout.amount, 60);
+eq('수익배분 줄은 누적에서 빠진다 (누적 1,400)', allocBWithPayout.cumulativeAfter, 1400);
+
+// 콜라보 연결만 골라낸다
+const proj = { id: 'P', artists: [
+    { artistId: 'M', type: 'member', share: 100 },
+    { artistId: 'C', type: 'collab_recoup', recoupAmount: 1000, sharePercent: 30, startMonth: '2026-01', periodMonths: 36 },
+    { artistId: 'N', type: 'collab_none' },
+] };
+eq('콜라보(회수형)만 자동 배분 대상', collabLinksOf(proj).map((a) => a.artistId), ['C']);
+
+// 수익 1건 × 아티스트 1명 = 배분 지출 1건
+const expenses = [
+    { id: 'e1', payoutSourceId: 'a', payoutArtistId: 'C', totalAmount: 60 },
+    { id: 'e2', payoutSourceId: 'b', payoutArtistId: 'C', totalAmount: 60 },
+];
+eq('원본+아티스트로 배분 줄 1건을 찾는다', findPayoutExpense(expenses, 'a', 'C').id, 'e1');
+eq('없으면 null', findPayoutExpense(expenses, 'zzz', 'C'), null);
+eq('배분 줄 판별', [isAutoPayout(expenses[0]), isAutoPayout({ id: 'x' })], [true, false]);
+eq('지출 분류 키', PAYOUT_CATEGORY, 'payout');
+eq('메모 형식', payoutMemo({ artistName: '테스트가수', sharePercent: 30, incomeDate: '2026-10-10' }),
+    '자동배분 · 테스트가수 30% · 2026-10-10 음원수익');
+
+// ──[ 8. '수익배분' 지출이 매니지먼트 정산에 주는 영향 ]──────────────────
+console.log('\n── 8. 수익배분 지출이 정산에 들어가는지');
+
+// 같은 곡에 소속(지분 50%)과 콜라보가 함께 걸린 경우
+const mixProject = {
+    id: 'MIX', name: '섞인곡',
+    artists: [
+        { artistId: 'MEM', type: 'member', share: 50, incomeCategoryId: 'mu', expenseCategoryId: 'ex' },
+        { artistId: 'COL', type: 'collab_recoup', recoupAmount: 0, sharePercent: 30, startMonth: '2026-01', periodMonths: 36 },
+    ],
+};
+const mixTx = [
+    { id: 'i1', projectId: 'MIX', division: 'votiz', type: 'income', category: 'source', date: '2026-01-10', amount: 1000, totalAmount: 1000 },
+    // 자동배분으로 생긴 '마이너스 수익' (category: payout)
+    { id: 'p1', projectId: 'MIX', division: 'votiz', type: 'income', category: PAYOUT_CATEGORY, date: '2026-01-10', amount: -300, totalAmount: -300,
+      payoutSourceId: 'i1', payoutArtistId: 'COL' },
+];
+const mixRows = buildSongRows({ projects: [mixProject], transactions: mixTx, artistId: 'MEM', months: ['2026-01'] });
+const mixIncome = mixRows.filter((r) => r.type === 'income').reduce((a, b) => a + b.amount, 0);
+const mixExpense = mixRows.filter((r) => r.type === 'expense').reduce((a, b) => a + b.amount, 0);
+eq('소속 정산: 수익 (1,000 − 300) × 50% = 350 ⚠️ 마이너스 수익이 섞인다', mixIncome, 350);
+eq('소속 정산: 지출은 없다', mixExpense, 0);
+
+// 콜라보 정산은 수익만 보므로 영향 없음
+const colBefore = computeCollab({ transactions: [mixTx[0]], projectId: 'MIX', link: mixProject.artists[1] });
+const colAfter = computeCollab({ transactions: mixTx, projectId: 'MIX', link: mixProject.artists[1] });
+// 콜라보 정산도 '음원수익만' 기준으로 통일했다 — 부르는 쪽에서 sourceIncomeOnly 로 거른다.
+const colBasis = computeCollab({ transactions: sourceIncomeOnly(mixTx), projectId: 'MIX', link: mixProject.artists[1] });
+eq('콜라보 정산 누적: 수익배분을 빼고 1,000', colBasis.totalIncome, 1000);
+eq('콜라보 정산 공유액: 300 (수익배분 영향 없음)', colBasis.artistShare, 300);
+eq('거르지 않으면 700 으로 줄어든다(기준을 통일한 이유)', colAfter.totalIncome, 700);
+eq('거르기 전후 공유액 비교', [colAfter.artistShare, colBasis.artistShare], [210, 300]);
+
+// 공연수익·곡 판매·기타수익도 공유 대상이 아니다
+const otherTx = [
+    { id: 'o1', projectId: 'MIX', division: 'votiz', type: 'income', category: 'source', date: '2026-01-10', amount: 1000, totalAmount: 1000 },
+    { id: 'o2', projectId: 'MIX', division: 'votiz', type: 'income', category: 'performance', date: '2026-01-11', amount: 500, totalAmount: 500 },
+    { id: 'o3', projectId: 'MIX', division: 'votiz', type: 'income', category: 'sale', date: '2026-01-12', amount: 300, totalAmount: 300 },
+    { id: 'o4', projectId: 'MIX', division: 'votiz', type: 'income', category: 'other', date: '2026-01-13', amount: 200, totalAmount: 200 },
+];
+const colOther = computeCollab({ transactions: sourceIncomeOnly(otherTx), projectId: 'MIX', link: mixProject.artists[1] });
+eq('공연수익 500 은 공유 대상 아님 — 누적 1,000', colOther.totalIncome, 1000);
+eq('곡 판매·기타수익도 제외 — 공유액 300', colOther.artistShare, 300);
+
+// 자동 배분 건별 합 = 콜라보 정산 누적 공유액 (기준이 같으니 계속 일치)
+const basisRows = [
+    { id: 'b1', projectId: 'B', division: 'votiz', type: 'income', category: 'source', date: '2026-01-10', amount: 600, totalAmount: 600 },
+    { id: 'b2', projectId: 'B', division: 'votiz', type: 'income', category: 'source', date: '2026-02-10', amount: 900, totalAmount: 900 },
+    { id: 'b3', projectId: 'B', division: 'votiz', type: 'income', category: PAYOUT_CATEGORY, date: '2026-02-11', amount: -150, totalAmount: -150, payoutSourceId: 'b2', payoutArtistId: 'X' },
+    { id: 'b4', projectId: 'B', division: 'votiz', type: 'income', category: 'performance', date: '2026-03-10', amount: 400, totalAmount: 400 },
+];
+const basisLink = { recoupAmount: 1000, sharePercent: 30, startMonth: '2026-01', periodMonths: 36 };
+const perRow = basisRows.reduce((a, r) => a + allocationForIncome({ transactions: basisRows, projectId: 'B', link: basisLink, income: r }).amount, 0);
+const asSettlement = computeCollab({ transactions: sourceIncomeOnly(basisRows), projectId: 'B', link: basisLink }).artistShare;
+eq('건별 배분 합 = 콜라보 정산 누적 공유액 (수익배분·공연수익 섞여도)', perRow, asSettlement);
+eq('그 값은 150 ((600+900-1,000) × 30%)', asSettlement, 150);
+
+// ──[ 9. '배분 안 함' 기억 ]──────────────────────────────────────────────
+console.log('');
+console.log("── 9. '배분 안 함' 을 원본 수익 문서에 기억");
+
+eq('필드 이름', SKIP_FIELD, 'payoutSkipArtistIds');
+eq('필드가 없는 옛 수익은 빈 목록', skipIdsOf({ id: 'i1' }), []);
+eq('배열이 아니면 빈 목록', skipIdsOf({ id: 'i1', payoutSkipArtistIds: 'C' }), []);
+eq('적혀 있으면 그 아티스트만 배분 안 함',
+    [isPayoutSkipped({ payoutSkipArtistIds: ['C'] }, 'C'), isPayoutSkipped({ payoutSkipArtistIds: ['C'] }, 'D')],
+    [true, false]);
+
+// 화면에서 저장할 때 만드는 목록. (prev, 화면에 보이는 아티스트, 체크된 아티스트)
+eq('체크하고 저장 → id 기록', mergeSkipIds([], ['C', 'D'], ['C']), ['C']);
+eq('체크를 풀고 저장 → id 삭제', mergeSkipIds(['C'], ['C', 'D'], []), []);
+eq('둘 다 체크', mergeSkipIds([], ['C', 'D'], ['C', 'D']), ['C', 'D']);
+eq('중복은 한 번만', mergeSkipIds(['C'], ['C'], ['C']), ['C']);
+// 날짜를 공유 기간 밖으로 옮기면 그 줄이 화면에서 사라진다 — 그때 표시가 지워지면 안 된다.
+eq('화면에 안 보이는 아티스트의 기록은 남긴다', mergeSkipIds(['C', 'Z'], ['C'], ['C']), ['Z', 'C']);
+eq('음원수익이 아니라 줄이 아예 없을 때는 호출하지 않는다(기록 보존)',
+    skipIdsOf({ payoutSkipArtistIds: ['C'] }), ['C']);
+
+// ── 화면 흐름 그대로: 체크 → 저장 → 다시 열기 → 메모만 고쳐 저장 → 체크 해제 저장
+// (VotizTab 의 syncPayouts 와 같은 판정: '배분 안 함' 이면 만들지 않는다)
+const skipFlowLink = { type: 'collab_recoup', recoupAmount: 0, sharePercent: 30, startMonth: '2026-01', periodMonths: 36 };
+const skipIncomeBase = { id: 'si1', projectId: 'S', division: 'votiz', type: 'income', category: 'source', date: '2026-02-10', amount: 1000, totalAmount: 1000 };
+
+// 저장 1회차 — '배분 안 함' 체크
+let skipDoc = { ...skipIncomeBase, [SKIP_FIELD]: mergeSkipIds([], ['C'], ['C']) };
+const wouldCreate = (incomeDoc, artistId) => {
+    if (isPayoutSkipped(incomeDoc, artistId)) return 0;   // 체크돼 있으면 안 만든다
+    return allocationForIncome({ transactions: [incomeDoc], projectId: 'S', link: skipFlowLink, income: incomeDoc }).amount;
+};
+eq('배분 안 함으로 저장하면 배분 0', wouldCreate(skipDoc, 'C'), 0);
+eq('저장된 문서에 id 가 남는다', skipDoc[SKIP_FIELD], ['C']);
+
+// 다시 열기 — 체크가 유지된다
+eq('다시 열면 체크 유지', isPayoutSkipped(skipDoc, 'C'), true);
+
+// 메모만 고쳐 재저장 — 체크 상태 그대로 저장되므로 배분이 되살아나지 않는다
+skipDoc = { ...skipDoc, memo: '메모만 고침', [SKIP_FIELD]: mergeSkipIds(skipIdsOf(skipDoc), ['C'], ['C']) };
+eq('메모만 고쳐 재저장해도 배분 미생성', wouldCreate(skipDoc, 'C'), 0);
+eq('재저장 뒤에도 기록 유지', skipDoc[SKIP_FIELD], ['C']);
+
+// 체크 해제 저장 — 배분이 생긴다
+skipDoc = { ...skipDoc, [SKIP_FIELD]: mergeSkipIds(skipIdsOf(skipDoc), ['C'], []) };
+eq('체크 해제 저장 → 기록 삭제', skipDoc[SKIP_FIELD], []);
+eq('체크 해제 저장 → 배분 300 생성', wouldCreate(skipDoc, 'C'), 300);
+
+// 표시는 화면 동작 전용 — 계산에 아무 영향이 없다
+const skipForCalc = { ...skipIncomeBase, [SKIP_FIELD]: ['C'] };
+eq('배분 안 함 표시는 자동 배분 계산값을 바꾸지 않는다',
+    allocationForIncome({ transactions: [skipForCalc], projectId: 'S', link: skipFlowLink, income: skipForCalc }).amount,
+    allocationForIncome({ transactions: [skipIncomeBase], projectId: 'S', link: skipFlowLink, income: skipIncomeBase }).amount);
+eq('콜라보 정산 누적에도 영향 없음',
+    computeCollab({ transactions: sourceIncomeOnly([skipForCalc]), projectId: 'S', link: skipFlowLink }).totalIncome, 1000);
+eq('소속 정산(곡 내역)에도 영향 없음',
+    buildSongRows({
+        projects: [{ id: 'S', name: '곡S', artists: [{ artistId: 'MEM', type: 'member', share: 50, incomeCategoryId: 'mu', expenseCategoryId: 'ex' }] }],
+        transactions: [skipForCalc], artistId: 'MEM', months: ['2026-02'],
+    }).filter((r) => r.type === 'income').reduce((a, b) => a + b.amount, 0), 500);
 
 // ──[ 결과 ]──────────────────────────────────────────────────────────────
 console.log(`\n${pass}/${pass + fail} 통과` + (fail ? ` — 실패 ${fail}건` : ''));

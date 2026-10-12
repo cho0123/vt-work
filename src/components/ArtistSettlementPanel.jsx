@@ -14,6 +14,7 @@ import {
     monthsOfPeriod, periodLabel, periodKey, periodCount, linkTypeOf,
 } from '../domain/artistSettlement.js';
 import { printArtistSettlement } from '../utils/artistSettlementDoc.js';
+import { sourceIncomeOnly } from '../domain/collabPayout.js';
 import { computePayout, payoutSnapshot, payoutOfSettlement, TAX_TYPE_LABEL } from '../domain/artistPayout.js';
 import { effectiveTaxType, payeeInfo, payeeSnapshot, payeeOfSettlement } from '../domain/artistProfile.js';
 
@@ -125,7 +126,8 @@ export function ArtistSettlementPanel({
             .map((p) => {
                 const link = (Array.isArray(p.artists) ? p.artists : []).find((a) => a.artistId === artistId);
                 if (!link || linkTypeOf(link) !== 'collab_recoup') return null;
-                const c = computeCollab({ transactions: allTransactions, projectId: p.id, link });
+                // 공유 대상은 음원수익만 — computeCollab 은 분류를 안 가리므로 여기서 걸러 넘긴다.
+                const c = computeCollab({ transactions: sourceIncomeOnly(allTransactions), projectId: p.id, link });
                 const inPeriod = c.months.filter((m) => monthSet.has(m.ym));
                 return {
                     projectId: p.id, projectName: p.name, ...c,
