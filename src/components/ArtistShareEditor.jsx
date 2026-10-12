@@ -17,6 +17,7 @@ import { getDoc, doc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { isShareFilled, typeOf, LINK_TYPES, DEFAULT_PERIOD_MONTHS } from '../utils/artistShares.js';
 import { CATEGORY_LABEL, categoryOf, payeeOf, payeeInfo } from '../domain/artistProfile.js';
+import { topLevelCats } from '../domain/mgmtCategories.js';
 
 const boxClass = "w-24 p-2 bg-white border border-gray-200 rounded-lg outline-none text-sm text-right";
 const selClass = "p-2 bg-white border border-gray-200 rounded-lg outline-none text-xs";
@@ -33,8 +34,9 @@ export function ArtistShareEditor({ title, artistList, categories, value, onChan
     const all = artistList || [];
     const byId = (id) => all.find((a) => a.id === id);
 
-    const incomeCats = (categories || []).filter((c) => c.kind === 'income' && !c.hidden);
-    const expenseCats = (categories || []).filter((c) => c.kind === 'expense' && !c.hidden);
+    // 곡 연결에서 고르는 것은 **최상위 항목**이다(정산비율이 거기에만 있다).
+    const incomeCats = topLevelCats(categories, 'income');
+    const expenseCats = topLevelCats(categories, 'expense');
 
     const members = list.filter((v) => typeOf(v) === 'member');
     const allBlank = members.length > 0 && members.every((v) => !isShareFilled(v.share));

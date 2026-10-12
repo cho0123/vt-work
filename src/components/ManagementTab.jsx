@@ -20,7 +20,7 @@
 //   - 목록·항목은 탭을 열 때 한 번만 읽고, 저장 뒤에는 메모리 상태만 갱신한다.
 //   - artistPrivate 는 상세를 열 때 그 아티스트 1건만 읽는다(목록에는 안 쓴다).
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { collection, addDoc, getDocs, getDoc, doc, setDoc, deleteDoc, updateDoc, query, where } from 'firebase/firestore';
+import { collection, addDoc, getDocs, getDoc, doc, setDoc, deleteDoc, updateDoc, query, where, limit } from 'firebase/firestore';
 import { db } from '../firebase';
 import { ArtistWorkspace } from './ArtistWorkspace.jsx';
 import { TAX_TYPES, TAX_TYPE_LABEL, taxTypeOf } from '../domain/artistPayout.js';
@@ -28,6 +28,10 @@ import {
     ARTIST_CATEGORIES, CATEGORY_LABEL, PAYEES,
     categoryOf, payeeOf, effectiveTaxType,
 } from '../domain/artistProfile.js';
+import {
+    MGMT_SETTINGS_COLLECTION, VOTIZ_MAP_DOC, votizMapKey, normalizeVotizMap,
+    topLevelCats, childrenOf, hasChildren, isCategoryInUse,
+} from '../domain/mgmtCategories.js';
 
 const inputClass = "w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-gray-800 outline-none transition text-sm";
 const selectClass = inputClass + " appearance-none";
@@ -75,12 +79,6 @@ const maskAccount = (v) => {
     return '•'.repeat(s.length - 4) + s.slice(-4);
 };
 
-const byOrder = (a, b) => {
-    const d = Number(a.order || 0) - Number(b.order || 0);
-    if (d !== 0) return d;
-    return (a.name || '').localeCompare(b.name || '');
-};
-
 // 비율 한 쌍의 합. 한쪽이라도 비어 있으면 null(미입력).
 const sumOf = (p) => {
     if (!p) return null;
@@ -95,7 +93,7 @@ const clampPercent = (raw) => {
 };
 
 // projects / allTransactions 는 보티즈 탭이 이미 받아둔 것을 그대로 받는다(추가 조회 0회).
-export function ManagementTab({ user, projects, allTransactions, onArtistsChange }) {
+export function ManagementTab({ user, projects, allTransactions, onArtistsChange, votizCategories }) {
     const [artists, setArtists] = useState([]);
     const [categories, setCategories] = useState([]);
     const [loaded, setLoaded] = useState(false);
@@ -113,6 +111,8 @@ export function ManagementTab({ user, projects, allTransactions, onArtistsChange
     const [formError, setFormError] = useState('');
     const [saving, setSaving] = useState(false);
     const [showCats, setShowCats] = useState(false);
+    // 보티즈 분류 → 매니지먼트 항목 연결표. mgmtSettings/votiz_category_map 문서 1건.
+    const [votizMap, setVotizMap] = useState({});
     // 아티스트 정보(입력 폼)는 기본으로 접는다. 접어도 값은 form/priv 에 그대로 있다.
     const [infoOpen, setInfoOpen] = useState(false);
 
@@ -134,13 +134,15 @@ export function ManagementTab({ user, projects, allTransactions, onArtistsChange
         let alive = true;
         const load = async () => {
             try {
-                const [aSnap, cSnap] = await Promise.all([
+                const [aSnap, cSnap, mSnap] = await Promise.all([
                     getDocs(query(collection(db, 'artists'), where('uid', '==', user.uid))),
                     getDocs(query(collection(db, 'mgmtCategories'), where('uid', '==', user.uid))),
+                    getDoc(doc(db, MGMT_SETTINGS_COLLECTION, VOTIZ_MAP_DOC)),   // 연결표 1건
                 ]);
                 if (!alive) return;
                 setArtists(aSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
                 setCategories(cSnap.docs.map((d) => ({ id: d.id, ...d.data() })));
+                setVotizMap(mSnap.exists() ? ((mSnap.data() || {}).map || {}) : {});
                 setLoaded(true);
             } catch (e) {
                 if (!alive) return;
@@ -159,10 +161,11 @@ export function ManagementTab({ user, projects, allTransactions, onArtistsChange
         onArtistsChange(artists);
     }, [artists, loaded, onArtistsChange]);
 
-    const incomeCats = useMemo(
-        () => categories.filter((c) => c.kind === 'income' && !c.hidden).sort(byOrder),
-        [categories]
-    );
+    // 정산비율은 **최상위 수익 항목** 에만 둔다. 세부항목은 부모 비율을 따른다.
+    const incomeCats = useMemo(() => topLevelCats(categories, 'income'), [categories]);
+
+    // 연결표는 지워진 항목·세부항목을 걸러 쓴다(계산에 바로 넘기는 값).
+    const cleanVotizMap = useMemo(() => normalizeVotizMap(votizMap, categories), [votizMap, categories]);
 
     const visibleArtists = useMemo(() => {
         const k = keyword.trim().toLowerCase();
@@ -395,7 +398,12 @@ export function ManagementTab({ user, projects, allTransactions, onArtistsChange
     return (
         <div className="w-full space-y-5">
             {showCats && (
-                <CategoryManager user={user} categories={categories} setCategories={setCategories} onClose={() => setShowCats(false)} />
+                <CategoryManager
+                    user={user} categories={categories} setCategories={setCategories}
+                    artists={artists} votizCategories={votizCategories}
+                    votizMap={votizMap} setVotizMap={setVotizMap}
+                    onClose={() => setShowCats(false)}
+                />
             )}
 
             {loadError && (
@@ -451,7 +459,7 @@ export function ManagementTab({ user, projects, allTransactions, onArtistsChange
                             <ArtistWorkspace
                                 user={user} artist={current} categories={categories}
                                 projects={projects} allTransactions={allTransactions}
-                                priv={priv}
+                                priv={priv} votizMap={cleanVotizMap} votizCategories={votizCategories}
                             />
                         </div>
                     ) : (
@@ -859,54 +867,86 @@ function ArtistForm({ isNew, form, priv, setField, setPrivField, showAccount, se
 }
 
 // ──[ 공통 수익/지출 항목 관리 ]──
-// 추가·수정(항목명·구분·정렬순서)·숨김. 삭제는 두지 않았다 — 이미 쓴 항목을 지우면
-// 아티스트 비율에 남은 항목 ID 가 고아가 되므로 '숨김'이 안전하다.
-function CategoryManager({ user, categories, setCategories, onClose }) {
-    const [name, setName] = useState('');
-    const [kind, setKind] = useState('income');
+//
+// 화면: 왼쪽 '수입' · 오른쪽 '지출'. 각 쪽은 [항목 열] → [세부항목 열] 로 펼친다.
+//   · 위에 현재 위치 표시 (수입 > 음원수익)
+//   · 각 열 맨 아래에 한 줄 입력 + 추가
+//   · 한 줄 = 이름(칸에서 빠져나올 때 자동 저장) · ▲▼ 순서 · 숨기기
+//   · 숨긴 항목은 '숨긴 항목 보기' 를 켜야 보인다
+// 휴대폰 폭에서는 수입·지출이 위아래로 쌓이고, 항목을 누르면 세부항목 열로 넘어간다('← 항목').
+//
+// 삭제는 '아무 데서도 안 쓰는' 항목만 할 수 있다. 쓰고 있으면 숨기기만 한다 —
+// 비율·장부가 항목 ID 로 저장돼 있어서 지우면 고아가 된다.
+function CategoryManager({ user, categories, setCategories, artists, votizCategories, votizMap, setVotizMap, onClose }) {
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState('');
-    const [draft, setDraft] = useState({});
+    const [showHidden, setShowHidden] = useState(false);
+    // 쪽(수입/지출)마다 고른 항목과, 휴대폰 폭에서 보고 있는 열.
+    const [picked, setPicked] = useState({ income: null, expense: null });
+    const [mobileCol, setMobileCol] = useState({ income: 'root', expense: 'root' });
+    // 이름 입력 중인 값. 칸에서 빠져나올 때 저장한다.
+    const [names, setNames] = useState({});
+    const [adding, setAdding] = useState({});   // 열마다 새 이름 입력칸
 
-    const list = useMemo(() => [...categories].sort(byOrder), [categories]);
+    const pickCat = (kind, id) => {
+        setPicked((p) => ({ ...p, [kind]: p[kind] === id ? null : id }));
+        setMobileCol((m) => ({ ...m, [kind]: 'sub' }));
+    };
 
-    const add = async () => {
-        const n = name.trim();
-        if (!n) { setErr('항목명을 입력해 주세요.'); return; }
+    const addCat = async (kind, parentId, colKey) => {
+        const n = String(adding[colKey] || '').trim();
+        if (!n) { setErr('이름을 입력해 주세요.'); return; }
         setBusy(true); setErr('');
         try {
-            const maxOrder = categories.reduce((m, c) => Math.max(m, Number(c.order || 0)), 0);
-            const data = { uid: user.uid, name: n, kind, order: maxOrder + 1, hidden: false, createdAt: new Date() };
+            const siblings = parentId ? childrenOf(categories, parentId, true) : topLevelCats(categories, kind, true);
+            const maxOrder = siblings.reduce((m, c) => Math.max(m, Number(c.order || 0)), 0);
+            const data = {
+                uid: user.uid, name: n, kind, order: maxOrder + 1, hidden: false,
+                parentId: parentId || null, createdAt: new Date(),
+            };
             const ref = await addDoc(collection(db, 'mgmtCategories'), data);
             setCategories((prev) => [...prev, { id: ref.id, ...data }]);
-            setName('');
+            setAdding((prev) => ({ ...prev, [colKey]: '' }));
         } catch (e) {
             setErr('추가 실패: ' + (e && e.message ? e.message : ''));
         } finally { setBusy(false); }
     };
 
-    const valueOf = (c, key) => {
-        const d = draft[c.id];
-        if (d && d[key] !== undefined) return d[key];
-        return key === 'order' ? Number(c.order || 0) : c[key];
+    // 이름은 칸에서 빠져나올 때만 저장한다(줄마다 저장 버튼을 두지 않는다).
+    const commitName = async (c) => {
+        const draft = names[c.id];
+        if (draft === undefined) return;
+        const next = String(draft).trim();
+        setNames((prev) => { const o = { ...prev }; delete o[c.id]; return o; });
+        if (!next || next === c.name) return;        // 비우면 원래 이름을 지킨다
+        try {
+            await updateDoc(doc(db, 'mgmtCategories', c.id), { name: next });
+            setCategories((prev) => prev.map((x) => (x.id === c.id ? { ...x, name: next } : x)));
+        } catch (e) {
+            setErr('이름 저장 실패: ' + (e && e.message ? e.message : ''));
+        }
     };
-    const setDraftField = (id, key, v) =>
-        setDraft((prev) => ({ ...prev, [id]: { ...(prev[id] || {}), [key]: v } }));
 
-    const saveRow = async (c) => {
-        const next = {
-            name: String(valueOf(c, 'name') || '').trim(),
-            kind: valueOf(c, 'kind'),
-            order: Number(valueOf(c, 'order')) || 0,
-        };
-        if (!next.name) { setErr('항목명은 비울 수 없습니다.'); return; }
+    // 같은 열(형제)끼리만 순서를 바꾼다. 바뀐 줄만 쓴다.
+    const move = async (c, siblings, dir) => {
+        const idx = siblings.findIndex((x) => x.id === c.id);
+        const to = idx + dir;
+        if (idx < 0 || to < 0 || to >= siblings.length) return;
+        const next = siblings.slice();
+        next.splice(to, 0, next.splice(idx, 1)[0]);
+        const changed = next
+            .map((x, i) => ({ x, order: i + 1 }))
+            .filter(({ x, order }) => Number(x.order || 0) !== order);
+        if (changed.length === 0) return;
         setBusy(true); setErr('');
         try {
-            await updateDoc(doc(db, 'mgmtCategories', c.id), next);
-            setCategories((prev) => prev.map((x) => (x.id === c.id ? { ...x, ...next } : x)));
-            setDraft((prev) => ({ ...prev, [c.id]: undefined }));
+            await Promise.all(changed.map(({ x, order }) => updateDoc(doc(db, 'mgmtCategories', x.id), { order })));
+            setCategories((prev) => prev.map((x) => {
+                const hit = changed.find((ch) => ch.x.id === x.id);
+                return hit ? { ...x, order: hit.order } : x;
+            }));
         } catch (e) {
-            setErr('저장 실패: ' + (e && e.message ? e.message : ''));
+            setErr('순서 변경 실패: ' + (e && e.message ? e.message : ''));
         } finally { setBusy(false); }
     };
 
@@ -921,51 +961,239 @@ function CategoryManager({ user, categories, setCategories, onClose }) {
         } finally { setBusy(false); }
     };
 
+    // 쓰는 데가 하나라도 있으면 지우지 않는다. 장부는 '같음' 조건 1건만 찾아본다(색인 불필요).
+    const removeCat = async (c) => {
+        if (hasChildren(categories, c.id)) { setErr("세부항목이 있어 지울 수 없습니다. 세부항목부터 정리하거나 '숨기기'를 쓰세요."); return; }
+        if (isCategoryInUse(c.id, { artists })) { setErr("아티스트 정산비율에 쓰고 있는 항목입니다. '숨기기'를 쓰세요."); return; }
+        setBusy(true); setErr('');
+        try {
+            const [a, b] = await Promise.all([
+                getDocs(query(collection(db, 'artistLedger'), where('categoryId', '==', c.id), limit(1))),
+                getDocs(query(collection(db, 'artistLedger'), where('subCategoryId', '==', c.id), limit(1))),
+            ]);
+            if (!a.empty || !b.empty) { setErr("장부에 쓰고 있는 항목입니다. '숨기기'를 쓰세요."); return; }
+            if (Object.values(votizMap || {}).includes(c.id)) { setErr("보티즈 분류 연결에 쓰고 있습니다. 연결을 먼저 푸세요."); return; }
+            if (!window.confirm("'" + c.name + "' 을(를) 지웁니다. 되돌릴 수 없습니다.")) return;
+            await deleteDoc(doc(db, 'mgmtCategories', c.id));
+            setCategories((prev) => prev.filter((x) => x.id !== c.id));
+            setPicked((p) => ({ income: p.income === c.id ? null : p.income, expense: p.expense === c.id ? null : p.expense }));
+        } catch (e) {
+            setErr('삭제 실패: ' + (e && e.message ? e.message : ''));
+        } finally { setBusy(false); }
+    };
+
+    // ── 한 줄 ──
+    // ⚠️ 컴포넌트로 만들지 않고 '그리는 함수' 로 둔다. 안에 컴포넌트를 정의하면
+    //    렌더마다 새 타입이 되어 이름을 한 글자 칠 때마다 입력칸 포커스가 날아간다.
+    const renderRow = (c, siblings, active, onPick, showArrow) => {
+        const idx = siblings.findIndex((x) => x.id === c.id);
+        return (
+            <div key={c.id} className={`flex items-center gap-1 flex-wrap rounded-xl px-2 py-1.5 ${c.hidden ? 'bg-gray-100 opacity-60' : active ? 'bg-emerald-50 ring-1 ring-emerald-200' : 'bg-gray-50 hover:bg-gray-100'}`}>
+                <input
+                    className="min-w-0 w-full sm:w-auto sm:flex-1 rounded-lg bg-transparent px-2 py-1 text-sm font-bold text-gray-700 outline-none focus:bg-white focus:ring-1 focus:ring-gray-300"
+                    value={names[c.id] !== undefined ? names[c.id] : (c.name || '')}
+                    onChange={(e) => setNames((prev) => ({ ...prev, [c.id]: e.target.value }))}
+                    onBlur={() => commitName(c)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
+                />
+                {c.hidden && <span className="shrink-0 rounded-full bg-gray-200 px-2 py-0.5 text-[10px] font-bold text-gray-500">숨김</span>}
+                <button type="button" disabled={busy || idx <= 0} onClick={() => move(c, siblings, -1)}
+                    className="shrink-0 w-6 h-6 rounded-full text-xs text-gray-400 hover:bg-white hover:text-gray-700 disabled:opacity-30" title="위로">▲</button>
+                <button type="button" disabled={busy || idx < 0 || idx >= siblings.length - 1} onClick={() => move(c, siblings, 1)}
+                    className="shrink-0 w-6 h-6 rounded-full text-xs text-gray-400 hover:bg-white hover:text-gray-700 disabled:opacity-30" title="아래로">▼</button>
+                <button type="button" disabled={busy} onClick={() => toggleHidden(c)}
+                    className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold text-gray-500 hover:bg-white">
+                    {c.hidden ? '보이기' : '숨기기'}
+                </button>
+                <button type="button" disabled={busy} onClick={() => removeCat(c)}
+                    className="shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold text-gray-300 hover:bg-white hover:text-red-500" title="안 쓰는 항목만 지울 수 있습니다">삭제</button>
+                {onPick && (
+                    <button type="button" onClick={() => onPick(c.id)}
+                        className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-extrabold ${active ? 'bg-emerald-600 text-white' : 'bg-white text-emerald-700 ring-1 ring-emerald-200 hover:bg-emerald-50'}`}>
+                        세부{showArrow ? ' ›' : ''}
+                    </button>
+                )}
+            </div>
+        );
+    };
+
+    // ── 한 열 ──
+    const renderColumn = ({ title, rows, siblings, colKey, placeholder, onAdd, onPick, pickedId, showArrow }) => (
+        <div className="space-y-1.5">
+            <div className="text-[10px] font-bold text-gray-400">{title}</div>
+            {rows.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-gray-200 px-3 py-4 text-center text-xs text-gray-400">없음</div>
+            ) : rows.map((c) => renderRow(c, siblings, pickedId === c.id, onPick, showArrow))}
+            <div className="flex gap-1 pt-1">
+                <input className={inputClass + ' flex-1 py-2 text-sm'} placeholder={placeholder}
+                    value={adding[colKey] || ''}
+                    onChange={(e) => setAdding((prev) => ({ ...prev, [colKey]: e.target.value }))}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onAdd(); } }} />
+                <button type="button" disabled={busy} onClick={onAdd}
+                    className={`${pill} shrink-0 bg-gray-800 text-white hover:bg-gray-700 px-3 py-2 text-xs`}>추가</button>
+            </div>
+        </div>
+    );
+
+    // ── 한 쪽(수입/지출) ──
+    const renderPane = (kind, title, tone) => {
+        const tops = topLevelCats(categories, kind, showHidden);
+        const pickedId = picked[kind];
+        const pickedCat = tops.find((c) => c.id === pickedId) || null;
+        const subs = pickedCat ? childrenOf(categories, pickedCat.id, showHidden) : [];
+        const onRoot = mobileCol[kind] === 'root';
+        return (
+            <div key={kind} className={`rounded-2xl border p-4 space-y-3 ${tone}`}>
+                <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-bold text-gray-800">{title}</span>
+                    {pickedCat && (
+                        <span className="text-xs font-bold text-gray-400">&gt; {pickedCat.name}</span>
+                    )}
+                    {pickedCat && !onRoot && (
+                        <button type="button" onClick={() => setMobileCol((m) => ({ ...m, [kind]: 'root' }))}
+                            className="md:hidden ml-auto text-xs font-bold text-gray-500 hover:text-gray-800">← 항목</button>
+                    )}
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className={onRoot ? '' : 'hidden md:block'}>
+                        {renderColumn({
+                            title: '항목', rows: tops, siblings: tops, colKey: kind + '-root',
+                            placeholder: '새 항목',
+                            onAdd: () => addCat(kind, null, kind + '-root'),
+                            onPick: (id) => pickCat(kind, id), pickedId, showArrow: true,
+                        })}
+                    </div>
+                    <div className={onRoot ? 'hidden md:block' : ''}>
+                        {pickedCat ? renderColumn({
+                            title: '세부항목 — ' + pickedCat.name, rows: subs, siblings: subs,
+                            colKey: kind + '-sub-' + pickedCat.id,
+                            placeholder: '새 세부항목',
+                            onAdd: () => addCat(kind, pickedCat.id, kind + '-sub-' + pickedCat.id),
+                            onPick: null, pickedId: null, showArrow: false,
+                        }) : (
+                            <div className="rounded-xl border border-dashed border-gray-200 px-3 py-6 text-center text-xs text-gray-400">
+                                항목의 '세부' 를 누르면 여기에 세부항목이 나옵니다.
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
     return (
         <div className="rounded-2xl border-2 border-gray-100 bg-white p-5 shadow-sm space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
                 <h3 className="font-bold text-gray-800">수익 · 지출 항목</h3>
-                <button onClick={onClose} className="text-xs font-bold text-gray-400 hover:text-gray-600">닫기</button>
-            </div>
-
-            <div className="flex gap-2 flex-wrap">
-                <select className={selectClass + ' w-28'} value={kind} onChange={(e) => setKind(e.target.value)}>
-                    <option value="income">수익</option>
-                    <option value="expense">지출</option>
-                </select>
-                <input className={inputClass + ' flex-1 min-w-[160px]'} placeholder="새 항목명 (예: 음원수익)" value={name} onChange={(e) => setName(e.target.value)} />
-                <button disabled={busy} onClick={add} className={`${pill} bg-gray-800 text-white hover:bg-gray-700 shrink-0`}>추가</button>
+                <div className="flex items-center gap-2">
+                    <label className="flex items-center gap-1 cursor-pointer select-none">
+                        <input type="checkbox" className="w-4 h-4 rounded" checked={showHidden} onChange={(e) => setShowHidden(e.target.checked)} />
+                        <span className="text-xs font-bold text-gray-500">숨긴 항목 보기</span>
+                    </label>
+                    <button onClick={onClose} className="text-xs font-bold text-gray-400 hover:text-gray-600">닫기</button>
+                </div>
             </div>
 
             {err && <div className="rounded-xl bg-red-50 border border-red-200 p-3 text-sm font-bold text-red-700">{err}</div>}
 
-            {list.length === 0 ? (
-                <div className="text-sm text-gray-400">항목이 없습니다. 위에서 추가하세요.</div>
-            ) : (
-                <div className="space-y-2">
-                    {list.map((c) => (
-                        <div key={c.id} className={`flex items-center gap-2 rounded-xl px-3 py-2 flex-wrap ${c.hidden ? 'bg-gray-100 opacity-60' : 'bg-gray-50'}`}>
-                            <select className={selectClass + ' w-24'} value={valueOf(c, 'kind')} onChange={(e) => setDraftField(c.id, 'kind', e.target.value)}>
-                                <option value="income">수익</option>
-                                <option value="expense">지출</option>
-                            </select>
-                            <input className={inputClass + ' flex-1 min-w-[140px]'} value={valueOf(c, 'name') || ''} onChange={(e) => setDraftField(c.id, 'name', e.target.value)} />
-                            <label className="flex items-center gap-1">
-                                <span className="text-[10px] font-bold text-gray-400">순서</span>
-                                <input type="number" className={inputClass + ' w-20'} value={valueOf(c, 'order')} onChange={(e) => setDraftField(c.id, 'order', e.target.value)} />
-                            </label>
-                            {c.hidden && <span className="rounded-full bg-gray-200 px-2 py-0.5 text-[10px] font-bold text-gray-500">숨김</span>}
-                            <button disabled={busy} onClick={() => saveRow(c)} className={`${pill} bg-white text-gray-700 ring-1 ring-gray-200 hover:bg-gray-50`}>저장</button>
-                            <button disabled={busy} onClick={() => toggleHidden(c)} className={`${pill} bg-white text-gray-500 ring-1 ring-gray-200 hover:bg-gray-50`}>
-                                {c.hidden ? '보이기' : '숨기기'}
-                            </button>
-                        </div>
-                    ))}
-                </div>
-            )}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {renderPane('income', '수입', 'border-blue-100 bg-blue-50/30')}
+                {renderPane('expense', '지출', 'border-red-100 bg-red-50/30')}
+            </div>
+
             <p className="text-xs text-gray-400">
-                아티스트 비율은 항목 ID 로 저장되므로, 쓰던 항목은 지우지 말고 '숨기기'를 쓰세요.
+                이름은 칸에서 빠져나오면 자동 저장됩니다. 세부항목의 수입·지출 구분은 항목을 따라갑니다.
+                정산비율은 항목(최상위)에만 있고 세부항목은 그 비율을 따릅니다. 쓰고 있는 항목은 '숨기기'만 됩니다.
             </p>
+
+            <VotizCategoryMap
+                user={user} categories={categories} votizCategories={votizCategories}
+                votizMap={votizMap} setVotizMap={setVotizMap}
+            />
+        </div>
+    );
+}
+
+// ──[ 보티즈 분류 연결표 ]──
+// 보티즈 고정 분류마다 매니지먼트 최상위 항목을 하나 고른다.
+// 소속(member) 정산에서 곡 내역을 집계할 때 이 표를 먼저 보고, 없으면
+// 곡-아티스트 연결에서 고른 '수익항목/지출항목' 으로 들어간다(기존 동작).
+function VotizCategoryMap({ user, categories, votizCategories, votizMap, setVotizMap }) {
+    const [busy, setBusy] = useState(false);
+    const [msg, setMsg] = useState('');
+    const [open, setOpen] = useState(false);
+
+    const vc = votizCategories || { income: {}, expense: {} };
+    const incomeTops = useMemo(() => topLevelCats(categories, 'income'), [categories]);
+    const expenseTops = useMemo(() => topLevelCats(categories, 'expense'), [categories]);
+
+    const setOne = (type, category, value) =>
+        setVotizMap((prev) => {
+            const next = { ...(prev || {}) };
+            const k = votizMapKey(type, category);
+            if (value) next[k] = value; else delete next[k];
+            return next;
+        });
+
+    const save = async () => {
+        setBusy(true); setMsg('');
+        try {
+            await setDoc(doc(db, MGMT_SETTINGS_COLLECTION, VOTIZ_MAP_DOC), {
+                uid: user.uid, map: votizMap || {}, updatedAt: new Date(),
+            });
+            setMsg('저장했습니다.');
+        } catch (e) {
+            setMsg('저장 실패: ' + (e && e.message ? e.message : ''));
+        } finally { setBusy(false); }
+    };
+
+    const rows = (type, tops) => Object.keys(vc[type] || {}).map((key) => (
+        <div key={type + ':' + key} className="flex items-center gap-2 rounded-xl bg-gray-50 px-3 py-2">
+            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ring-1 ${type === 'income' ? 'bg-blue-50 text-blue-600 ring-blue-200' : 'bg-red-50 text-red-500 ring-red-200'}`}>
+                {type === 'income' ? '수입' : '지출'}
+            </span>
+            <span className="w-24 shrink-0 truncate text-sm font-bold text-gray-700">{vc[type][key]}</span>
+            <span className="shrink-0 text-xs text-gray-300">→</span>
+            <select className={selectClass + ' flex-1 py-2 text-sm'}
+                value={(votizMap || {})[votizMapKey(type, key)] || ''}
+                onChange={(e) => setOne(type, key, e.target.value)}>
+                <option value="">연결 안 함 (곡 연결에서 고른 항목으로)</option>
+                {tops.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+        </div>
+    ));
+
+    return (
+        <div className="rounded-2xl border border-gray-200 bg-white p-4 space-y-3">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div>
+                    <span className="font-bold text-gray-800">보티즈 분류 연결</span>
+                    <span className="ml-2 text-xs text-gray-400">곡 내역을 어느 항목으로 집계할지</span>
+                </div>
+                <button type="button" onClick={() => setOpen((v) => !v)}
+                    className={`${pill} bg-white text-gray-600 ring-1 ring-gray-200 hover:bg-gray-50`}>
+                    {open ? '접기' : '펼치기'}
+                </button>
+            </div>
+
+            {open && (
+                <>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
+                        <div className="space-y-2">{rows('income', incomeTops)}</div>
+                        <div className="space-y-2">{rows('expense', expenseTops)}</div>
+                    </div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                        <button type="button" disabled={busy} onClick={save}
+                            className={`${pill} bg-gray-800 text-white hover:bg-gray-700`}>연결 저장</button>
+                        {msg && <span className="text-xs font-bold text-gray-500">{msg}</span>}
+                    </div>
+                    <p className="text-xs text-gray-400">
+                        연결하지 않은 분류는 예전처럼 곡-아티스트 연결에서 고른 '수익항목/지출항목' 으로 들어갑니다.
+                        수익배분(마이너스 수익)도 같은 규칙입니다.
+                    </p>
+                </>
+            )}
         </div>
     );
 }

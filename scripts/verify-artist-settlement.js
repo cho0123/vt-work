@@ -10,6 +10,7 @@ import {
     AMOUNT_BASIS,
     computeGeneralSettlement,
     computeCaseSettlement,
+    unmappedVotizCategories,
     computeCollab,
     buildSongRows,
     memberSharePercent,
@@ -28,6 +29,10 @@ import {
     categoryOf, payeeOf, effectiveTaxType,
     payeeInfo, payeeSnapshot, payeeOfSettlement,
 } from '../src/domain/artistProfile.js';
+import {
+    rootIdOf, kindOf, isHidden, topLevelCats, childrenOf, hasChildren,
+    catPath, isCategoryInUse, votizMapKey, mappedCategoryId, normalizeVotizMap,
+} from '../src/domain/mgmtCategories.js';
 
 let pass = 0;
 let fail = 0;
@@ -573,6 +578,104 @@ eq('소속 정산(곡 내역)에도 영향 없음',
         transactions: [skipForCalc], artistId: 'MEM', months: ['2026-02'],
     }).filter((r) => r.type === 'income').reduce((a, b) => a + b.amount, 0), 500);
 
-// ──[ 결과 ]──────────────────────────────────────────────────────────────
+// -- [ 10. 항목/세부항목 구조 + 보티즈 분류 연결표 ] --
+console.log('');
+console.log('-- 10. 항목/세부항목 + 보티즈 분류 연결표');
+
+// 기존 항목(parentId 없음)과 세부항목이 섞인 목록
+const CATS2 = [
+    { id: 'A', name: '음원', kind: 'income', order: 1 },                     // 옛 문서 - parentId 없음
+    { id: 'B', name: '행사', kind: 'income', order: 2 },
+    { id: 'E', name: '제작비', kind: 'expense', order: 1 },
+    { id: 'E1', name: '믹스', parentId: 'E', order: 1 },                     // 세부항목 - kind 없음
+    { id: 'A1', name: '유통사A', parentId: 'A', order: 1 },
+    { id: 'H', name: '안쓰는항목', kind: 'income', order: 9, hidden: true },
+    { id: 'H1', name: '숨은부모의자식', parentId: 'H', order: 1 },
+];
+
+eq('parentId 없는 기존 항목은 최상위', rootIdOf(CATS2, 'A'), 'A');
+eq('세부항목의 최상위는 부모', rootIdOf(CATS2, 'E1'), 'E');
+eq('없는 항목은 그대로 둔다', rootIdOf(CATS2, 'ZZZ'), 'ZZZ');
+eq('세부항목의 구분은 부모를 따른다', kindOf(CATS2, CATS2.find((c) => c.id === 'E1')), 'expense');
+eq('부모가 숨겨지면 세부항목도 숨은 것으로 본다', isHidden(CATS2, CATS2.find((c) => c.id === 'H1')), true);
+eq('최상위 수익 항목(숨김 제외)', topLevelCats(CATS2, 'income').map((c) => c.id), ['A', 'B']);
+eq('숨김 포함하면 H 도 나온다', topLevelCats(CATS2, 'income', true).map((c) => c.id), ['A', 'B', 'H']);
+eq('세부항목 목록', childrenOf(CATS2, 'E').map((c) => c.id), ['E1']);
+eq('세부항목 있는지', [hasChildren(CATS2, 'E'), hasChildren(CATS2, 'B')], [true, false]);
+eq('표기는 항목 > 세부항목', catPath(CATS2, 'E', 'E1'), '제작비 > 믹스');
+eq('세부항목 없으면 항목만', catPath(CATS2, 'E', ''), '제작비');
+eq('쓰는 항목은 삭제 금지 - 장부', isCategoryInUse('E1', { ledgerRows: [{ categoryId: 'E', subCategoryId: 'E1' }] }), true);
+eq('쓰는 항목은 삭제 금지 - 비율', isCategoryInUse('A', { artists: [{ ratios: { A: { artist: 50 } } }] }), true);
+eq('아무 데서도 안 쓰면 false', isCategoryInUse('B', { ledgerRows: [{ categoryId: 'A' }], artists: [{ ratios: {} }] }), false);
+
+// 세부항목 장부 금액은 부모 항목 합계에 들어간다
+const subArtist = { ratioUniform: false, ratios: { E: { company: 50, artist: 50 }, A: { company: 60, artist: 40 } } };
+const subCalc = computeGeneralSettlement({
+    artist: subArtist, categories: CATS2,
+    ledgerRows: [
+        { type: 'expense', categoryId: 'E', totalAmount: 100 },
+        { type: 'expense', categoryId: 'E', subCategoryId: 'E1', totalAmount: 200 },
+        // 혹시 세부항목 id 가 categoryId 에 들어가도 부모로 올려 센다
+        { type: 'expense', categoryId: 'E1', totalAmount: 300 },
+    ],
+    songRows: [], carryIn: 0,
+});
+eq('세부항목 금액이 부모 항목 한 줄로 합쳐진다', subCalc.rows.map((r) => [r.categoryId, r.expense]), [['E', 600]]);
+eq('항목 이름은 최상위 이름', subCalc.rows[0].name, '제작비');
+
+// -- 보티즈 분류 연결표
+const vMap = { [votizMapKey('income', 'source')]: 'A', [votizMapKey('income', 'performance')]: 'B' };
+eq('연결표 키 모양', votizMapKey('income', 'source'), 'income:source');
+eq('연결된 분류는 그 항목', mappedCategoryId(vMap, { type: 'income', category: 'source' }), 'A');
+eq('연결 안 된 분류는 null', mappedCategoryId(vMap, { type: 'income', category: 'sale' }), null);
+eq('연결표 정리 - 없는 항목은 버리고 세부항목은 최상위로',
+    normalizeVotizMap({ 'income:source': 'A1', 'income:sale': 'ZZZ' }, CATS2), { 'income:source': 'A' });
+
+// 음원수익 1,000(A 40%) + 공연수익 500(B 60%), 지분 100%
+const mapProject = {
+    id: 'MP', name: '연결곡',
+    artists: [{ artistId: 'M1', type: 'member', share: 100, incomeCategoryId: 'B', expenseCategoryId: 'E' }],
+};
+const mapTx = [
+    { id: 'm1', projectId: 'MP', division: 'votiz', type: 'income', category: 'source', date: '2026-03-10', amount: 1000, totalAmount: 1000 },
+    { id: 'm2', projectId: 'MP', division: 'votiz', type: 'income', category: 'performance', date: '2026-03-11', amount: 500, totalAmount: 500 },
+];
+const mapRows = buildSongRows({ projects: [mapProject], transactions: mapTx, artistId: 'M1', months: ['2026-03'], votizMap: vMap });
+eq('연결표대로 항목이 갈린다', mapRows.map((r) => [r.votizCategory, r.categoryId]), [['source', 'A'], ['performance', 'B']]);
+
+const mapArtist = { ratioUniform: false, ratios: { A: { company: 60, artist: 40 }, B: { company: 40, artist: 60 } } };
+const mapCalc = computeGeneralSettlement({ artist: mapArtist, categories: CATS2, ledgerRows: [], songRows: mapRows, carryIn: 0 });
+// 수익 가중 비율 = (1,000 x 40% + 500 x 60%) / 1,500 = 700/1,500
+eq('수익 가중 비율 = 700/1,500', mapCalc.artistRatePercent, (700 / 1500) * 100);
+eq('아티스트 몫 = 1,500 x 그 비율 = 700', mapCalc.artistShare, 700);
+
+// 연결표가 없으면 예전처럼 곡 연결에서 고른 항목(B)으로 전부 들어간다
+const noMapRows = buildSongRows({ projects: [mapProject], transactions: mapTx, artistId: 'M1', months: ['2026-03'] });
+eq('연결표 없으면 기본 항목으로', noMapRows.map((r) => r.categoryId), ['B', 'B']);
+eq('연결표 없으면 전부 미연결로 표시',
+    unmappedVotizCategories(noMapRows).map((u) => u.category), ['source', 'performance']);
+
+// 연결표에 일부만 있으면 나머지는 기본 항목 + 안내 대상
+const halfMap = { [votizMapKey('income', 'source')]: 'A' };
+const halfRows = buildSongRows({ projects: [mapProject], transactions: mapTx, artistId: 'M1', months: ['2026-03'], votizMap: halfMap });
+eq('연결된 것만 A, 나머지는 기본 항목 B', halfRows.map((r) => r.categoryId), ['A', 'B']);
+eq('미연결 안내 대상은 공연수익뿐',
+    unmappedVotizCategories(halfRows).map((u) => u.type + ':' + u.category), ['income:performance']);
+
+// 수익배분(마이너스 수익)도 연결표를 따른다. 연결이 없으면 기본 항목으로.
+const payTx = mapTx.concat([
+    { id: 'm3', projectId: 'MP', division: 'votiz', type: 'income', category: PAYOUT_CATEGORY, date: '2026-03-12', amount: -300, totalAmount: -300 },
+]);
+const payMapped = buildSongRows({
+    projects: [mapProject], transactions: payTx, artistId: 'M1', months: ['2026-03'],
+    votizMap: { ...vMap, [votizMapKey('income', PAYOUT_CATEGORY)]: 'A' },
+});
+eq('수익배분도 연결표대로', payMapped.find((r) => r.votizCategory === PAYOUT_CATEGORY).categoryId, 'A');
+const payFallback = buildSongRows({ projects: [mapProject], transactions: payTx, artistId: 'M1', months: ['2026-03'], votizMap: vMap });
+eq('연결 없으면 수익배분은 기본 수익항목(B)', payFallback.find((r) => r.votizCategory === PAYOUT_CATEGORY).categoryId, 'B');
+eq('수익배분 마이너스는 지분만큼 깎인다(소속도 같이 부담)',
+    payFallback.find((r) => r.votizCategory === PAYOUT_CATEGORY).amount, -300);
+
+// -- [ 결과 ] --
 console.log(`\n${pass}/${pass + fail} 통과` + (fail ? ` — 실패 ${fail}건` : ''));
 process.exit(fail ? 1 : 0);

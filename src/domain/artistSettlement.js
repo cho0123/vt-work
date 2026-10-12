@@ -8,6 +8,7 @@
 //   5) 별도정산 건                       → computeCaseSettlement
 //
 // 쓰지 않는 것: 저작권(division 'copyright')은 어떤 계산에도 넣지 않는다.
+import { mappedCategoryId, rootIdOf } from './mgmtCategories.js';
 
 // ──[ 설정 ]──────────────────────────────────────────────────────────────
 // 금액 기준. 'totalAmount' = 부가세 포함 합계, 'amount' = 공급가.
@@ -121,9 +122,17 @@ export const memberSharePercent = (project, artistId) => {
  * 소속으로 연결된 곡의 보티즈 내역을, 지분을 적용한 '장부 비슷한 줄' 로 바꾼다.
  * 장부에 복사하지 않는다 — 계산할 때만 합친다.
  *
- * @returns [{ projectId, projectName, date, ym, type, categoryId, sharePercent, rawAmount, amount }]
+ * 넣을 항목을 정하는 순서
+ *   1) 보티즈 분류 연결표(votizMap) 에 그 분류가 있으면 그 항목
+ *   2) 없으면 곡-아티스트 연결에서 고른 '수익항목/지출항목' (기존 동작)
+ *   둘 다 없으면 집계하지 않는다.
+ * 수익배분(마이너스 수익)도 같은 순서를 따른다 — 분류가 'payout' 일 뿐이다.
+ *
+ * @param votizMap { 'income:source': '<항목id>', ... } — 없으면 예전과 똑같이 동작한다.
+ * @returns [{ projectId, projectName, date, ym, type, categoryId, sharePercent, rawAmount, amount,
+ *            votizCategory, mapped }]
  */
-export const buildSongRows = ({ projects, transactions, artistId, months, basis = AMOUNT_BASIS }) => {
+export const buildSongRows = ({ projects, transactions, artistId, months, basis = AMOUNT_BASIS, votizMap = null }) => {
     const monthSet = new Set(months || []);
     const out = [];
     (projects || []).forEach((p) => {
@@ -135,8 +144,10 @@ export const buildSongRows = ({ projects, transactions, artistId, months, basis 
             if (t.projectId !== p.id) return;
             if (t.division !== 'votiz') return;             // 저작권·보이스튜닝·유튜브 제외
             if (monthSet.size && !monthSet.has(ymOf(t.date))) return;
-            const categoryId = t.type === 'income' ? mine.incomeCategoryId : mine.expenseCategoryId;
-            if (!categoryId) return;                        // 넣을 항목을 안 고르면 집계하지 않는다
+            const fallback = t.type === 'income' ? mine.incomeCategoryId : mine.expenseCategoryId;
+            const mappedId = mappedCategoryId(votizMap, t);
+            const categoryId = mappedId || fallback;
+            if (!categoryId) return;                        // 넣을 항목이 없으면 집계하지 않는다
             const raw = amountOf(t, basis);
             out.push({
                 projectId: p.id,
@@ -148,8 +159,28 @@ export const buildSongRows = ({ projects, transactions, artistId, months, basis 
                 sharePercent: pct,
                 rawAmount: raw,
                 amount: raw * (pct / 100),
+                votizCategory: t.category || '',
+                mapped: !!mappedId,
             });
         });
+    });
+    return out;
+};
+
+/**
+ * 연결표에 없어서 기본 항목(곡 연결에서 고른 수익/지출항목)으로 들어간 분류들.
+ * 화면에 "연결 안 된 분류: ○○" 로 알려준다.
+ * @returns [{ type, category }]
+ */
+export const unmappedVotizCategories = (songRows = []) => {
+    const seen = new Set();
+    const out = [];
+    songRows.forEach((r) => {
+        if (r.mapped) return;
+        const k = r.type + ':' + (r.votizCategory || '');
+        if (seen.has(k)) return;
+        seen.add(k);
+        out.push({ type: r.type, category: r.votizCategory || '' });
     });
     return out;
 };
@@ -184,7 +215,10 @@ export const computeGeneralSettlement = ({
     (categories || []).forEach((c) => { catById[c.id] = c; });
 
     const byCategory = {};
-    const touch = (categoryId) => {
+    // 집계는 **최상위 항목 기준**이다 — 세부항목 금액은 부모 항목에 합쳐진다.
+    // parentId 가 없는 기존 항목은 자기 자신이 최상위라 결과가 예전과 같다.
+    const touch = (rawCategoryId) => {
+        const categoryId = rootIdOf(categories, rawCategoryId);
         if (!byCategory[categoryId]) {
             const c = catById[categoryId];
             byCategory[categoryId] = {

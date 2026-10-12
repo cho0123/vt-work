@@ -57,6 +57,10 @@ service cloud.firestore {
     match /mgmtCategories/{docId} {
       allow read, write: if isAllowedUser();
     }
+    // mgmtSettings — 보티즈 분류 → 매니지먼트 항목 연결표 (2026-10-13 추가, 문서 1건)
+    match /mgmtSettings/{docId} {
+      allow read, write: if isAllowedUser();
+    }
     match /artistLedger/{docId} {
       allow read, write: if isAllowedUser();
     }

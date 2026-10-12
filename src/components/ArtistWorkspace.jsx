@@ -22,6 +22,7 @@ import { isDateLocked, linkTypeOf } from '../domain/artistSettlement.js';
 import { linkTypeLabel } from '../utils/artistShares.js';
 import { PhotoPicker, PhotoBadge, PhotoModal } from './PhotoAttach.jsx';
 import { addPhotos, deleteAllPhotos } from '../utils/photos.js';
+import { topLevelCats, childrenOf, catPath } from '../domain/mgmtCategories.js';
 
 const inputClass = "w-full p-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-gray-800 outline-none transition text-sm";
 const selectClass = inputClass + " appearance-none";
@@ -39,7 +40,7 @@ const todayStr = () => {
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 };
 
-const EMPTY_ROW = { date: '', type: 'income', categoryId: '', amount: '', vatIncluded: false, memo: '', caseId: '' };
+const EMPTY_ROW = { date: '', type: 'income', categoryId: '', subCategoryId: '', amount: '', vatIncluded: false, memo: '', caseId: '' };
 const EMPTY_CASE = { name: '', date: '', memo: '' };
 
 // 보티즈 탭 '프로젝트 목록' 카드와 같은 계산 — 그 곡의 votiz 내역만 모아 수입·지출을 더한다.
@@ -50,7 +51,7 @@ const songTotals = (allTransactions, projectId) => {
     return { income, expense };
 };
 
-export function ArtistWorkspace({ user, artist, priv, categories, projects, allTransactions }) {
+export function ArtistWorkspace({ user, artist, priv, categories, projects, allTransactions, votizMap, votizCategories }) {
     const [cases, setCases] = useState([]);
     const [ledger, setLedger] = useState([]);
     // 건별 내역은 기간과 무관하게 '그 건 전체' 를 봐야 하므로 따로 담는다.
@@ -170,22 +171,20 @@ export function ArtistWorkspace({ user, artist, priv, categories, projects, allT
         return () => { alive = false; };
     }, [user, artistId, periodMode, ym]);
 
-    const catById = useMemo(() => {
-        const m = {};
-        (categories || []).forEach((c) => { m[c.id] = c; });
-        return m;
-    }, [categories]);
-
-    const catsForType = useMemo(
-        () => (categories || []).filter((c) => c.kind === row.type && !c.hidden)
-            .sort((a, b) => Number(a.order || 0) - Number(b.order || 0)),
-        [categories, row.type]
+    // 장부에서 고르는 것은 **최상위 항목**이다. 세부항목은 그 아래에서 따로 고른다.
+    const catsForType = useMemo(() => topLevelCats(categories, row.type), [categories, row.type]);
+    const subCatsForRow = useMemo(
+        () => (row.categoryId ? childrenOf(categories, row.categoryId) : []),
+        [categories, row.categoryId]
     );
 
     // 일반 장부(별도정산 건에 안 묶인 것)와 건별 내역을 나눈다.
     const generalRows = useMemo(() => {
         const base = ledger.filter((r) => !r.caseId);
-        const filtered = catFilter ? base.filter((r) => r.categoryId === catFilter) : base;
+        // 최상위 항목을 고르면 그 아래 세부항목 줄도 같이 나온다(줄의 categoryId 가 부모다).
+        const filtered = catFilter
+            ? base.filter((r) => r.categoryId === catFilter || r.subCategoryId === catFilter)
+            : base;
         return filtered.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
     }, [ledger, catFilter]);
 
@@ -264,6 +263,7 @@ export function ArtistWorkspace({ user, artist, priv, categories, projects, allT
                 ym: ymOf(row.date),          // 달 조회용. date 를 고치면 여기도 같이 바뀐다.
                 type: row.type,
                 categoryId: row.categoryId,
+                subCategoryId: row.subCategoryId || '',   // 안 골라도 된다
                 amount,                       // 공급가
                 vat,
                 totalAmount: amount + vat,    // 합계
@@ -310,6 +310,7 @@ export function ArtistWorkspace({ user, artist, priv, categories, projects, allT
             date: r.date || '',
             type: r.type || 'income',
             categoryId: r.categoryId || '',
+            subCategoryId: r.subCategoryId || '',
             amount: won(r.amount),
             vatIncluded: Number(r.vat || 0) > 0,
             memo: r.memo || '',
@@ -319,7 +320,7 @@ export function ArtistWorkspace({ user, artist, priv, categories, projects, allT
 
     const deleteRow = async (r) => {
         if (isRowLocked(r)) { setRowErr('정산이 확정된 내역이라 삭제할 수 없습니다.'); return; }
-        const label = (catById[r.categoryId] ? catById[r.categoryId].name : '내역') + ' ' + won(r.totalAmount) + '원';
+        const label = catPath(categories, r.categoryId, r.subCategoryId) + ' ' + won(r.totalAmount) + '원';
         if (!window.confirm(r.date + ' ' + label + ' 을(를) 삭제합니다. 되돌릴 수 없습니다.')) return;
         try {
             // 하위 컬렉션은 부모 문서를 지워도 같이 안 지워진다 — 사진부터 지운다.
@@ -450,7 +451,7 @@ export function ArtistWorkspace({ user, artist, priv, categories, projects, allT
                                             ) : (
                                                 <LedgerRows onOpenPhotos={setPhotoFor}
                                                     rows={rows.sort((a, b) => String(b.date).localeCompare(String(a.date)))}
-                                                    catById={catById} onEdit={editRow} onDelete={deleteRow} isLocked={isRowLocked} />
+                                                    categories={categories} onEdit={editRow} onDelete={deleteRow} isLocked={isRowLocked} />
                                             )}
                                             <button onClick={() => toggleCaseStatus(c)} className={`${pill} bg-white text-gray-600 ring-1 ring-gray-200 hover:bg-gray-50`}>
                                                 {c.status === 'done' ? '진행중으로 되돌리기' : '정산완료로 표시'}
@@ -490,25 +491,38 @@ export function ArtistWorkspace({ user, artist, priv, categories, projects, allT
                         )}
                         <select className={selectClass + ' w-36'} value={catFilter} onChange={(e) => setCatFilter(e.target.value)}>
                             <option value="">항목 전체</option>
-                            {(categories || []).filter((c) => !c.hidden).map((c) => (
-                                <option key={c.id} value={c.id}>{c.kind === 'income' ? '수익' : '지출'} · {c.name}</option>
-                            ))}
+                            {['income', 'expense'].map((k) => topLevelCats(categories, k).map((c) => [
+                                <option key={c.id} value={c.id}>{k === 'income' ? '수익' : '지출'} · {c.name}</option>,
+                                ...childrenOf(categories, c.id).map((sub) => (
+                                    <option key={sub.id} value={sub.id}>{k === 'income' ? '수익' : '지출'} · {c.name} &gt; {sub.name}</option>
+                                )),
+                            ]))}
                         </select>
                     </div>
                 </div>
 
                 {/* 입력 */}
-                <div className="grid grid-cols-1 md:grid-cols-[0.9fr_0.6fr_1fr_0.9fr_1.1fr_1fr_auto] gap-2 rounded-xl bg-gray-50 p-3">
+                <div className={`grid grid-cols-1 gap-2 rounded-xl bg-gray-50 p-3 ${subCatsForRow.length > 0
+                    ? 'md:grid-cols-[0.9fr_0.6fr_1fr_1fr_0.9fr_1.1fr_1fr_auto]'
+                    : 'md:grid-cols-[0.9fr_0.6fr_1fr_0.9fr_1.1fr_1fr_auto]'}`}>
                     <input type="date" className={inputClass} value={row.date} onChange={(e) => setRow({ ...row, date: e.target.value })} />
                     <select className={selectClass} value={row.type}
-                        onChange={(e) => setRow({ ...row, type: e.target.value, categoryId: '' })}>
+                        onChange={(e) => setRow({ ...row, type: e.target.value, categoryId: '', subCategoryId: '' })}>
                         <option value="income">수익</option>
                         <option value="expense">지출</option>
                     </select>
-                    <select className={selectClass} value={row.categoryId} onChange={(e) => setRow({ ...row, categoryId: e.target.value })}>
+                    <select className={selectClass} value={row.categoryId}
+                        onChange={(e) => setRow({ ...row, categoryId: e.target.value, subCategoryId: '' })}>
                         <option value="">항목 선택</option>
                         {catsForType.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                     </select>
+                    {subCatsForRow.length > 0 && (
+                        <select className={selectClass} value={row.subCategoryId}
+                            onChange={(e) => setRow({ ...row, subCategoryId: e.target.value })}>
+                            <option value="">세부항목 (선택)</option>
+                            {subCatsForRow.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                        </select>
+                    )}
                     <div className="relative">
                         <input className={inputClass} placeholder="공급가" value={row.amount}
                             onChange={(e) => setRow({ ...row, amount: won(parseMoney(e.target.value)) })} />
@@ -569,7 +583,7 @@ export function ArtistWorkspace({ user, artist, priv, categories, projects, allT
                         {periodMode === 'month' ? ym + ' 에 일반 장부 내역이 없습니다.' : '일반 장부 내역이 없습니다.'}
                     </div>
                 ) : (
-                    <LedgerRows rows={generalRows} catById={catById} onEdit={editRow} onDelete={deleteRow} isLocked={isRowLocked} onOpenPhotos={setPhotoFor} />
+                    <LedgerRows rows={generalRows} categories={categories} onEdit={editRow} onDelete={deleteRow} isLocked={isRowLocked} onOpenPhotos={setPhotoFor} />
                 )}
             </section>
 
@@ -577,6 +591,7 @@ export function ArtistWorkspace({ user, artist, priv, categories, projects, allT
             <ArtistSettlementPanel
                 user={user} artist={artist} priv={priv} categories={categories}
                 projects={projects} allTransactions={allTransactions}
+                votizMap={votizMap} votizCategories={votizCategories}
                 cases={cases} setCases={setCases} caseRowsMap={caseRowsMap}
                 settlements={settlements} setSettlements={setSettlements}
                 ledgerVersion={ledgerVersion}
@@ -613,7 +628,7 @@ export function ArtistWorkspace({ user, artist, priv, categories, projects, allT
             {/* 장부 줄의 📎 를 누르면 뜨는 사진 창. 정산이 확정된 줄은 보기만 된다. */}
             {photoFor && (
                 <PhotoModal
-                    title={'사진 — ' + (photoFor.date || '') + ' ' + ((catById[photoFor.categoryId] || {}).name || '')}
+                    title={'사진 — ' + (photoFor.date || '') + ' ' + catPath(categories, photoFor.categoryId, photoFor.subCategoryId)}
                     parentPath="artistLedger" parentId={photoFor.id} uid={user.uid}
                     readOnly={isRowLocked(photoFor)}
                     onCountChange={(n) => {
@@ -629,11 +644,11 @@ export function ArtistWorkspace({ user, artist, priv, categories, projects, allT
 }
 
 // ──[ 장부 줄 목록 ]──
-function LedgerRows({ rows, catById, onEdit, onDelete, isLocked, onOpenPhotos }) {
+function LedgerRows({ rows, categories, onEdit, onDelete, isLocked, onOpenPhotos }) {
     return (
         <div className="space-y-1">
             {rows.map((r) => {
-                const cat = catById[r.categoryId];
+                const label = catPath(categories, r.categoryId, r.subCategoryId);
                 const income = r.type === 'income';
                 return (
                     <div key={r.id} className="flex items-center gap-2 rounded-xl bg-gray-50 px-3 py-2 flex-wrap text-sm">
@@ -641,7 +656,7 @@ function LedgerRows({ rows, catById, onEdit, onDelete, isLocked, onOpenPhotos })
                         <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ring-1 ${income ? 'bg-blue-50 text-blue-600 ring-blue-200' : 'bg-red-50 text-red-500 ring-red-200'}`}>
                             {income ? '수익' : '지출'}
                         </span>
-                        <span className="w-28 shrink-0 truncate font-bold text-gray-700">{cat ? cat.name : '(삭제된 항목)'}</span>
+                        <span className="w-40 shrink-0 truncate font-bold text-gray-700" title={label}>{label}</span>
                         <span className={`shrink-0 font-extrabold ${income ? 'text-blue-600' : 'text-red-500'}`}>
                             {income ? '+' : '-'}{won(r.totalAmount)}
                         </span>

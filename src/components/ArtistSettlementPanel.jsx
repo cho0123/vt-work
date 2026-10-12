@@ -10,7 +10,7 @@ import { db } from '../firebase';
 import {
     AMOUNT_BASIS, AMOUNT_BASIS_LABEL,
     computeGeneralSettlement, computeCaseSettlement, computeCollab,
-    buildSongRows, songSummaryOf, diffSongSummary, membersMissingCategory,
+    buildSongRows, songSummaryOf, diffSongSummary, membersMissingCategory, unmappedVotizCategories,
     monthsOfPeriod, periodLabel, periodKey, periodCount, linkTypeOf,
 } from '../domain/artistSettlement.js';
 import { printArtistSettlement } from '../utils/artistSettlementDoc.js';
@@ -32,7 +32,7 @@ const todayStr = () => {
 const CYCLE_LABEL = { month: '월', quarter: '분기', half: '반기', year: '연' };
 
 export function ArtistSettlementPanel({
-    user, artist, priv, categories, projects, allTransactions,
+    user, artist, priv, categories, projects, allTransactions, votizMap, votizCategories,
     cases, setCases, caseRowsMap, settlements, setSettlements, ledgerVersion,
 }) {
     const cycle = artist.settlementCycle || 'month';
@@ -87,8 +87,8 @@ export function ArtistSettlementPanel({
 
     const generalLedger = useMemo(() => periodRows.filter((r) => !r.caseId), [periodRows]);
     const songRows = useMemo(
-        () => buildSongRows({ projects, transactions: allTransactions, artistId, months }),
-        [projects, allTransactions, artistId, months]
+        () => buildSongRows({ projects, transactions: allTransactions, artistId, months, votizMap }),
+        [projects, allTransactions, artistId, months, votizMap]
     );
 
     const confirmedHere = useMemo(
@@ -111,6 +111,15 @@ export function ArtistSettlementPanel({
     );
 
     const missingCats = useMemo(() => membersMissingCategory(projects, artistId), [projects, artistId]);
+
+    // 연결표에 없어서 곡 연결의 기본 항목으로 들어간 보티즈 분류 — 화면에 알려준다.
+    const unmapped = useMemo(() => {
+        const vc = votizCategories || {};
+        return unmappedVotizCategories(songRows).map((u) => {
+            const label = ((vc[u.type] || {})[u.category]) || u.category || '(분류 없음)';
+            return (u.type === 'income' ? '수입' : '지출') + ' · ' + label;
+        });
+    }, [songRows, votizCategories]);
 
     // 아티스트 몫 이후 단계(세금). 몫 계산은 3단계 그대로 두고 여기서 받아서만 쓴다.
     // 지급처가 소속사면 세금계산서로 고정된다(domain/artistProfile.js).
@@ -147,7 +156,7 @@ export function ArtistSettlementPanel({
     // 확정 뒤 곡 금액이 달라졌는지
     const driftOf = (s) => {
         if (!s || s.kind !== 'general') return [];
-        const nowRows = buildSongRows({ projects, transactions: allTransactions, artistId, months: s.months || [] });
+        const nowRows = buildSongRows({ projects, transactions: allTransactions, artistId, months: s.months || [], votizMap });
         return diffSongSummary(s.songs || [], songSummaryOf(nowRows));
     };
 
@@ -344,6 +353,13 @@ export function ArtistSettlementPanel({
                 <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs font-bold text-amber-800">
                     넣을 항목을 안 고른 곡이 있어 그 금액은 정산에 안 들어갑니다 —{' '}
                     {missingCats.map((m) => m.projectName + '(' + m.missing.join('·') + ')').join(', ')}
+                </div>
+            )}
+
+            {unmapped.length > 0 && (
+                <div className="rounded-xl bg-sky-50 border border-sky-200 p-3 text-xs font-bold text-sky-800">
+                    연결 안 된 분류: {unmapped.join(', ')} — 곡 연결에서 고른 기본 항목으로 들어갔습니다.
+                    ('항목 관리 → 보티즈 분류 연결' 에서 지정할 수 있습니다)
                 </div>
             )}
 

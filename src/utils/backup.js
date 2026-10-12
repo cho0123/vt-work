@@ -189,6 +189,7 @@ const VOTIZ_COLLECTIONS = [
     'artistLedger',
     'artistCases',
     'artistSettlements',
+    'mgmtSettings',        // 보티즈 분류 연결표 (문서 1건)
 ];
 // acc_transactions 중 보티즈 쪽 분야. 보이스튜닝은 위 묶음이 따로 가져간다.
 const VOTIZ_DIVISIONS = ['votiz', 'copyright', 'youtube'];
