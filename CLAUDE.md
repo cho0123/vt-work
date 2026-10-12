@@ -1022,7 +1022,7 @@ expense: { production: 제작비, marketing: 마케팅비 }
 
 ### 2026-10-13 추가 (콜라보 음원수익 자동 배분 + 곡 분류별 모아보기 + 아티스트 정보 접기)
 
-집 PC(개발DB) 작업. **운영 미배포.** 곡별 계산(`projectTrans`/`pIncome`/`totalExp`)·상단 카드
+회사 PC(개발DB) 작업. **운영 미배포.** 곡별 계산(`projectTrans`/`pIncome`/`totalExp`)·상단 카드
 (`sumBy`/`summary`)·`computeCollab` 내부·`artistPayout.js` 세액 계산·백업 3묶음은 **한 줄도 안 건드렸다.**
 
 - **콜라보 음원수익 자동 배분** — `src/domain/collabPayout.js`(신규, 순수 함수).
@@ -1050,7 +1050,7 @@ expense: { production: 제작비, marketing: 마케팅비 }
 
 ### 2026-10-13 추가 2 (매니지먼트 항목/세부항목 + 항목 관리 화면 개편 + 보티즈 분류 연결표)
 
-집 PC(개발DB) 작업. 곡별 계산(projectTrans/pIncome/totalExp)·상단 카드(sumBy/summary)·
+회사 PC(개발DB) 작업. 곡별 계산(projectTrans/pIncome/totalExp)·상단 카드(sumBy/summary)·
 `computeCollab` 내부·`artistPayout.js` 세액 계산·보티즈 고정 분류(`votizCategories`)·
 자동 배분·확정 스냅샷 구조는 **한 줄도 안 건드렸다.**
 
@@ -1095,8 +1095,9 @@ expense: { production: 제작비, marketing: 마케팅비 }
 
 ### 2026-10-13 운영 배포 완료 ✅ (자동 배분 + 항목/세부항목 + 연결표)
 
-집 PC에서 배포. **이 PC에도 운영 키 `key-A.json` 이 있다** — 예전 기록("집 PC엔 운영 키가 없다")은
-더 이상 맞지 않는다. `npm run build` 도 집 PC에서 정상 동작한다(옛 rollup 크래시 없음).
+**회사 PC에서 배포.** 운영 키 `key-A.json` 은 회사 PC에만 있다 — 운영 배포·보안규칙 배포·
+운영 백업(`npm run backup`)은 **회사 PC에서만** 한다(기존 방침 그대로).
+집 PC는 `npm run build` 가 윈도우 rollup 네이티브 크래시로 실패한 기록이 있고, 회사 PC·Netlify 는 정상이다.
 
 | | |
 |---|---|
