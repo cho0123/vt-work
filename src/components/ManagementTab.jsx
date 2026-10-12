@@ -113,6 +113,8 @@ export function ManagementTab({ user, projects, allTransactions, onArtistsChange
     const [formError, setFormError] = useState('');
     const [saving, setSaving] = useState(false);
     const [showCats, setShowCats] = useState(false);
+    // 아티스트 정보(입력 폼)는 기본으로 접는다. 접어도 값은 form/priv 에 그대로 있다.
+    const [infoOpen, setInfoOpen] = useState(false);
 
     // 휴대폰 폭에서 목록·상세가 위아래로 쌓일 때 서로 오가기 위한 기준점.
     const listRef = useRef(null);
@@ -180,6 +182,7 @@ export function ManagementTab({ user, projects, allTransactions, onArtistsChange
     }, [artists, statusFilter, categoryFilter, keyword]);
 
     const openArtist = async (a) => {
+        setInfoOpen(false);   // 다른 아티스트를 고르면 다시 접힌 상태로 시작
         setIsNew(false);
         setOpenId(a.id);
         setFormError('');
@@ -210,6 +213,7 @@ export function ManagementTab({ user, projects, allTransactions, onArtistsChange
     };
 
     const startNew = () => {
+        setInfoOpen(true);    // 새로 만들 때는 처음부터 펼친다
         setIsNew(true);
         setOpenId(null);
         setForm(EMPTY_ARTIST);
@@ -384,6 +388,7 @@ export function ManagementTab({ user, projects, allTransactions, onArtistsChange
             onEnd={!isNew && current ? () => handleEnd(current) : null}
             onDelete={!isNew && current ? () => handleDelete(current) : null}
             onBackToList={backToList}
+            infoOpen={infoOpen} setInfoOpen={setInfoOpen}
         />
     );
 
@@ -521,7 +526,8 @@ function ArtistCard({ artist, active, onClick }) {
 // ──[ 아티스트 상세/등록 폼 ]──
 function ArtistForm({ isNew, form, priv, setField, setPrivField, showAccount, setShowAccount,
     showAgencyAccount, setShowAgencyAccount,
-    incomeCats, setUniform, setRatio, toggleUniform, formError, saving, onSave, onClose, onEnd, onDelete, onBackToList }) {
+    incomeCats, setUniform, setRatio, toggleUniform, formError, saving, onSave, onClose, onEnd, onDelete, onBackToList,
+    infoOpen, setInfoOpen }) {
 
     const collab = form.category === 'collab';
     const agency = form.payee === 'agency';
@@ -536,13 +542,43 @@ function ArtistForm({ isNew, form, priv, setField, setPrivField, showAccount, se
 
     return (
         <div className="rounded-2xl border-2 border-emerald-100 bg-white p-5 shadow-sm space-y-6">
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
                 <h3 className="font-bold text-gray-800">{isNew ? '아티스트 등록' : '아티스트 정보'}</h3>
-                <button type="button" onClick={onBackToList} className="lg:hidden text-xs font-bold text-gray-500 hover:text-gray-800">
-                    ↑ 목록으로
-                </button>
+                <div className="flex items-center gap-2">
+                    {!isNew && (
+                        <button type="button" onClick={() => setInfoOpen(!infoOpen)}
+                            className="rounded-full bg-gray-100 px-3 py-1.5 text-xs font-bold text-gray-600 hover:bg-gray-200 active:scale-95 transition">
+                            {infoOpen ? '정보 접기' : '정보 펼치기'}
+                        </button>
+                    )}
+                    <button type="button" onClick={onBackToList} className="lg:hidden text-xs font-bold text-gray-500 hover:text-gray-800">
+                        ↑ 목록으로
+                    </button>
+                </div>
             </div>
 
+            {/* 접었을 때 한 줄 요약 */}
+            {!infoOpen && (
+                <div className="flex items-center gap-2 flex-wrap rounded-xl bg-gray-50 px-3 py-2 text-xs">
+                    <span className="font-bold text-gray-800">{form.stageName || '(활동명 없음)'}</span>
+                    <span className="rounded-full bg-white px-2 py-0.5 font-bold text-gray-500 ring-1 ring-gray-200">
+                        {collab ? '콜라보' : '소속'}
+                    </span>
+                    <span className={`rounded-full px-2 py-0.5 font-bold ring-1 ${form.status === 'ended' ? 'bg-gray-100 text-gray-500 ring-gray-200' : 'bg-green-50 text-green-700 ring-green-200'}`}>
+                        {form.status === 'ended' ? '종료' : '진행중'}
+                    </span>
+                    <span className="text-gray-500">
+                        지급처 {agency ? (form.agencyName || '소속사') : '본인'}
+                    </span>
+                    {!collab && (
+                        <span className="text-gray-400">
+                            {(form.contractStart || '?') + ' ~ ' + (form.contractEnd || '?')}
+                        </span>
+                    )}
+                </div>
+            )}
+
+            {infoOpen && (<>
             {/* 구분 · 지급처 */}
             <section className="grid grid-cols-1 md:grid-cols-2 gap-3 rounded-xl bg-emerald-50/50 p-4">
                 <label className="block">
@@ -736,6 +772,7 @@ function ArtistForm({ isNew, form, priv, setField, setPrivField, showAccount, se
                     </label>
                 </div>
             </section>
+            </>)}
 
             {/* 정산비율 — 소속만 */}
             {!collab && (
