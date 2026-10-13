@@ -10,7 +10,7 @@ import { ArtistShareEditor } from './ArtistShareEditor.jsx';
 import {
     collabLinksOf, allocationForIncome, payoutAmounts, payoutMemo,
     findPayoutExpense, payoutExpensesOf, isAutoPayout,
-    SKIP_FIELD, skipIdsOf, mergeSkipIds,
+    SKIP_FIELD, skipIdsOf, mergeSkipIds, shareRoundOf, groupPayoutsUnderSource, paginateGrouped,
     PAYOUT_CATEGORY, PAYOUT_CATEGORY_LABEL, SOURCE_INCOME_CATEGORY, NEW_INCOME_ID,
 } from '../domain/collabPayout.js';
 import { effectiveTaxType } from '../domain/artistProfile.js';
@@ -906,6 +906,7 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
           link, artist, artistId: link.artistId,
           name: artist ? (artist.stageName || '(이름없음)') : '(삭제된 아티스트)',
           taxType: effectiveTaxType(artist), calc,
+          round: shareRoundOf(link, form.date),      // 표시 전용
         };
       })
       .filter(Boolean);
@@ -921,6 +922,17 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
     setAlloc((prev) => ({ ...prev, [artistId]: { ...(prev[artistId] || {}), amount: formatNumber(raw.replace(/[^0-9]/g, '')), touched: true } }));
   const setAllocSkip = (artistId, skip) =>
     setAlloc((prev) => ({ ...prev, [artistId]: { ...(prev[artistId] || {}), skip } }));
+
+  // 자동배분 줄의 공유 회차 — 저장된 payoutArtistId 와 **지금** 곡-아티스트 연결 조건으로 계산해
+  // 보여주기만 한다(데이터는 안 고친다). 연결이 사라졌거나 기간 밖이면 안 보인다.
+  const payoutRoundOf = (item) => {
+    if (!item || !item.payoutArtistId) return null;
+    const proj = (projects || []).find((p) => p.id === item.projectId);
+    const link = collabLinksOf(proj).find((a) => a.artistId === item.payoutArtistId);
+    if (!link) return null;
+    const r = shareRoundOf(link, item.date);
+    return r ? r.label : null;
+  };
 
   // 수익 1건 × 아티스트 1명 = 배분 지출 1건. 없으면 만들고, 있으면 금액만 갱신한다.
   const syncPayouts = async (sourceId, incomeDate) => {
@@ -938,7 +950,10 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
       const data = {
         uid: user.uid, projectId: selectedProjectId, division: 'votiz',
         date: incomeDate, type: 'income', category: PAYOUT_CATEGORY, subDetail: '',
-        memo: payoutMemo({ artistName: t.name, sharePercent: t.link.sharePercent, incomeDate }),
+        memo: payoutMemo({
+          artistName: t.name, sharePercent: t.link.sharePercent, incomeDate,
+          round: (shareRoundOf(t.link, incomeDate) || {}).label,
+        }),
         amount: money.amount, vat: money.vat, totalAmount: money.totalAmount,
         payoutSourceId: sourceId, payoutArtistId: t.artistId,
         payoutSharePercent: Number(t.link.sharePercent || 0),
@@ -1071,6 +1086,24 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
   const sameCat = (g) => catFilter && catFilter.type === g.type && catFilter.category === g.category;
   const toggleCat = (g) => setCatFilter(sameCat(g) ? null : { type: g.type, category: g.category, label: g.label });
 
+  // 보여주는 순서만 바꾼다 — 자동배분 줄을 원본 수익 바로 아래로.
+  // '수익배분' 분류만 걸러 보는 중이면 묶지 않고 목록 그대로 둔다(각 줄에 원본 날짜를 붙인다).
+  const payoutOnlyView = !!(catFilter && catFilter.type === 'income' && catFilter.category === PAYOUT_CATEGORY);
+  const listView = useMemo(() => {
+    if (payoutOnlyView) return { rows: finalList, kinds: {} };
+    const g = groupPayoutsUnderSource(finalList);
+    const kinds = {};
+    g.forEach((e) => { kinds[e.row.id] = e.kind; });
+    return { rows: g.map((e) => e.row), kinds };
+  }, [finalList, payoutOnlyView]);
+
+  // 자동배분 줄의 원본 수익 날짜 — '수익배분'만 볼 때 줄마다 붙인다.
+  const sourceDateOf = (item) => {
+    if (!item || !item.payoutSourceId) return null;
+    const src = (allTransactions || []).find((x) => x.id === item.payoutSourceId);
+    return src ? src.date : null;
+  };
+
   const pIncome = projectTrans.filter(t=>t.type==='income').reduce((acc,cur)=>acc + (cur.totalAmount||cur.amount), 0);
   const pTotalExpense = projectTrans.filter(t=>t.type==='expense');
   const expenseProd = pTotalExpense.filter(t=>t.category === 'production').reduce((acc,cur)=>acc + (cur.totalAmount||cur.amount), 0);
@@ -1115,10 +1148,10 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
                             <div className="flex items-center gap-2 flex-wrap">
                                 <span className="text-sm font-bold text-gray-800">{t.name}</span>
                                 <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-bold text-indigo-700">공유 {Number(t.link.sharePercent || 0)}%</span>
-                                <span className="text-[11px] text-gray-400">계산값 {formatNumber(t.calc.amount)}원</span>
-                                {t.calc.remainingRecoup > 0 && (
-                                    <span className="text-[11px] font-bold text-amber-600">제작비 {formatNumber(t.calc.remainingRecoup)} 남음</span>
+                                {t.round && (
+                                    <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-gray-500 ring-1 ring-gray-200">{t.round.label}회차</span>
                                 )}
+                                <span className="text-[11px] text-gray-400">계산값 {formatNumber(t.calc.amount)}원</span>
                                 <label className="ml-auto flex items-center gap-1 cursor-pointer select-none">
                                     <input type="checkbox" className="w-4 h-4 rounded" checked={skipped} onChange={(ev) => setAllocSkip(t.artistId, ev.target.checked)} />
                                     <span className="text-[11px] font-bold text-gray-500">배분 안 함</span>
@@ -1131,6 +1164,23 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
                                     <span className="shrink-0 text-xs font-bold text-gray-400">원</span>
                                 </div>
                             )}
+                            {/* 계산 과정 — 보여주기만 한다(계산식은 collabPayout.js 그대로). */}
+                            <div className="text-[11px] leading-relaxed text-gray-500">
+                                {t.calc.shareable > 0 ? (
+                                    <>
+                                        이전 누적 <b className="text-gray-700">{formatNumber(t.calc.cumulativeBefore)}</b>
+                                        {' · '}남은 제작비 <b className="text-gray-700">{formatNumber(Math.max(0, (t.calc.recoupAmount || 0) - t.calc.cumulativeBefore))}</b>
+                                        {' → '}공유 대상 <b className="text-gray-700">{formatNumber(t.calc.shareable)}</b>
+                                        {' × '}{Number(t.link.sharePercent || 0)}%
+                                        {' = '}<b className="text-indigo-700">{formatNumber(t.calc.amount)}</b>
+                                    </>
+                                ) : (
+                                    <>
+                                        남은 제작비 <b className="text-amber-600">{formatNumber(t.calc.remainingRecoup)}</b>
+                                        {' (이번 수익으로 회수 중)'}
+                                    </>
+                                )}
+                            </div>
                             {!skipped && t.taxType === 'invoice' && (
                                 <div className="text-[10px] text-gray-400">세금계산서 — 공급가 {formatNumber(payoutAmounts(parseNumber(allocValue(t)), 'invoice').amount)} / 부가세 {formatNumber(payoutAmounts(parseNumber(allocValue(t)), 'invoice').vat)} (마이너스 수익)</div>
                             )}
@@ -1333,7 +1383,7 @@ function Votiz({ user, projects, filteredTransactions, allTransactions, refresh,
                 </div>
             )}
             {showStats ? ( <CategoryStats list={projectTrans} onCategoryClick={handleCategoryClick} /> ) : (
-                <TransactionList list={finalList} showVat={true} onEdit={handleEdit} onDelete={handleDelete} isSummaryMode={false} onMonthClick={onMonthClick} categoryMap={categories} onOpenPhotos={setPhotoFor} onShowSource={(item) => {
+                <TransactionList list={listView.rows} kinds={listView.kinds} sourceDateOf={payoutOnlyView ? sourceDateOf : null} showVat={true} onEdit={handleEdit} onDelete={handleDelete} isSummaryMode={false} onMonthClick={onMonthClick} categoryMap={categories} onOpenPhotos={setPhotoFor} roundOf={payoutRoundOf} onShowSource={(item) => {
                   const src = allTransactions.find((x) => x.id === item.payoutSourceId);
                   if (src) handleEdit(src);
                   else alert('원본 수익을 찾지 못했습니다. 이미 삭제된 것 같습니다.');
@@ -1382,10 +1432,13 @@ function CategoryStats({ list, onCategoryClick }) {
 }
 
 // onOpenPhotos 를 넘긴 곳(보티즈)만 📎 배지를 그린다. 보이스튜닝·저작권·유튜브는 안 넘기므로 그대로다.
-function TransactionList({ list, showVat, onEdit, onDelete, isSummaryMode, onMonthClick, categoryMap, onOpenPhotos, onShowSource }) {
+function TransactionList({ list, showVat, onEdit, onDelete, isSummaryMode, onMonthClick, categoryMap, onOpenPhotos, onShowSource, roundOf, kinds, sourceDateOf }) {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 25;
-  const totalPages = Math.ceil(list.length / itemsPerPage);
+  // 묶음(원본 수익 + 자동배분 줄)이 페이지 경계에서 갈라지지 않게 나눈다.
+  // kinds 를 안 넘긴 탭(보이스튜닝·저작권·유튜브)은 예전처럼 25건씩 잘린다.
+  const pages = paginateGrouped(list, kinds, itemsPerPage);
+  const totalPages = Math.max(1, pages.length);
 
   useEffect(() => { setCurrentPage(1); }, [list.length, isSummaryMode]);
 
@@ -1422,7 +1475,7 @@ function TransactionList({ list, showVat, onEdit, onDelete, isSummaryMode, onMon
       );
   }
 
-  const currentData = list.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage);
+  const currentData = pages[Math.min(currentPage, totalPages) - 1] || [];
 
   return (
     <>
@@ -1440,10 +1493,18 @@ function TransactionList({ list, showVat, onEdit, onDelete, isSummaryMode, onMon
             if(subDetailLabel) displayTitle += ` > ${subDetailLabel}`;
             if(!displayTitle) displayTitle = item.memo || '내역 없음';
 
+            // 'child' = 원본 수익 바로 아래에 붙인 자동배분 줄(들여쓰기·작은 카드), 'orphan' = 원본이 목록에 없는 줄
+            const kind = (kinds && kinds[item.id]) || 'normal';
+            const isChild = kind === 'child';
+
             return (
-            <li key={item.id} className="bg-white p-4 rounded-2xl border border-gray-100 shadow-[0_2px_8px_rgba(0,0,0,0.04)] hover:shadow-md transition-shadow">
+            <li key={item.id}
+                className={isChild
+                    ? 'ml-5 md:ml-8 bg-white px-3 py-2.5 rounded-xl border border-gray-100 border-l-2 border-l-indigo-200 shadow-[0_1px_4px_rgba(0,0,0,0.03)]'
+                    : 'bg-white p-4 rounded-2xl border border-gray-100 shadow-[0_2px_8px_rgba(0,0,0,0.04)] hover:shadow-md transition-shadow'}>
             <div className="flex justify-between items-start mb-1">
                 <div className="flex items-center gap-2 flex-wrap">
+                    {isChild && <span className="shrink-0 text-xs font-bold text-indigo-300" aria-hidden="true">└</span>}
                     <span className={`text-[10px] font-extrabold px-2 py-1 rounded-md tracking-wide ${isVT ? 'bg-purple-100 text-purple-600' : isCR ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600'}`}>
                         {isVT ? 'VT' : isCR ? '저작권' : '보티즈'}
                     </span>
@@ -1457,6 +1518,17 @@ function TransactionList({ list, showVat, onEdit, onDelete, isSummaryMode, onMon
                             className="shrink-0 rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-extrabold text-indigo-700 hover:bg-indigo-200"
                             title="원본 수익으로 이동">자동배분</button>
                     )}
+                    {isAutoPayout(item) && roundOf && roundOf(item) && (
+                        <span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-gray-500 ring-1 ring-gray-200"
+                            title="공유 회차 (시작월이 1회차)">{roundOf(item)}</span>
+                    )}
+                    {kind === 'orphan' && (
+                        <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-700 ring-1 ring-amber-200"
+                            title="원본 수익이 이 목록에 없습니다">원본 없음</span>
+                    )}
+                    {sourceDateOf && isAutoPayout(item) && sourceDateOf(item) && (
+                        <span className="shrink-0 text-[10px] font-bold text-gray-400">원본 {sourceDateOf(item)}</span>
+                    )}
                 </div>
                 <div className="flex items-center gap-1">
                     {onOpenPhotos && <PhotoBadge count={item.photoCount} onClick={() => onOpenPhotos(item)} />}
@@ -1468,7 +1540,8 @@ function TransactionList({ list, showVat, onEdit, onDelete, isSummaryMode, onMon
                 <div className={`text-lg font-extrabold flex items-center gap-1 ${isIncome ? (finalAmount >=0 ? 'text-blue-600' : 'text-red-500') : 'text-red-500'}`}>
                     <span>{isIncome ? '수익' : '지출'}</span><span>{formatNumber(finalAmount)}원</span>
                 </div>
-                {showVat && item.vat > 0 && (<div className="text-[10px] text-gray-400 bg-gray-50 px-2 py-1 rounded">VAT 포함</div>)}
+                {/* 자동배분 줄은 금액이 마이너스라 부가세도 음수다 — 절댓값으로 판단한다(저장값은 그대로). */}
+                {showVat && Math.abs(Number(item.vat || 0)) > 0 && (<div className="text-[10px] text-gray-400 bg-gray-50 px-2 py-1 rounded">VAT 포함</div>)}
             </div>
             </li>
         )})}

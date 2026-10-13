@@ -115,9 +115,25 @@ export const payoutAmounts = (total, taxType) => {
     return { amount: -gross, vat: 0, totalAmount: -gross };
 };
 
+/**
+ * 공유 회차 — 공유 시작월이 1회차. 분모는 공유 기간 개월 수.
+ * 기간 밖이면 null. **표시 전용**이다(계산에는 쓰지 않는다).
+ * @returns { round, total, label } | null
+ */
+export const shareRoundOf = (link, date) => {
+    if (!link || !link.startMonth || !date) return null;
+    const months = monthRange(link.startMonth, Number(link.periodMonths || 36));
+    const idx = months.indexOf(ymOf(date));
+    if (idx < 0) return null;
+    return { round: idx + 1, total: months.length, label: (idx + 1) + '/' + months.length };
+};
+
 // 배분 지출 메모 — 어디서 왔는지 한 줄로 남긴다.
-export const payoutMemo = ({ artistName, sharePercent, incomeDate }) =>
-    '자동배분 · ' + (artistName || '(이름없음)') + ' ' + Number(sharePercent || 0) + '% · ' + (incomeDate || '') + ' 음원수익';
+// ⚠️ 새로 만드는 줄에만 쓴다. 이미 저장된 메모는 고치지 않는다.
+export const payoutMemo = ({ artistName, sharePercent, incomeDate, round }) =>
+    '자동배분 · ' + (artistName || '(이름없음)') + ' ' + Number(sharePercent || 0) + '%'
+    + (round ? ' · ' + round : '')
+    + ' · ' + (incomeDate || '') + ' 음원수익';
 
 // 이 수익에 딸린 배분 줄 찾기 (수익 1건 × 아티스트 1명 = 1건)
 export const findPayoutExpense = (transactions, sourceId, artistId) =>
@@ -130,6 +146,91 @@ export const payoutExpensesOf = (transactions, sourceId) =>
     (transactions || []).filter((t) => t.payoutSourceId === sourceId);
 
 export const isAutoPayout = (t) => !!(t && t.payoutSourceId);
+
+// 만든 순서(= 곡에 연결된 아티스트 순서). 없으면 null.
+const createdSec = (t) => {
+    const c = t && t.createdAt;
+    if (!c) return null;
+    if (typeof c.seconds === 'number') return c.seconds;              // Firestore Timestamp
+    if (c instanceof Date) return c.getTime() / 1000;
+    return null;
+};
+
+/**
+ * 페이지 나누기 — 묶음(원본 수익 + 그 아래 자동배분 줄)을 쪼개지 않는다.
+ * 경계에 걸리면 그 묶음을 통째로 지금 페이지에 넣는다(그래서 한 페이지가 perPage 를 조금 넘을 수 있다).
+ * ⚠️ 표시 전용이다. 줄을 더하거나 빼지 않는다.
+ *
+ * @param rows  groupPayoutsUnderSource 로 늘어놓은 줄
+ * @param kinds { [id]: 'normal' | 'child' | 'orphan' } — 없으면 그냥 perPage 씩 자른다
+ * @returns [[row, ...], ...]
+ */
+export const paginateGrouped = (rows, kinds, perPage) => {
+    const list = rows || [];
+    const size = Math.max(1, Number(perPage) || 25);
+    const kindOf = (r) => (kinds || {})[r.id] || 'normal';
+    const pages = [];
+    let cur = [];
+    let i = 0;
+    while (i < list.length) {
+        // 이 줄부터 딸린 자동배분 줄까지가 한 묶음이다.
+        let len = 1;
+        while (i + len < list.length && kindOf(list[i + len]) === 'child') len += 1;
+        if (cur.length >= size) { pages.push(cur); cur = []; }
+        for (let k = 0; k < len; k++) cur.push(list[i + k]);
+        i += len;
+    }
+    if (cur.length) pages.push(cur);
+    return pages;
+};
+
+/**
+ * 내역 목록을 **보여주기 좋게** 다시 늘어놓는다 — 자동배분 줄을 원본 수익 바로 아래로.
+ * ⚠️ 표시 전용이다. 저장 데이터·금액·계산에는 아무 영향이 없다.
+ *
+ * - 원본이 이 목록에 있으면 그 바로 아래에 붙인다(저장 순서·날짜와 무관).
+ *   한 수익에 여러 명이면 만든 순서(= 아티스트 연결 순서)대로 줄줄이 붙인다.
+ * - 원본이 목록에 없으면(삭제됐거나 기간·분류 필터로 빠졌으면) 제자리에 두고 'orphan' 으로 표시한다.
+ * - 그 밖의 줄 순서는 들어온 그대로 둔다(날짜 정렬 등 기존 규칙 유지).
+ *
+ * @returns [{ row, kind: 'normal' | 'child' | 'orphan' }]
+ */
+export const groupPayoutsUnderSource = (list) => {
+    const rows = list || [];
+    const ids = new Set(rows.map((r) => r.id));
+    const bySource = new Map();
+    const orphan = new Set();
+
+    rows.forEach((r) => {
+        if (!isAutoPayout(r)) return;
+        if (ids.has(r.payoutSourceId)) {
+            if (!bySource.has(r.payoutSourceId)) bySource.set(r.payoutSourceId, []);
+            bySource.get(r.payoutSourceId).push(r);
+        } else {
+            orphan.add(r.id);
+        }
+    });
+
+    // 만든 순서대로. 시각이 없는 옛 줄은 들어온 순서를 지킨다.
+    bySource.forEach((arr) => {
+        arr.forEach((r, i) => { r.__i = i; });
+        arr.sort((a, b) => {
+            const ca = createdSec(a);
+            const cb = createdSec(b);
+            if (ca !== null && cb !== null && ca !== cb) return ca - cb;
+            return a.__i - b.__i;
+        });
+        arr.forEach((r) => { delete r.__i; });
+    });
+
+    const out = [];
+    rows.forEach((r) => {
+        if (isAutoPayout(r) && !orphan.has(r.id)) return;    // 원본 아래에서 그린다
+        out.push({ row: r, kind: orphan.has(r.id) ? 'orphan' : 'normal' });
+        (bySource.get(r.id) || []).forEach((p) => out.push({ row: p, kind: 'child' }));
+    });
+    return out;
+};
 
 // 콜라보 공유 대상만 남긴다 — 음원수익 수입만. (지출은 콜라보 계산이 어차피 안 보지만
 // 기준을 한눈에 보이게 여기서 같이 걸러 둔다)

@@ -23,7 +23,8 @@ import {
 import {
     allocationForIncome, payoutAmounts, payoutMemo, findPayoutExpense,
     isAutoPayout, collabLinksOf, isWithinShareWindow, sourceIncomeOnly, PAYOUT_CATEGORY,
-    SKIP_FIELD, skipIdsOf, isPayoutSkipped, mergeSkipIds,
+    SKIP_FIELD, skipIdsOf, isPayoutSkipped, mergeSkipIds, shareRoundOf, groupPayoutsUnderSource,
+    paginateGrouped,
 } from '../src/domain/collabPayout.js';
 import {
     categoryOf, payeeOf, effectiveTaxType,
@@ -32,6 +33,7 @@ import {
 import {
     rootIdOf, kindOf, isHidden, topLevelCats, childrenOf, hasChildren,
     catPath, isCategoryInUse, votizMapKey, mappedCategoryId, normalizeVotizMap,
+    chainOf, depthOf, rowMatchesCategory, MAX_DEPTH,
 } from '../src/domain/mgmtCategories.js';
 
 let pass = 0;
@@ -457,8 +459,12 @@ eq('원본+아티스트로 배분 줄 1건을 찾는다', findPayoutExpense(expe
 eq('없으면 null', findPayoutExpense(expenses, 'zzz', 'C'), null);
 eq('배분 줄 판별', [isAutoPayout(expenses[0]), isAutoPayout({ id: 'x' })], [true, false]);
 eq('지출 분류 키', PAYOUT_CATEGORY, 'payout');
-eq('메모 형식', payoutMemo({ artistName: '테스트가수', sharePercent: 30, incomeDate: '2026-10-10' }),
+eq('메모 형식(회차 없이 — 기존 호출 그대로)',
+    payoutMemo({ artistName: '테스트가수', sharePercent: 30, incomeDate: '2026-10-10' }),
     '자동배분 · 테스트가수 30% · 2026-10-10 음원수익');
+eq('메모 형식(회차 포함 — 새로 만드는 줄)',
+    payoutMemo({ artistName: '백현', sharePercent: 30, incomeDate: '2021-08-25', round: '2/36' }),
+    '자동배분 · 백현 30% · 2/36 · 2021-08-25 음원수익');
 
 // ──[ 8. '수익배분' 지출이 매니지먼트 정산에 주는 영향 ]──────────────────
 console.log('\n── 8. 수익배분 지출이 정산에 들어가는지');
@@ -675,6 +681,203 @@ const payFallback = buildSongRows({ projects: [mapProject], transactions: payTx,
 eq('연결 없으면 수익배분은 기본 수익항목(B)', payFallback.find((r) => r.votizCategory === PAYOUT_CATEGORY).categoryId, 'B');
 eq('수익배분 마이너스는 지분만큼 깎인다(소속도 같이 부담)',
     payFallback.find((r) => r.votizCategory === PAYOUT_CATEGORY).amount, -300);
+
+// -- [ 11. 항목 3단계 (항목 > 세부 > 세부2) ] --
+console.log('');
+console.log('-- 11. 항목 3단계');
+
+// 2단계까지만 쓰던 기존 데이터 + 3단계를 섞은 목록
+const CATS3 = [
+    { id: 'T', name: '제작비', kind: 'expense', order: 1 },
+    { id: 'T1', name: '곡비', parentId: 'T', order: 1 },
+    { id: 'T1a', name: '작사비', parentId: 'T1', order: 1 },
+    { id: 'T1b', name: '작곡비', parentId: 'T1', order: 2 },
+    { id: 'T2', name: '믹스', parentId: 'T', order: 2 },        // 2단계만 (기존 모양)
+    { id: 'I', name: '음원', kind: 'income', order: 1 },
+    { id: 'HX', name: '숨은항목', kind: 'expense', order: 9, hidden: true },
+    { id: 'HX1', name: '숨은자식', parentId: 'HX', order: 1 },
+    { id: 'HX1a', name: '숨은손자', parentId: 'HX1', order: 1 },
+];
+
+eq('최대 단계', MAX_DEPTH, 3);
+eq('줄기 [최상위..자기]', chainOf(CATS3, 'T1a').map((c) => c.id), ['T', 'T1', 'T1a']);
+eq('2단계 줄기', chainOf(CATS3, 'T2').map((c) => c.id), ['T', 'T2']);
+eq('없는 id 는 빈 줄기', chainOf(CATS3, 'ZZZ'), []);
+eq('단계 수', [depthOf(CATS3, 'T'), depthOf(CATS3, 'T2'), depthOf(CATS3, 'T1a')], [1, 2, 3]);
+eq('3단계도 최상위는 T', rootIdOf(CATS3, 'T1a'), 'T');
+eq('3단계 구분도 최상위를 따른다', kindOf(CATS3, CATS3.find((c) => c.id === 'T1a')), 'expense');
+eq('할아버지가 숨으면 손자도 숨는다', isHidden(CATS3, CATS3.find((c) => c.id === 'HX1a')), true);
+eq('전체 경로 표기', catPath(CATS3, 'T', 'T1a'), '제작비 > 곡비 > 작사비');
+eq('2단계 표기는 그대로', catPath(CATS3, 'T', 'T2'), '제작비 > 믹스');
+eq('세부 없으면 항목만', catPath(CATS3, 'T', ''), '제작비');
+eq('지워진 세부는 표시만 바뀐다', catPath(CATS3, 'T', 'GONE'), '제작비 > (삭제된 세부항목)');
+
+// 저장 방식: categoryId = 최상위, subCategoryId = 가장 깊이 고른 것 하나
+const row3 = { type: 'expense', categoryId: 'T', subCategoryId: 'T1a', totalAmount: 300 };
+const row2 = { type: 'expense', categoryId: 'T', subCategoryId: 'T2', totalAmount: 200 };   // 기존 모양
+const row1 = { type: 'expense', categoryId: 'T', totalAmount: 100 };                        // 세부 없음
+
+eq('필터: 최상위를 고르면 3단계 줄까지 걸린다',
+    [row1, row2, row3].map((r) => rowMatchesCategory(CATS3, r, 'T')), [true, true, true]);
+eq('필터: 2단계(곡비)를 고르면 그 아래 3단계만',
+    [row1, row2, row3].map((r) => rowMatchesCategory(CATS3, r, 'T1')), [false, false, true]);
+eq('필터: 3단계(작사비)를 고르면 그 줄만',
+    [row1, row2, row3].map((r) => rowMatchesCategory(CATS3, r, 'T1a')), [false, false, true]);
+eq('필터: 2단계(믹스)는 기존 줄만', [row1, row2, row3].map((r) => rowMatchesCategory(CATS3, r, 'T2')),
+    [false, true, false]);
+eq('필터 없으면 전부', [row1, row2, row3].map((r) => rowMatchesCategory(CATS3, r, '')), [true, true, true]);
+
+// 3단계 금액도 최상위 합계에 들어간다 (2단계 기존 줄과 함께)
+const d3Calc = computeGeneralSettlement({
+    artist: { ratioUniform: false, ratios: { T: { company: 50, artist: 50 } } },
+    categories: CATS3,
+    ledgerRows: [row1, row2, row3],
+    songRows: [], carryIn: 0,
+});
+eq('1+2+3단계 금액이 최상위 한 줄(600)로 합쳐진다',
+    d3Calc.rows.map((r) => [r.categoryId, r.expense]), [['T', 600]]);
+eq('줄 이름은 최상위 이름', d3Calc.rows[0].name, '제작비');
+
+// 기존 2단계 데이터만 있을 때도 결과가 같아야 한다
+const onlyOld = computeGeneralSettlement({
+    artist: { ratioUniform: false, ratios: { T: { company: 50, artist: 50 } } },
+    categories: CATS3, ledgerRows: [row1, row2], songRows: [], carryIn: 0,
+});
+eq('기존 2단계 데이터만 있을 때 300', onlyOld.rows.map((r) => [r.categoryId, r.expense]), [['T', 300]]);
+
+// 화면 목록(열)에서 쓰는 함수들
+eq('2단계 목록', childrenOf(CATS3, 'T').map((c) => c.id), ['T1', 'T2']);
+eq('3단계 목록', childrenOf(CATS3, 'T1').map((c) => c.id), ['T1a', 'T1b']);
+eq('3단계 아래는 없다', hasChildren(CATS3, 'T1a'), false);
+eq('숨긴 2단계는 기본으로 안 보인다', childrenOf(CATS3, 'HX').map((c) => c.id), ['HX1']);
+
+// -- [ 12. 공유 회차 표시 ] --
+console.log('');
+console.log('-- 12. 공유 회차 (표시 전용)');
+
+const rLink = { recoupAmount: 0, sharePercent: 30, startMonth: '2021-07', periodMonths: 36 };
+eq('시작월이 1회차', shareRoundOf(rLink, '2021-07-25').label, '1/36');
+eq('다음 달은 2회차', shareRoundOf(rLink, '2021-08-25').label, '2/36');
+eq('마지막 달은 36회차', shareRoundOf(rLink, '2024-06-25').label, '36/36');
+eq('기간 밖(다음 달)은 없음', shareRoundOf(rLink, '2024-07-25'), null);
+eq('기간 밖(시작 전)은 없음', shareRoundOf(rLink, '2021-06-25'), null);
+eq('회차·분모 숫자', [shareRoundOf(rLink, '2021-08-25').round, shareRoundOf(rLink, '2021-08-25').total], [2, 36]);
+eq('기간이 12개월이면 분모도 12', shareRoundOf({ ...rLink, periodMonths: 12 }, '2021-07-01').label, '1/12');
+eq('연결 정보가 없으면 없음', [shareRoundOf(null, '2021-07-25'), shareRoundOf(rLink, '')], [null, null]);
+eq('기간 판정과 같은 결과를 낸다',
+    [isWithinShareWindow(rLink, '2024-06-25'), !!shareRoundOf(rLink, '2024-06-25')], [true, true]);
+
+// VAT 배지 판정 — 자동배분 줄은 부가세가 음수다(절댓값으로 본다). 저장값은 그대로.
+const invoiceMoney = payoutAmounts(1000000, 'invoice');
+const withholdMoney = payoutAmounts(1000000, 'withholding');
+eq('세금계산서 배분 줄의 부가세는 음수', invoiceMoney.vat < 0, true);
+eq('절댓값으로 보면 VAT 배지 대상', Math.abs(invoiceMoney.vat) > 0, true);
+eq('원천징수 배분 줄은 부가세 0 → 배지 없음', Math.abs(withholdMoney.vat) > 0, false);
+eq('저장 금액·부호는 그대로', [invoiceMoney.amount, invoiceMoney.vat, invoiceMoney.totalAmount],
+    [-909091, -90909, -1000000]);
+
+// -- [ 13. 내역 목록에서 자동배분 줄을 원본 아래로 묶기 (표시 전용) ] --
+console.log('');
+console.log('-- 13. 자동배분 줄 묶어 보여주기');
+
+const inc = (id, date) => ({ id, type: 'income', category: 'source', date, totalAmount: 1000 });
+const pay = (id, srcId, artistId, sec) => ({
+    id, type: 'income', category: PAYOUT_CATEGORY, date: '2026-01-15', totalAmount: -300,
+    payoutSourceId: srcId, payoutArtistId: artistId, createdAt: { seconds: sec },
+});
+const seq = (g) => g.map((e) => e.row.id + ':' + e.kind);
+
+// 저장 순서가 섞여 있어도 원본 바로 아래로 간다
+const mixed = [inc('S2', '2026-02-10'), pay('P1', 'S1', 'A', 10), inc('S1', '2026-01-15'), pay('P2', 'S2', 'A', 20)];
+eq('섞여 있어도 원본 바로 아래',
+    seq(groupPayoutsUnderSource(mixed)), ['S2:normal', 'P2:child', 'S1:normal', 'P1:child']);
+
+// 나머지 줄 순서는 들어온 그대로(날짜 정렬 등 기존 규칙 유지)
+eq('원본끼리의 순서는 안 바뀐다',
+    groupPayoutsUnderSource(mixed).filter((e) => e.kind === 'normal').map((e) => e.row.id), ['S2', 'S1']);
+
+// 한 수익에 여러 명 — 만든 순서(= 아티스트 연결 순서)대로
+const many = [inc('S1', '2026-01-15'), pay('Pb', 'S1', 'B', 20), pay('Pa', 'S1', 'A', 10), pay('Pc', 'S1', 'C', 30)];
+eq('여러 명이면 만든 순서대로 줄줄이',
+    seq(groupPayoutsUnderSource(many)), ['S1:normal', 'Pa:child', 'Pb:child', 'Pc:child']);
+
+// createdAt 이 없는 옛 줄은 들어온 순서를 지킨다
+const noTs = [inc('S1', '2026-01-15'),
+    { id: 'Px', type: 'income', category: PAYOUT_CATEGORY, date: '2026-01-15', totalAmount: -100, payoutSourceId: 'S1', payoutArtistId: 'X' },
+    { id: 'Py', type: 'income', category: PAYOUT_CATEGORY, date: '2026-01-15', totalAmount: -100, payoutSourceId: 'S1', payoutArtistId: 'Y' }];
+eq('시각 없는 옛 줄은 들어온 순서 유지', seq(groupPayoutsUnderSource(noTs)), ['S1:normal', 'Px:child', 'Py:child']);
+
+// 원본이 목록에 없으면 제자리 + orphan
+const orphan = [inc('S1', '2026-01-15'), pay('P9', 'GONE', 'A', 10)];
+eq('원본 없는 배분 줄은 제자리에 orphan', seq(groupPayoutsUnderSource(orphan)), ['S1:normal', 'P9:orphan']);
+
+// 자동배분이 하나도 없으면 순서가 그대로다
+const plain = [inc('S1', '2026-02-10'), inc('S2', '2026-01-15')];
+eq('자동배분 없으면 그대로', seq(groupPayoutsUnderSource(plain)), ['S1:normal', 'S2:normal']);
+eq('빈 목록', groupPayoutsUnderSource([]), []);
+eq('목록이 없어도 터지지 않는다', groupPayoutsUnderSource(null), []);
+
+// 줄 개수는 늘지도 줄지도 않는다(표시 순서만 바꾼다)
+eq('줄 개수 보존', [mixed.length, many.length, orphan.length].join(',') + ' / ' +
+    [groupPayoutsUnderSource(mixed).length, groupPayoutsUnderSource(many).length, groupPayoutsUnderSource(orphan).length].join(','),
+    '4,4,2 / 4,4,2');
+// 원본 데이터를 건드리지 않는다(임시 필드가 남지 않아야 한다)
+groupPayoutsUnderSource(many);
+eq('원본 줄에 임시 필드가 안 남는다', many.some((r) => '__i' in r), false);
+
+// -- [ 14. 페이지 경계에서 묶음이 갈라지지 않게 ] --
+console.log('');
+console.log('-- 14. 페이지 나누기 (묶음 유지)');
+
+// 원본 1 + 배분 2 짜리 묶음을 줄줄이 만든다 (한 묶음 = 3줄)
+const mkGroup = (k) => [
+    { id: 'S' + k }, { id: 'P' + k + 'a' }, { id: 'P' + k + 'b' },
+];
+const rows14 = [];
+const kinds14 = {};
+for (let k = 0; k < 10; k++) {
+    const g = mkGroup(k);
+    g.forEach((r, i) => { rows14.push(r); kinds14[r.id] = i === 0 ? 'normal' : 'child'; });
+}
+eq('줄 30개 준비', rows14.length, 30);
+
+// perPage 4 → 묶음(3줄)이 경계에 걸려도 통째로 들어간다
+const pg = paginateGrouped(rows14, kinds14, 4);
+const splitGroup = pg.some((page) => {
+    // 한 페이지 안에서 'child' 가 자기 원본 없이 시작하면 갈라진 것
+    return page.length > 0 && kinds14[page[0].id] === 'child';
+});
+eq('경계에 걸린 묶음이 갈라지지 않는다', splitGroup, false);
+eq('모든 페이지가 원본으로 시작한다', pg.every((page) => kinds14[page[0].id] === 'normal'), true);
+eq('묶음은 항상 3줄씩 붙어 있다',
+    pg.every((page) => page.length % 3 === 0), true);
+
+// 줄 수는 보존된다 (더하지도 빼지도 않는다)
+eq('전체 줄 수 보존', pg.reduce((a, c) => a + c.length, 0), rows14.length);
+eq('순서도 그대로', pg.flat().map((r) => r.id).join(','), rows14.map((r) => r.id).join(','));
+
+// perPage 를 조금 넘을 수 있다(묶음을 지키려고)
+eq('페이지가 perPage 를 넘을 수 있다', pg.some((page) => page.length > 4), true);
+eq('그래도 perPage + 묶음길이 보다는 작다', pg.every((page) => page.length <= 4 + 2), true);
+
+// 25건 기준 실제 사례 — 앞에 단독 줄 24개 + 묶음(3줄)
+const rows25 = [];
+const kinds25 = {};
+for (let k = 0; k < 24; k++) { const id = 'X' + k; rows25.push({ id }); kinds25[id] = 'normal'; }
+mkGroup(99).forEach((r, i) => { rows25.push(r); kinds25[r.id] = i === 0 ? 'normal' : 'child'; });
+const pg25 = paginateGrouped(rows25, kinds25, 25);
+eq('경계에 걸친 묶음 3줄이 한 페이지에', pg25[0].slice(-3).map((r) => r.id), ['S99', 'P99a', 'P99b']);
+eq('한 페이지로 끝난다(27줄)', [pg25.length, pg25[0].length], [1, 27]);
+eq('25건 사례도 줄 수 보존', pg25.reduce((a, c) => a + c.length, 0), 27);
+
+// kinds 를 안 넘기면(다른 탭) 예전처럼 perPage 씩 자른다
+const plain25 = paginateGrouped(rows25, null, 25);
+eq('kinds 없으면 25건씩', plain25.map((p) => p.length), [25, 2]);
+
+// 가장자리
+eq('빈 목록', paginateGrouped([], {}, 25), []);
+eq('목록이 없어도 터지지 않는다', paginateGrouped(null, null, 25), []);
+eq('perPage 를 안 주거나 0 이면 기본 25', paginateGrouped([{ id: 'A' }, { id: 'B' }], {}, 0).length, 1);
 
 // -- [ 결과 ] --
 console.log(`\n${pass}/${pass + fail} 통과` + (fail ? ` — 실패 ${fail}건` : ''));
