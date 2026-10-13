@@ -881,16 +881,23 @@ function CategoryManager({ user, categories, setCategories, artists, votizCatego
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState('');
     const [showHidden, setShowHidden] = useState(false);
-    // 쪽(수입/지출)마다 고른 항목과, 휴대폰 폭에서 보고 있는 열.
-    const [picked, setPicked] = useState({ income: null, expense: null });
-    const [mobileCol, setMobileCol] = useState({ income: 'root', expense: 'root' });
+    // 쪽(수입/지출)마다 단계별로 고른 항목(1=항목, 2=세부)과, 휴대폰 폭에서 보고 있는 열 번호.
+    const [picked, setPicked] = useState({ income: [null, null], expense: [null, null] });
+    const [mobileCol, setMobileCol] = useState({ income: 0, expense: 0 });
     // 이름 입력 중인 값. 칸에서 빠져나올 때 저장한다.
     const [names, setNames] = useState({});
     const [adding, setAdding] = useState({});   // 열마다 새 이름 입력칸
 
-    const pickCat = (kind, id) => {
-        setPicked((p) => ({ ...p, [kind]: p[kind] === id ? null : id }));
-        setMobileCol((m) => ({ ...m, [kind]: 'sub' }));
+    // level 0 = 항목 열에서 고름 → 세부 열이 열린다. level 1 = 세부 열에서 고름 → 세부2 열.
+    const pickCat = (kind, level, id) => {
+        setPicked((p) => {
+            const cur = p[kind].slice();
+            if (cur[level] === id) { cur[level] = null; }      // 다시 누르면 접는다
+            else cur[level] = id;
+            for (let i = level + 1; i < cur.length; i++) cur[i] = null;   // 아래 단계는 초기화
+            return { ...p, [kind]: cur };
+        });
+        setMobileCol((m) => ({ ...m, [kind]: level + 1 }));
     };
 
     const addCat = async (kind, parentId, colKey) => {
@@ -913,8 +920,11 @@ function CategoryManager({ user, categories, setCategories, artists, votizCatego
     };
 
     // 이름은 칸에서 빠져나올 때만 저장한다(줄마다 저장 버튼을 두지 않는다).
-    const commitName = async (c) => {
-        const draft = names[c.id];
+    // ⚠️ 입력칸의 **지금 값**을 받아서 저장한다. 예전엔 draft state 만 봤는데, 타이핑 직후
+    //    바로 칸을 빠져나가면 state 갱신이 아직 안 닿아 draft 가 undefined 라 **조용히 안 저장**됐다
+    //    (칸에는 고친 이름이 그대로 보여서 저장된 것처럼 보였다).
+    const commitName = async (c, typed) => {
+        const draft = typed !== undefined ? typed : names[c.id];
         if (draft === undefined) return;
         const next = String(draft).trim();
         setNames((prev) => { const o = { ...prev }; delete o[c.id]; return o; });
@@ -976,7 +986,10 @@ function CategoryManager({ user, categories, setCategories, artists, votizCatego
             if (!window.confirm("'" + c.name + "' 을(를) 지웁니다. 되돌릴 수 없습니다.")) return;
             await deleteDoc(doc(db, 'mgmtCategories', c.id));
             setCategories((prev) => prev.filter((x) => x.id !== c.id));
-            setPicked((p) => ({ income: p.income === c.id ? null : p.income, expense: p.expense === c.id ? null : p.expense }));
+            setPicked((p) => ({
+                income: p.income.map((x) => (x === c.id ? null : x)),
+                expense: p.expense.map((x) => (x === c.id ? null : x)),
+            }));
         } catch (e) {
             setErr('삭제 실패: ' + (e && e.message ? e.message : ''));
         } finally { setBusy(false); }
@@ -993,7 +1006,7 @@ function CategoryManager({ user, categories, setCategories, artists, votizCatego
                     className="min-w-0 w-full sm:w-auto sm:flex-1 rounded-lg bg-transparent px-2 py-1 text-sm font-bold text-gray-700 outline-none focus:bg-white focus:ring-1 focus:ring-gray-300"
                     value={names[c.id] !== undefined ? names[c.id] : (c.name || '')}
                     onChange={(e) => setNames((prev) => ({ ...prev, [c.id]: e.target.value }))}
-                    onBlur={() => commitName(c)}
+                    onBlur={(e) => commitName(c, e.target.value)}
                     onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
                 />
                 {c.hidden && <span className="shrink-0 rounded-full bg-gray-200 px-2 py-0.5 text-[10px] font-bold text-gray-500">숨김</span>}
@@ -1035,45 +1048,62 @@ function CategoryManager({ user, categories, setCategories, artists, votizCatego
         </div>
     );
 
-    // ── 한 쪽(수입/지출) ──
+    // ── 한 쪽(수입/지출) ── 열 3개: 항목 → 세부 → 세부2
+    const COL_TITLES = ['항목', '세부', '세부2'];
     const renderPane = (kind, title, tone) => {
         const tops = topLevelCats(categories, kind, showHidden);
-        const pickedId = picked[kind];
-        const pickedCat = tops.find((c) => c.id === pickedId) || null;
-        const subs = pickedCat ? childrenOf(categories, pickedCat.id, showHidden) : [];
-        const onRoot = mobileCol[kind] === 'root';
+        const lv1 = tops.find((c) => c.id === picked[kind][0]) || null;
+        const subs = lv1 ? childrenOf(categories, lv1.id, showHidden) : [];
+        const lv2 = subs.find((c) => c.id === picked[kind][1]) || null;
+        const subs2 = lv2 ? childrenOf(categories, lv2.id, showHidden) : [];
+        const col = mobileCol[kind];                       // 휴대폰 폭에서 보고 있는 열
+        const only = (i) => (col === i ? '' : 'hidden md:block');
+        const crumbs = [title, lv1 && lv1.name, lv2 && lv2.name].filter(Boolean).join(' > ');
         return (
             <div key={kind} className={`rounded-2xl border p-4 space-y-3 ${tone}`}>
                 <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-bold text-gray-800">{title}</span>
-                    {pickedCat && (
-                        <span className="text-xs font-bold text-gray-400">&gt; {pickedCat.name}</span>
-                    )}
-                    {pickedCat && !onRoot && (
-                        <button type="button" onClick={() => setMobileCol((m) => ({ ...m, [kind]: 'root' }))}
-                            className="md:hidden ml-auto text-xs font-bold text-gray-500 hover:text-gray-800">← 항목</button>
+                    {(lv1 || lv2) && <span className="text-xs font-bold text-gray-400">{crumbs}</span>}
+                    {col > 0 && (
+                        <button type="button" onClick={() => setMobileCol((m) => ({ ...m, [kind]: col - 1 }))}
+                            className="md:hidden ml-auto text-xs font-bold text-gray-500 hover:text-gray-800">
+                            ← {COL_TITLES[col - 1]}
+                        </button>
                     )}
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div className={onRoot ? '' : 'hidden md:block'}>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div className={only(0)}>
                         {renderColumn({
-                            title: '항목', rows: tops, siblings: tops, colKey: kind + '-root',
+                            title: COL_TITLES[0], rows: tops, siblings: tops, colKey: kind + '-l0',
                             placeholder: '새 항목',
-                            onAdd: () => addCat(kind, null, kind + '-root'),
-                            onPick: (id) => pickCat(kind, id), pickedId, showArrow: true,
+                            onAdd: () => addCat(kind, null, kind + '-l0'),
+                            onPick: (id) => pickCat(kind, 0, id), pickedId: picked[kind][0], showArrow: true,
                         })}
                     </div>
-                    <div className={onRoot ? 'hidden md:block' : ''}>
-                        {pickedCat ? renderColumn({
-                            title: '세부항목 — ' + pickedCat.name, rows: subs, siblings: subs,
-                            colKey: kind + '-sub-' + pickedCat.id,
+                    <div className={only(1)}>
+                        {lv1 ? renderColumn({
+                            title: COL_TITLES[1] + ' — ' + lv1.name, rows: subs, siblings: subs,
+                            colKey: kind + '-l1-' + lv1.id,
                             placeholder: '새 세부항목',
-                            onAdd: () => addCat(kind, pickedCat.id, kind + '-sub-' + pickedCat.id),
-                            onPick: null, pickedId: null, showArrow: false,
+                            onAdd: () => addCat(kind, lv1.id, kind + '-l1-' + lv1.id),
+                            onPick: (id) => pickCat(kind, 1, id), pickedId: picked[kind][1], showArrow: true,
                         }) : (
                             <div className="rounded-xl border border-dashed border-gray-200 px-3 py-6 text-center text-xs text-gray-400">
                                 항목의 '세부' 를 누르면 여기에 세부항목이 나옵니다.
+                            </div>
+                        )}
+                    </div>
+                    <div className={only(2)}>
+                        {lv2 ? renderColumn({
+                            title: COL_TITLES[2] + ' — ' + lv2.name, rows: subs2, siblings: subs2,
+                            colKey: kind + '-l2-' + lv2.id,
+                            placeholder: '새 세부2',
+                            onAdd: () => addCat(kind, lv2.id, kind + '-l2-' + lv2.id),
+                            onPick: null, pickedId: null, showArrow: false,
+                        }) : (
+                            <div className="rounded-xl border border-dashed border-gray-200 px-3 py-6 text-center text-xs text-gray-400">
+                                세부항목의 '세부' 를 누르면 여기에 세부2 가 나옵니다.
                             </div>
                         )}
                     </div>

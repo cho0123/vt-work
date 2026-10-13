@@ -22,7 +22,7 @@ import { isDateLocked, linkTypeOf } from '../domain/artistSettlement.js';
 import { linkTypeLabel } from '../utils/artistShares.js';
 import { PhotoPicker, PhotoBadge, PhotoModal } from './PhotoAttach.jsx';
 import { addPhotos, deleteAllPhotos } from '../utils/photos.js';
-import { topLevelCats, childrenOf, catPath } from '../domain/mgmtCategories.js';
+import { topLevelCats, childrenOf, catPath, chainOf, rowMatchesCategory } from '../domain/mgmtCategories.js';
 
 const inputClass = "w-full p-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-gray-800 outline-none transition text-sm";
 const selectClass = inputClass + " appearance-none";
@@ -40,7 +40,7 @@ const todayStr = () => {
     return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 };
 
-const EMPTY_ROW = { date: '', type: 'income', categoryId: '', subCategoryId: '', amount: '', vatIncluded: false, memo: '', caseId: '' };
+const EMPTY_ROW = { date: '', type: 'income', categoryId: '', subCategoryId: '', subCategoryId2: '', amount: '', vatIncluded: false, memo: '', caseId: '' };
 const EMPTY_CASE = { name: '', date: '', memo: '' };
 
 // 보티즈 탭 '프로젝트 목록' 카드와 같은 계산 — 그 곡의 votiz 내역만 모아 수입·지출을 더한다.
@@ -171,22 +171,26 @@ export function ArtistWorkspace({ user, artist, priv, categories, projects, allT
         return () => { alive = false; };
     }, [user, artistId, periodMode, ym]);
 
-    // 장부에서 고르는 것은 **최상위 항목**이다. 세부항목은 그 아래에서 따로 고른다.
+    // 항목(최상위) → 세부 → 세부2 순으로 고른다. 뒤 단계는 선택 사항이다.
     const catsForType = useMemo(() => topLevelCats(categories, row.type), [categories, row.type]);
     const subCatsForRow = useMemo(
         () => (row.categoryId ? childrenOf(categories, row.categoryId) : []),
         [categories, row.categoryId]
     );
+    const sub2CatsForRow = useMemo(
+        () => (row.subCategoryId ? childrenOf(categories, row.subCategoryId) : []),
+        [categories, row.subCategoryId]
+    );
 
     // 일반 장부(별도정산 건에 안 묶인 것)와 건별 내역을 나눈다.
     const generalRows = useMemo(() => {
         const base = ledger.filter((r) => !r.caseId);
-        // 최상위 항목을 고르면 그 아래 세부항목 줄도 같이 나온다(줄의 categoryId 가 부모다).
+        // 어느 단계를 골라도 그 아래 단계 줄까지 같이 나온다.
         const filtered = catFilter
-            ? base.filter((r) => r.categoryId === catFilter || r.subCategoryId === catFilter)
+            ? base.filter((r) => rowMatchesCategory(categories, r, catFilter))
             : base;
         return filtered.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
-    }, [ledger, catFilter]);
+    }, [ledger, catFilter, categories]);
 
     const sumOfRows = (rows) => {
         const pick = (t, field) => rows.filter((r) => r.type === t).reduce((a, c) => a + Number(c[field] || 0), 0);
@@ -263,7 +267,8 @@ export function ArtistWorkspace({ user, artist, priv, categories, projects, allT
                 ym: ymOf(row.date),          // 달 조회용. date 를 고치면 여기도 같이 바뀐다.
                 type: row.type,
                 categoryId: row.categoryId,
-                subCategoryId: row.subCategoryId || '',   // 안 골라도 된다
+                // 가장 깊이 고른 항목 하나만 담는다(2단계든 3단계든). 중간 단계는 parentId 로 찾는다.
+                subCategoryId: row.subCategoryId2 || row.subCategoryId || '',
                 amount,                       // 공급가
                 vat,
                 totalAmount: amount + vat,    // 합계
@@ -310,7 +315,9 @@ export function ArtistWorkspace({ user, artist, priv, categories, projects, allT
             date: r.date || '',
             type: r.type || 'income',
             categoryId: r.categoryId || '',
-            subCategoryId: r.subCategoryId || '',
+            // 저장은 가장 깊은 것 하나다 → 줄기를 펼쳐 단계별 칸으로 되돌린다.
+            subCategoryId: (chainOf(categories, r.subCategoryId)[1] || {}).id || '',
+            subCategoryId2: (chainOf(categories, r.subCategoryId)[2] || {}).id || '',
             amount: won(r.amount),
             vatIncluded: Number(r.vat || 0) > 0,
             memo: r.memo || '',
@@ -493,34 +500,42 @@ export function ArtistWorkspace({ user, artist, priv, categories, projects, allT
                             <option value="">항목 전체</option>
                             {['income', 'expense'].map((k) => topLevelCats(categories, k).map((c) => [
                                 <option key={c.id} value={c.id}>{k === 'income' ? '수익' : '지출'} · {c.name}</option>,
-                                ...childrenOf(categories, c.id).map((sub) => (
-                                    <option key={sub.id} value={sub.id}>{k === 'income' ? '수익' : '지출'} · {c.name} &gt; {sub.name}</option>
-                                )),
+                                ...childrenOf(categories, c.id).flatMap((sub) => [
+                                    <option key={sub.id} value={sub.id}>{k === 'income' ? '수익' : '지출'} · {c.name} &gt; {sub.name}</option>,
+                                    ...childrenOf(categories, sub.id).map((s2) => (
+                                        <option key={s2.id} value={s2.id}>{k === 'income' ? '수익' : '지출'} · {c.name} &gt; {sub.name} &gt; {s2.name}</option>
+                                    )),
+                                ]),
                             ]))}
                         </select>
                     </div>
                 </div>
 
                 {/* 입력 */}
-                <div className={`grid grid-cols-1 gap-2 rounded-xl bg-gray-50 p-3 ${subCatsForRow.length > 0
-                    ? 'md:grid-cols-[0.9fr_0.6fr_1fr_1fr_0.9fr_1.1fr_1fr_auto]'
-                    : 'md:grid-cols-[0.9fr_0.6fr_1fr_0.9fr_1.1fr_1fr_auto]'}`}>
+                <div className="grid grid-cols-1 md:flex md:flex-wrap md:items-start gap-2 rounded-xl bg-gray-50 p-3 [&>*]:md:min-w-[8rem] [&>*]:md:flex-1">
                     <input type="date" className={inputClass} value={row.date} onChange={(e) => setRow({ ...row, date: e.target.value })} />
                     <select className={selectClass} value={row.type}
-                        onChange={(e) => setRow({ ...row, type: e.target.value, categoryId: '', subCategoryId: '' })}>
+                        onChange={(e) => setRow({ ...row, type: e.target.value, categoryId: '', subCategoryId: '', subCategoryId2: '' })}>
                         <option value="income">수익</option>
                         <option value="expense">지출</option>
                     </select>
                     <select className={selectClass} value={row.categoryId}
-                        onChange={(e) => setRow({ ...row, categoryId: e.target.value, subCategoryId: '' })}>
+                        onChange={(e) => setRow({ ...row, categoryId: e.target.value, subCategoryId: '', subCategoryId2: '' })}>
                         <option value="">항목 선택</option>
                         {catsForType.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                     </select>
                     {subCatsForRow.length > 0 && (
                         <select className={selectClass} value={row.subCategoryId}
-                            onChange={(e) => setRow({ ...row, subCategoryId: e.target.value })}>
+                            onChange={(e) => setRow({ ...row, subCategoryId: e.target.value, subCategoryId2: '' })}>
                             <option value="">세부항목 (선택)</option>
                             {subCatsForRow.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                        </select>
+                    )}
+                    {sub2CatsForRow.length > 0 && (
+                        <select className={selectClass} value={row.subCategoryId2}
+                            onChange={(e) => setRow({ ...row, subCategoryId2: e.target.value })}>
+                            <option value="">세부2 (선택)</option>
+                            {sub2CatsForRow.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                         </select>
                     )}
                     <div className="relative">
