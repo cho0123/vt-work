@@ -30,7 +30,7 @@ import {
 } from '../domain/artistProfile.js';
 import {
     MGMT_SETTINGS_COLLECTION, VOTIZ_MAP_DOC, votizMapKey, normalizeVotizMap,
-    topLevelCats, childrenOf, hasChildren, isCategoryInUse,
+    topLevelCats, childrenOf, hasChildren, isCategoryInUse, catFullPath,
 } from '../domain/mgmtCategories.js';
 
 const inputClass = "w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-gray-800 outline-none transition text-sm";
@@ -93,7 +93,7 @@ const clampPercent = (raw) => {
 };
 
 // projects / allTransactions 는 보티즈 탭이 이미 받아둔 것을 그대로 받는다(추가 조회 0회).
-export function ManagementTab({ user, projects, allTransactions, onArtistsChange, votizCategories }) {
+export function ManagementTab({ user, projects, allTransactions, onArtistsChange, votizCategories, votizSubCats }) {
     const [artists, setArtists] = useState([]);
     const [categories, setCategories] = useState([]);
     const [loaded, setLoaded] = useState(false);
@@ -400,7 +400,7 @@ export function ManagementTab({ user, projects, allTransactions, onArtistsChange
             {showCats && (
                 <CategoryManager
                     user={user} categories={categories} setCategories={setCategories}
-                    artists={artists} votizCategories={votizCategories}
+                    artists={artists} votizCategories={votizCategories} votizSubCats={votizSubCats}
                     votizMap={votizMap} setVotizMap={setVotizMap}
                     onClose={() => setShowCats(false)}
                 />
@@ -877,10 +877,12 @@ function ArtistForm({ isNew, form, priv, setField, setPrivField, showAccount, se
 //
 // 삭제는 '아무 데서도 안 쓰는' 항목만 할 수 있다. 쓰고 있으면 숨기기만 한다 —
 // 비율·장부가 항목 ID 로 저장돼 있어서 지우면 고아가 된다.
-function CategoryManager({ user, categories, setCategories, artists, votizCategories, votizMap, setVotizMap, onClose }) {
+function CategoryManager({ user, categories, setCategories, artists, votizCategories, votizSubCats, votizMap, setVotizMap, onClose }) {
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState('');
     const [showHidden, setShowHidden] = useState(false);
+    // 수입·지출 영역 접기. 기본은 둘 다 펼침.
+    const [open, setOpen] = useState({ income: true, expense: true });
     // 쪽(수입/지출)마다 단계별로 고른 항목(1=항목, 2=세부)과, 휴대폰 폭에서 보고 있는 열 번호.
     const [picked, setPicked] = useState({ income: [null, null], expense: [null, null] });
     const [mobileCol, setMobileCol] = useState({ income: 0, expense: 0 });
@@ -1003,7 +1005,8 @@ function CategoryManager({ user, categories, setCategories, artists, votizCatego
         return (
             <div key={c.id} className={`flex items-center gap-1 flex-wrap rounded-xl px-2 py-1.5 ${c.hidden ? 'bg-gray-100 opacity-60' : active ? 'bg-emerald-50 ring-1 ring-emerald-200' : 'bg-gray-50 hover:bg-gray-100'}`}>
                 <input
-                    className="min-w-0 w-full sm:w-auto sm:flex-1 rounded-lg bg-transparent px-2 py-1 text-sm font-bold text-gray-700 outline-none focus:bg-white focus:ring-1 focus:ring-gray-300"
+                    title={c.name || ''}
+                    className="min-w-0 w-full sm:w-auto sm:flex-1 sm:basis-40 truncate rounded-lg bg-transparent px-2 py-1 text-sm font-bold text-gray-700 outline-none focus:bg-white focus:ring-1 focus:ring-gray-300"
                     value={names[c.id] !== undefined ? names[c.id] : (c.name || '')}
                     onChange={(e) => setNames((prev) => ({ ...prev, [c.id]: e.target.value }))}
                     onBlur={(e) => commitName(c, e.target.value)}
@@ -1059,12 +1062,22 @@ function CategoryManager({ user, categories, setCategories, artists, votizCatego
         const col = mobileCol[kind];                       // 휴대폰 폭에서 보고 있는 열
         const only = (i) => (col === i ? '' : 'hidden md:block');
         const crumbs = [title, lv1 && lv1.name, lv2 && lv2.name].filter(Boolean).join(' > ');
+        const isOpen = !!open[kind];
         return (
             <div key={kind} className={`rounded-2xl border p-4 space-y-3 ${tone}`}>
                 <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-bold text-gray-800">{title}</span>
-                    {(lv1 || lv2) && <span className="text-xs font-bold text-gray-400">{crumbs}</span>}
-                    {col > 0 && (
+                    <button type="button" onClick={() => setOpen((o) => ({ ...o, [kind]: !o[kind] }))}
+                        className="flex items-center gap-1.5 font-bold text-gray-800 hover:text-gray-600">
+                        <span className="text-xs text-gray-400">{isOpen ? '▾' : '▸'}</span>
+                        {title}
+                        {!isOpen && (
+                            <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-gray-500 ring-1 ring-gray-200">
+                                {tops.length}개
+                            </span>
+                        )}
+                    </button>
+                    {isOpen && (lv1 || lv2) && <span className="text-xs font-bold text-gray-400">{crumbs}</span>}
+                    {isOpen && col > 0 && (
                         <button type="button" onClick={() => setMobileCol((m) => ({ ...m, [kind]: col - 1 }))}
                             className="md:hidden ml-auto text-xs font-bold text-gray-500 hover:text-gray-800">
                             ← {COL_TITLES[col - 1]}
@@ -1072,7 +1085,8 @@ function CategoryManager({ user, categories, setCategories, artists, votizCatego
                     )}
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                {/* 고른 단계까지만 열을 그린다 — 열이 적을수록 이름칸이 넓어져 안 잘린다. */}
+                <div className={`grid grid-cols-1 gap-3 ${isOpen ? '' : 'hidden'} ${lv2 ? 'md:grid-cols-3' : lv1 ? 'md:grid-cols-2' : 'md:grid-cols-1'}`}>
                     <div className={only(0)}>
                         {renderColumn({
                             title: COL_TITLES[0], rows: tops, siblings: tops, colKey: kind + '-l0',
@@ -1081,32 +1095,28 @@ function CategoryManager({ user, categories, setCategories, artists, votizCatego
                             onPick: (id) => pickCat(kind, 0, id), pickedId: picked[kind][0], showArrow: true,
                         })}
                     </div>
-                    <div className={only(1)}>
-                        {lv1 ? renderColumn({
-                            title: COL_TITLES[1] + ' — ' + lv1.name, rows: subs, siblings: subs,
-                            colKey: kind + '-l1-' + lv1.id,
-                            placeholder: '새 세부항목',
-                            onAdd: () => addCat(kind, lv1.id, kind + '-l1-' + lv1.id),
-                            onPick: (id) => pickCat(kind, 1, id), pickedId: picked[kind][1], showArrow: true,
-                        }) : (
-                            <div className="rounded-xl border border-dashed border-gray-200 px-3 py-6 text-center text-xs text-gray-400">
-                                항목의 '세부' 를 누르면 여기에 세부항목이 나옵니다.
-                            </div>
-                        )}
-                    </div>
-                    <div className={only(2)}>
-                        {lv2 ? renderColumn({
-                            title: COL_TITLES[2] + ' — ' + lv2.name, rows: subs2, siblings: subs2,
-                            colKey: kind + '-l2-' + lv2.id,
-                            placeholder: '새 세부2',
-                            onAdd: () => addCat(kind, lv2.id, kind + '-l2-' + lv2.id),
-                            onPick: null, pickedId: null, showArrow: false,
-                        }) : (
-                            <div className="rounded-xl border border-dashed border-gray-200 px-3 py-6 text-center text-xs text-gray-400">
-                                세부항목의 '세부' 를 누르면 여기에 세부2 가 나옵니다.
-                            </div>
-                        )}
-                    </div>
+                    {lv1 && (
+                        <div className={only(1)}>
+                            {renderColumn({
+                                title: COL_TITLES[1] + ' — ' + lv1.name, rows: subs, siblings: subs,
+                                colKey: kind + '-l1-' + lv1.id,
+                                placeholder: '새 세부항목',
+                                onAdd: () => addCat(kind, lv1.id, kind + '-l1-' + lv1.id),
+                                onPick: (id) => pickCat(kind, 1, id), pickedId: picked[kind][1], showArrow: true,
+                            })}
+                        </div>
+                    )}
+                    {lv2 && (
+                        <div className={only(2)}>
+                            {renderColumn({
+                                title: COL_TITLES[2] + ' — ' + lv2.name, rows: subs2, siblings: subs2,
+                                colKey: kind + '-l2-' + lv2.id,
+                                placeholder: '새 세부2',
+                                onAdd: () => addCat(kind, lv2.id, kind + '-l2-' + lv2.id),
+                                onPick: null, pickedId: null, showArrow: false,
+                            })}
+                        </div>
+                    )}
                 </div>
             </div>
         );
@@ -1127,7 +1137,8 @@ function CategoryManager({ user, categories, setCategories, artists, votizCatego
 
             {err && <div className="rounded-xl bg-red-50 border border-red-200 p-3 text-sm font-bold text-red-700">{err}</div>}
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* 위 수익 / 아래 지출 — 전체 폭을 써서 이름이 잘리지 않게 한다. */}
+            <div className="space-y-4">
                 {renderPane('income', '수입', 'border-blue-100 bg-blue-50/30')}
                 {renderPane('expense', '지출', 'border-red-100 bg-red-50/30')}
             </div>
@@ -1139,6 +1150,7 @@ function CategoryManager({ user, categories, setCategories, artists, votizCatego
 
             <VotizCategoryMap
                 user={user} categories={categories} votizCategories={votizCategories}
+                votizSubCats={votizSubCats}
                 votizMap={votizMap} setVotizMap={setVotizMap}
             />
         </div>
@@ -1146,23 +1158,61 @@ function CategoryManager({ user, categories, setCategories, artists, votizCatego
 }
 
 // ──[ 보티즈 분류 연결표 ]──
-// 보티즈 고정 분류마다 매니지먼트 최상위 항목을 하나 고른다.
-// 소속(member) 정산에서 곡 내역을 집계할 때 이 표를 먼저 보고, 없으면
-// 곡-아티스트 연결에서 고른 '수익항목/지출항목' 으로 들어간다(기존 동작).
-function VotizCategoryMap({ user, categories, votizCategories, votizMap, setVotizMap }) {
+// 보티즈 분류를 **트리**로 펼쳐(최상위 → 그룹 → 항목) 줄마다 매니지먼트 항목을 고른다.
+// 매니지먼트 쪽은 항목·세부·세부2 **아무 단계나** 고를 수 있다(비율은 집계할 때 최상위 것을 쓴다).
+//
+// 보티즈 하위 구조: 지출 '제작비'(production) 만 `subDetail` 에 '그룹-항목' 으로 들어간다
+// (예 '곡비-작사'). 수입과 마케팅비는 하위가 없다. — src/domain/mgmtCategories.js 주석 참고
+//
+// 저장 키: 'expense:production'(최상위, 예전 그대로) / '…|곡비'(그룹) / '…|곡비-작사'(가장 깊은 것).
+// 집계는 깊은 것부터 찾아 쓴다(mappedCategoryId).
+function VotizCategoryMap({ user, categories, votizCategories, votizSubCats, votizMap, setVotizMap }) {
     const [busy, setBusy] = useState(false);
     const [msg, setMsg] = useState('');
     const [open, setOpen] = useState(false);
+    const [openNode, setOpenNode] = useState({});     // 트리에서 펼친 최상위 분류
 
     const vc = votizCategories || { income: {}, expense: {} };
-    const incomeTops = useMemo(() => topLevelCats(categories, 'income'), [categories]);
-    const expenseTops = useMemo(() => topLevelCats(categories, 'expense'), [categories]);
 
-    const setOne = (type, category, value) =>
+    // 매니지먼트 항목을 단계별로 펼친 선택지(항목 / 세부 / 세부2 전부 고를 수 있다).
+    const opts = useMemo(() => {
+        const build = (kind) => {
+            const out = [];
+            topLevelCats(categories, kind).forEach((top) => {
+                out.push({ id: top.id, label: top.name });
+                childrenOf(categories, top.id).forEach((mid) => {
+                    out.push({ id: mid.id, label: '— ' + mid.name });
+                    childrenOf(categories, mid.id).forEach((leaf) => {
+                        out.push({ id: leaf.id, label: '—— ' + leaf.name });
+                    });
+                });
+            });
+            return out;
+        };
+        return { income: build('income'), expense: build('expense') };
+    }, [categories]);
+
+    // 보티즈 제작비의 하위 목록 → [{ group, items: [{ key:'곡비-작사', name:'작사' }] }]
+    const productionTree = useMemo(() => {
+        const sub = votizSubCats || {};
+        const label = { songFee: '곡비', recording: '녹음비', post: '후반', video: '영상' };
+        const groups = [];
+        Object.keys(label).forEach((k) => {
+            if (!Array.isArray(sub[k])) return;
+            groups.push({
+                group: label[k],
+                items: sub[k].map((x) => ({ key: label[k] + '-' + x, name: x })),
+            });
+        });
+        // '기타 진행비' 는 그룹 없이 subDetail 이 '기타진행비' 하나로 들어간다(실측).
+        groups.push({ group: '', items: [{ key: '기타진행비', name: '기타 진행비' }] });
+        return groups;
+    }, [votizSubCats]);
+
+    const setOne = (key, value) =>
         setVotizMap((prev) => {
             const next = { ...(prev || {}) };
-            const k = votizMapKey(type, category);
-            if (value) next[k] = value; else delete next[k];
+            if (value) next[key] = value; else delete next[key];
             return next;
         });
 
@@ -1178,21 +1228,67 @@ function VotizCategoryMap({ user, categories, votizCategories, votizMap, setVoti
         } finally { setBusy(false); }
     };
 
-    const rows = (type, tops) => Object.keys(vc[type] || {}).map((key) => (
-        <div key={type + ':' + key} className="flex items-center gap-2 rounded-xl bg-gray-50 px-3 py-2">
-            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ring-1 ${type === 'income' ? 'bg-blue-50 text-blue-600 ring-blue-200' : 'bg-red-50 text-red-500 ring-red-200'}`}>
-                {type === 'income' ? '수입' : '지출'}
-            </span>
-            <span className="w-24 shrink-0 truncate text-sm font-bold text-gray-700">{vc[type][key]}</span>
-            <span className="shrink-0 text-xs text-gray-300">→</span>
-            <select className={selectClass + ' flex-1 py-2 text-sm'}
-                value={(votizMap || {})[votizMapKey(type, key)] || ''}
-                onChange={(e) => setOne(type, key, e.target.value)}>
-                <option value="">연결 안 함 (곡 연결에서 고른 항목으로)</option>
-                {tops.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-        </div>
-    ));
+    // 한 줄 = 보티즈 분류 하나 + 매니지먼트 항목 고르기
+    const renderPick = (mapKey, name, choices, indent, tone) => {
+        const picked = (votizMap || {})[mapKey] || '';
+        return (
+            <div key={mapKey} className="flex items-center gap-2 rounded-xl bg-gray-50 px-3 py-1.5" style={{ marginLeft: indent * 16 }}>
+                {indent > 0 && <span className="shrink-0 text-xs text-gray-300">└</span>}
+                <span className={`min-w-0 flex-1 truncate text-sm ${indent === 0 ? 'font-bold text-gray-700' : 'text-gray-600'}`} title={name}>{name}</span>
+                <span className="shrink-0 text-xs text-gray-300">→</span>
+                <select className={selectClass + ' w-[55%] max-w-[18rem] py-1.5 text-sm'}
+                    value={picked} onChange={(e) => setOne(mapKey, e.target.value)}>
+                    <option value="">연결 안 함</option>
+                    {choices.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+                </select>
+                {picked && (
+                    <span className="hidden md:inline shrink-0 text-[10px] font-bold text-emerald-600" title="집계되는 매니지먼트 항목">
+                        {catFullPath(categories, picked)}
+                    </span>
+                )}
+                <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ring-1 ${tone}`}>
+                    {indent === 0 ? '분류' : indent === 1 ? '그룹' : '세부'}
+                </span>
+            </div>
+        );
+    };
+
+    const renderType = (type) => {
+        const choices = opts[type] || [];
+        const tone = type === 'income' ? 'bg-blue-50 text-blue-600 ring-blue-200' : 'bg-red-50 text-red-500 ring-red-200';
+        return (
+            <div className="space-y-1.5">
+                <div className={`text-[10px] font-bold ${type === 'income' ? 'text-blue-400' : 'text-red-400'}`}>
+                    {type === 'income' ? '수입' : '지출'}
+                </div>
+                {Object.keys(vc[type] || {}).map((key) => {
+                    const hasTree = type === 'expense' && key === 'production';
+                    const nodeOpen = !!openNode[type + ':' + key];
+                    return (
+                        <div key={type + ':' + key} className="space-y-1.5">
+                            <div className="flex items-center gap-1">
+                                {hasTree ? (
+                                    <button type="button" onClick={() => setOpenNode((o) => ({ ...o, [type + ':' + key]: !nodeOpen }))}
+                                        className="shrink-0 w-5 h-5 rounded text-xs font-bold text-gray-400 hover:bg-gray-100" title="하위 단계">
+                                        {nodeOpen ? '▾' : '▸'}
+                                    </button>
+                                ) : <span className="shrink-0 w-5" />}
+                                <div className="min-w-0 flex-1">
+                                    {renderPick(votizMapKey(type, key), vc[type][key], choices, 0, tone)}
+                                </div>
+                            </div>
+                            {hasTree && nodeOpen && productionTree.map((g) => (
+                                <div key={g.group || '(기타)'} className="space-y-1.5 pl-6">
+                                    {g.group && renderPick(votizMapKey(type, key, g.group), g.group, choices, 1, tone)}
+                                    {g.items.map((it) => renderPick(votizMapKey(type, key, it.key), it.name, choices, g.group ? 2 : 1, tone))}
+                                </div>
+                            ))}
+                        </div>
+                    );
+                })}
+            </div>
+        );
+    };
 
     return (
         <div className="rounded-2xl border border-gray-200 bg-white p-4 space-y-3">
@@ -1209,9 +1305,9 @@ function VotizCategoryMap({ user, categories, votizCategories, votizMap, setVoti
 
             {open && (
                 <>
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
-                        <div className="space-y-2">{rows('income', incomeTops)}</div>
-                        <div className="space-y-2">{rows('expense', expenseTops)}</div>
+                    <div className="space-y-4">
+                        {renderType('income')}
+                        {renderType('expense')}
                     </div>
                     <div className="flex items-center gap-2 flex-wrap">
                         <button type="button" disabled={busy} onClick={save}
@@ -1219,8 +1315,9 @@ function VotizCategoryMap({ user, categories, votizCategories, votizMap, setVoti
                         {msg && <span className="text-xs font-bold text-gray-500">{msg}</span>}
                     </div>
                     <p className="text-xs text-gray-400">
-                        연결하지 않은 분류는 예전처럼 곡-아티스트 연결에서 고른 '수익항목/지출항목' 으로 들어갑니다.
-                        수익배분(마이너스 수익)도 같은 규칙입니다.
+                        깊은 단계 연결이 먼저입니다 — 세부 연결이 없으면 그룹, 그것도 없으면 분류 연결을 씁니다.
+                        끝까지 없으면 예전처럼 곡-아티스트 연결에서 고른 '수익항목/지출항목' 으로 들어갑니다.
+                        매니지먼트 쪽은 항목·세부·세부2 아무 단계나 고를 수 있고, 정산비율은 그 항목의 최상위 비율을 씁니다.
                     </p>
                 </>
             )}
