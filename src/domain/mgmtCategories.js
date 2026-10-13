@@ -107,6 +107,12 @@ export const catPath = (cats, categoryId, subCategoryId) => {
     return ch.map((c) => c.name).join(' > ');
 };
 
+/** 그 항목 하나의 전체 경로. '제작비 > 곡비 > 작사비'. 어느 단계 id 를 줘도 된다. */
+export const catFullPath = (cats, categoryId) => {
+    const ch = chainOf(cats, categoryId);
+    return ch.length ? ch.map((c) => c.name).join(' > ') : '(삭제된 항목)';
+};
+
 /**
  * 장부 한 줄이 그 항목(어느 단계든)에 걸리는지 — 목록 필터용.
  * 최상위를 고르면 그 아래 세부·세부2 줄도 같이 걸린다.
@@ -138,27 +144,76 @@ export const isCategoryInUse = (categoryId, { ledgerRows = [], artists = [] } = 
 // 매니지먼트 최상위 항목을 하나 고른다. 소속(member) 정산에서 곡 내역을 집계할 때,
 // 곡-아티스트 연결에서 고른 '수익항목/지출항목' 대신 이 표를 먼저 본다.
 //
-// 저장: mgmtSettings/{VOTIZ_MAP_DOC} = { uid, map: { 'income:source': '<항목id>', ... } }
+// 저장: mgmtSettings/{VOTIZ_MAP_DOC} = { uid, map: { '<보티즈 분류 키>': '<매니지먼트 항목 id>' } }
+//
+// ── 보티즈 분류의 하위 구조 (실측) ─────────────────────────────────
+//   category  = 최상위 (수입 source/performance/sale/payout/other,
+//                       지출 production/marketing)
+//   subDetail = **지출 '제작비'(production) 에서만** 쓰는 하위 단계. 한 필드에
+//               `'그룹-항목'` 으로 들어간다 — 예: `'곡비-작사'`, `'녹음비-세션비'`,
+//               `'후반-믹싱'`, `'영상-뮤직비디오'`. 하이픈 없이 `'기타진행비'` 하나만 있는 것도 있다.
+//   → 보티즈 분류는 최대 3단계(제작비 > 곡비 > 작사). 수입과 마케팅비는 하위가 없다.
+//
+// 연결표 키
+//   최상위      'expense:production'            ← 예전부터 쓰던 모양(그대로 동작한다)
+//   그룹        'expense:production|곡비'
+//   가장 깊은 것 'expense:production|곡비-작사'
 export const MGMT_SETTINGS_COLLECTION = 'mgmtSettings';
 export const VOTIZ_MAP_DOC = 'votiz_category_map';
 
-export const votizMapKey = (type, category) => String(type || '') + ':' + String(category || '');
+export const votizMapKey = (type, category, sub) =>
+    String(type || '') + ':' + String(category || '') + (sub ? '|' + sub : '');
 
-/** 그 내역에 연결된 매니지먼트 항목 id. 없으면 null. */
-export const mappedCategoryId = (votizMap, t) => {
-    if (!votizMap || !t) return null;
-    const v = votizMap[votizMapKey(t.type, t.category)];
-    return v || null;
+/** '곡비-작사' → '곡비'. 하이픈이 없으면 그룹이 없다. */
+export const votizSubGroup = (sub) => {
+    const v = String(sub || '');
+    const i = v.indexOf('-');
+    return i > 0 ? v.slice(0, i) : '';
 };
 
-/** 연결표에서 실제로 쓸 수 있는 항목만 남긴다(지워졌거나 세부항목이면 최상위로 올린다). */
+/** 그 내역에서 연결표를 찾아볼 키들 — 깊은 것부터. */
+export const votizMapKeysFor = (t) => {
+    if (!t) return [];
+    const type = t.type;
+    const cat = t.category || '';
+    const sub = t.subDetail || '';
+    const keys = [];
+    if (sub) {
+        keys.push(votizMapKey(type, cat, sub));
+        const g = votizSubGroup(sub);
+        if (g) keys.push(votizMapKey(type, cat, g));
+    }
+    keys.push(votizMapKey(type, cat));
+    return keys;
+};
+
+/**
+ * 그 내역에 연결된 매니지먼트 항목 id. 없으면 null.
+ * 가장 깊은 보티즈 분류 연결 → 한 단계 위 → 최상위 순으로 찾는다.
+ */
+export const mappedCategoryId = (votizMap, t) => {
+    if (!votizMap || !t) return null;
+    const keys = votizMapKeysFor(t);
+    for (let i = 0; i < keys.length; i++) {
+        const v = votizMap[keys[i]];
+        if (v) return v;
+    }
+    return null;
+};
+
+/**
+ * 연결표에서 실제로 쓸 수 있는 것만 남긴다 — 지워진 항목을 가리키는 연결만 버린다.
+ * ⚠️ 매니지먼트 쪽은 **항목·세부·세부2 아무 단계나** 고를 수 있다(최상위로 올리지 않는다).
+ *    정산비율은 어차피 집계할 때 최상위로 올려 쓰므로(computeGeneralSettlement 의 rootIdOf)
+ *    어느 단계에 걸어도 비율은 최상위 것이 적용된다.
+ */
 export const normalizeVotizMap = (votizMap, cats) => {
     const m = byId(cats);
     const out = {};
     Object.keys(votizMap || {}).forEach((k) => {
         const id = votizMap[k];
         if (!id || !m[id]) return;
-        out[k] = rootIdOf(cats, id);
+        out[k] = id;
     });
     return out;
 };

@@ -15,6 +15,7 @@ import {
 } from '../domain/artistSettlement.js';
 import { printArtistSettlement } from '../utils/artistSettlementDoc.js';
 import { sourceIncomeOnly } from '../domain/collabPayout.js';
+import { catFullPath } from '../domain/mgmtCategories.js';
 import { computePayout, payoutSnapshot, payoutOfSettlement, TAX_TYPE_LABEL } from '../domain/artistPayout.js';
 import { effectiveTaxType, payeeInfo, payeeSnapshot, payeeOfSettlement } from '../domain/artistProfile.js';
 
@@ -117,9 +118,22 @@ export function ArtistSettlementPanel({
         const vc = votizCategories || {};
         return unmappedVotizCategories(songRows).map((u) => {
             const label = ((vc[u.type] || {})[u.category]) || u.category || '(분류 없음)';
-            return (u.type === 'income' ? '수입' : '지출') + ' · ' + label;
+            // 보티즈 하위 단계는 subDetail 에 '그룹-항목' 으로 들어간다 → '제작비 > 곡비 > 작사' 로 편다.
+            const deep = u.subDetail ? ' > ' + String(u.subDetail).split('-').join(' > ') : '';
+            return (u.type === 'income' ? '수입' : '지출') + ' · ' + label + deep;
         });
     }, [songRows, votizCategories]);
+
+    // 곡 내역이 어느 매니지먼트 항목으로 들어갔는지 — 전체 경로로 보여준다.
+    const songPaths = useMemo(() => {
+        const by = {};
+        songRows.forEach((r) => {
+            if (!by[r.projectId]) by[r.projectId] = [];
+            const label = catFullPath(categories, r.categoryId);
+            if (!by[r.projectId].includes(label)) by[r.projectId].push(label);
+        });
+        return by;
+    }, [songRows, categories]);
 
     // 아티스트 몫 이후 단계(세금). 몫 계산은 3단계 그대로 두고 여기서 받아서만 쓴다.
     // 지급처가 소속사면 세금계산서로 고정된다(domain/artistProfile.js).
@@ -176,7 +190,8 @@ export function ArtistSettlementPanel({
                 periodStart: months[0], periodEnd: months[months.length - 1], months,
                 basis: AMOUNT_BASIS,
                 rows: result.rows,
-                songs: songSummaryOf(songRows),
+                // 곡이 어느 매니지먼트 항목으로 들어갔는지도 함께 굳힌다(정산서 표시용).
+                songs: songSummaryOf(songRows, categories),
                 ratioSnapshot: {
                     ratioUniform: !!artist.ratioUniform,
                     uniformRatio: artist.uniformRatio || {},
@@ -301,7 +316,11 @@ export function ArtistSettlementPanel({
             issueDate: todayStr(),
             // 지급처는 확정 당시 스냅샷을 쓴다. 그 전에 확정한 건은 지금 정보로 적는다.
             payee: payeeOfSettlement(s) || payeeNow,
-            rows: s.rows || [],
+            // 항목 전체 경로를 붙여 넘긴다. 지워진 항목이면 스냅샷의 이름을 그대로 쓴다.
+            rows: (s.rows || []).map((r) => ({
+                ...r,
+                path: r.categoryId ? catFullPath(categories, r.categoryId) : '',
+            })).map((r) => (r.path === '(삭제된 항목)' ? { ...r, path: '' } : r)),
             songs: s.songs || [],
             collabs: s.collabs || [],
             totalIncome: s.totalIncome || 0,
@@ -436,6 +455,11 @@ export function ArtistSettlementPanel({
                                         <span className="text-gray-500">
                                             곡 전체 +{won(s.rawIncome)} / 지분 <b className="text-blue-600">+{won(s.income)}</b>
                                             {s.expense ? <> · 지분지출 <b className="text-red-500">-{won(s.expense)}</b></> : null}
+                                            {(songPaths[s.projectId] || []).length > 0 && (
+                                                <span className="ml-1 text-[10px] text-gray-400">
+                                                    → {(songPaths[s.projectId] || []).join(', ')}
+                                                </span>
+                                            )}
                                         </span>
                                     </div>
                                 ))}

@@ -13,6 +13,8 @@ import {
     unmappedVotizCategories,
     computeCollab,
     buildSongRows,
+    songSummaryOf,
+    diffSongSummary,
     memberSharePercent,
     monthRange,
 } from '../src/domain/artistSettlement.js';
@@ -32,8 +34,9 @@ import {
 } from '../src/domain/artistProfile.js';
 import {
     rootIdOf, kindOf, isHidden, topLevelCats, childrenOf, hasChildren,
-    catPath, isCategoryInUse, votizMapKey, mappedCategoryId, normalizeVotizMap,
+    catPath, catFullPath, isCategoryInUse, votizMapKey, mappedCategoryId, normalizeVotizMap,
     chainOf, depthOf, rowMatchesCategory, MAX_DEPTH,
+    votizSubGroup, votizMapKeysFor,
 } from '../src/domain/mgmtCategories.js';
 
 let pass = 0;
@@ -634,8 +637,10 @@ const vMap = { [votizMapKey('income', 'source')]: 'A', [votizMapKey('income', 'p
 eq('연결표 키 모양', votizMapKey('income', 'source'), 'income:source');
 eq('연결된 분류는 그 항목', mappedCategoryId(vMap, { type: 'income', category: 'source' }), 'A');
 eq('연결 안 된 분류는 null', mappedCategoryId(vMap, { type: 'income', category: 'sale' }), null);
-eq('연결표 정리 - 없는 항목은 버리고 세부항목은 최상위로',
-    normalizeVotizMap({ 'income:source': 'A1', 'income:sale': 'ZZZ' }, CATS2), { 'income:source': 'A' });
+// ⚠️ 규칙이 바뀐 사례: 매니지먼트 쪽은 이제 **아무 단계나** 고를 수 있어 최상위로 올리지 않는다.
+//    (예전에는 세부항목 A1 을 최상위 A 로 올렸다. 비율은 집계할 때 최상위로 올려 쓰므로 결과는 같다.)
+eq('연결표 정리 - 없는 항목만 버리고 세부 단계는 그대로',
+    normalizeVotizMap({ 'income:source': 'A1', 'income:sale': 'ZZZ' }, CATS2), { 'income:source': 'A1' });
 
 // 음원수익 1,000(A 40%) + 공연수익 500(B 60%), 지분 100%
 const mapProject = {
@@ -878,6 +883,108 @@ eq('kinds 없으면 25건씩', plain25.map((p) => p.length), [25, 2]);
 eq('빈 목록', paginateGrouped([], {}, 25), []);
 eq('목록이 없어도 터지지 않는다', paginateGrouped(null, null, 25), []);
 eq('perPage 를 안 주거나 0 이면 기본 25', paginateGrouped([{ id: 'A' }, { id: 'B' }], {}, 0).length, 1);
+
+// -- [ 15. 보티즈 분류 하위 단계 연결 ] --
+console.log('');
+console.log('-- 15. 보티즈 분류 하위 단계 연결');
+
+// 보티즈 분류는 subDetail 한 필드에 '그룹-항목' 으로 들어간다(실측).
+eq('그룹 떼어내기', [votizSubGroup('곡비-작사'), votizSubGroup('기타진행비'), votizSubGroup('')], ['곡비', '', '']);
+eq('키 모양', [votizMapKey('expense', 'production'), votizMapKey('expense', 'production', '곡비-작사')],
+    ['expense:production', 'expense:production|곡비-작사']);
+eq('찾아볼 키는 깊은 것부터',
+    votizMapKeysFor({ type: 'expense', category: 'production', subDetail: '곡비-작사' }),
+    ['expense:production|곡비-작사', 'expense:production|곡비', 'expense:production']);
+eq('그룹이 없으면 두 개만',
+    votizMapKeysFor({ type: 'expense', category: 'production', subDetail: '기타진행비' }),
+    ['expense:production|기타진행비', 'expense:production']);
+eq('하위가 없으면 최상위 하나', votizMapKeysFor({ type: 'income', category: 'source' }), ['income:source']);
+
+// 매니지먼트 항목: 제작비(T) > 곡비(T1) > 작사비(T1a) + 믹스(T2)
+const MC = [
+    { id: 'T', name: '제작비', kind: 'expense', order: 1 },
+    { id: 'T1', name: '곡비', parentId: 'T', order: 1 },
+    { id: 'T1a', name: '작사비', parentId: 'T1', order: 1 },
+    { id: 'T2', name: '믹스', parentId: 'T', order: 2 },
+    { id: 'I', name: '음원', kind: 'income', order: 1 },
+];
+const txSub = { type: 'expense', category: 'production', subDetail: '곡비-작사' };
+
+eq('최상위 연결만 있으면 그걸 쓴다 (기존 데이터 그대로)',
+    mappedCategoryId({ 'expense:production': 'T' }, txSub), 'T');
+eq('그룹 연결이 최상위보다 우선',
+    mappedCategoryId({ 'expense:production': 'T', 'expense:production|곡비': 'T1' }, txSub), 'T1');
+eq('가장 깊은 연결이 제일 우선',
+    mappedCategoryId({ 'expense:production': 'T', 'expense:production|곡비': 'T1', 'expense:production|곡비-작사': 'T1a' }, txSub), 'T1a');
+eq('하위 연결이 없으면 한 단계 위로',
+    mappedCategoryId({ 'expense:production': 'T', 'expense:production|곡비': 'T1' },
+        { type: 'expense', category: 'production', subDetail: '후반-믹싱' }), 'T');
+eq('아무 연결도 없으면 null',
+    mappedCategoryId({ 'expense:marketing': 'T' }, txSub), null);
+
+// 매니지먼트 세부2 에 걸어도 비율은 최상위(T) 것을 쓴다
+const subProject = {
+    id: 'SP', name: '하위연결곡',
+    artists: [{ artistId: 'M9', type: 'member', share: 100, incomeCategoryId: 'I', expenseCategoryId: 'T2' }],
+};
+const subTx = [
+    { id: 'e1', projectId: 'SP', division: 'votiz', type: 'expense', category: 'production', subDetail: '곡비-작사', date: '2026-04-10', amount: 1000, totalAmount: 1000 },
+    { id: 'e2', projectId: 'SP', division: 'votiz', type: 'expense', category: 'production', subDetail: '후반-믹싱', date: '2026-04-11', amount: 500, totalAmount: 500 },
+    { id: 'i1', projectId: 'SP', division: 'votiz', type: 'income', category: 'source', date: '2026-04-12', amount: 3000, totalAmount: 3000 },
+];
+const deepMap = { 'expense:production|곡비-작사': 'T1a', 'expense:production': 'T', 'income:source': 'I' };
+const deepRows = buildSongRows({ projects: [subProject], transactions: subTx, artistId: 'M9', months: ['2026-04'], votizMap: deepMap });
+eq('작사비는 세부2(T1a), 믹싱은 최상위 연결(T)',
+    deepRows.filter((r) => r.type === 'expense').map((r) => [r.votizSubDetail, r.categoryId]),
+    [['곡비-작사', 'T1a'], ['후반-믹싱', 'T']]);
+
+const deepCalc = computeGeneralSettlement({
+    artist: { ratioUniform: false, ratios: { T: { company: 50, artist: 50 }, I: { company: 70, artist: 30 } } },
+    categories: MC, ledgerRows: [], songRows: deepRows, carryIn: 0,
+});
+eq('세부2 에 걸어도 최상위 T 한 줄로 합쳐진다(1,500)',
+    deepCalc.rows.filter((r) => r.categoryId === 'T').map((r) => r.expense), [1500]);
+eq('비율은 최상위 항목 비율(음원 30%)', deepCalc.artistRatePercent, 30);
+eq('몫 = (3,000 - 1,500) x 30% = 450', deepCalc.artistShare, 450);
+
+// 연결 안 된 분류 안내 — 하위 단계까지 보여준다
+const noDeep = buildSongRows({
+    projects: [subProject], transactions: subTx, artistId: 'M9', months: ['2026-04'],
+    votizMap: { 'income:source': 'I' },
+});
+eq('연결 안 된 분류는 하위 단계까지 알려준다',
+    unmappedVotizCategories(noDeep).map((u) => u.category + '|' + u.subDetail),
+    ['production|곡비-작사', 'production|후반-믹싱']);
+eq('연결 안 되면 곡 연결의 기본 지출항목(T2)으로',
+    noDeep.filter((r) => r.type === 'expense').map((r) => r.categoryId), ['T2', 'T2']);
+
+// -- [ 16. 정산서 항목 전체 경로 ] --
+console.log('');
+console.log('-- 16. 정산서 전체 경로 (표시 전용)');
+
+eq('어느 단계 id 를 줘도 전체 경로', catFullPath(CATS3, 'T1a'), '제작비 > 곡비 > 작사비');
+eq('최상위는 이름 그대로', catFullPath(CATS3, 'T'), '제작비');
+eq('지워진 항목', catFullPath(CATS3, 'GONE'), '(삭제된 항목)');
+
+// songSummaryOf — categories 를 주면 paths 가 붙고, 안 주면 예전 그대로(옛 스냅샷 호환)
+const sumRows = [
+    { projectId: 'P1', projectName: '곡1', sharePercent: 100, type: 'income', categoryId: 'I', rawAmount: 1000, amount: 1000 },
+    { projectId: 'P1', projectName: '곡1', sharePercent: 100, type: 'expense', categoryId: 'T1a', rawAmount: 300, amount: 300 },
+    { projectId: 'P1', projectName: '곡1', sharePercent: 100, type: 'expense', categoryId: 'T2', rawAmount: 200, amount: 200 },
+];
+const plainSum = songSummaryOf(sumRows);
+eq('categories 를 안 주면 paths 가 없다(옛 호출 그대로)', plainSum[0].paths, undefined);
+eq('금액은 그대로', [plainSum[0].income, plainSum[0].expense], [1000, 500]);
+
+const pathSum = songSummaryOf(sumRows, CATS3);
+eq('categories 를 주면 전체 경로가 붙는다',
+    pathSum[0].paths, ['음원', '제작비 > 곡비 > 작사비', '제작비 > 믹스']);
+eq('같은 경로는 한 번만', songSummaryOf(sumRows.concat([sumRows[1]]), CATS3)[0].paths.length, 3);
+eq('경로를 붙여도 금액은 안 바뀐다',
+    [pathSum[0].income, pathSum[0].expense], [plainSum[0].income, plainSum[0].expense]);
+
+// 확정 뒤 비교(diffSongSummary)는 금액만 보므로 paths 가 있든 없든 같다
+eq('paths 가 있어도 확정분 비교 결과는 같다', diffSongSummary(plainSum, pathSum), []);
 
 // -- [ 결과 ] --
 console.log(`\n${pass}/${pass + fail} 통과` + (fail ? ` — 실패 ${fail}건` : ''));

@@ -18,21 +18,24 @@ const esc = (s) =>
 const pct = (n) => (Math.round(Number(n || 0) * 100) / 100) + '%';
 
 function buildHtml(p) {
+    // 항목 이름은 전체 경로(path)가 있으면 그걸 쓴다. 옛 스냅샷에는 없으니 그때는 이름 그대로.
     const catRows = (p.rows || [])
         .map((r) => `
       <tr>
-        <td>${esc(r.name)}</td>
+        <td>${esc(r.path || r.name)}</td>
         <td class="r">${r.income ? won(Math.round(r.income)) : '-'}</td>
         <td class="r">${r.expense ? won(Math.round(r.expense)) : '-'}</td>
         <td class="r">${r.income > 0 ? pct(r.artistPercent) : '-'}</td>
       </tr>`)
         .join('');
 
+    // 곡이 어느 매니지먼트 항목으로 들어갔는지 — 확정할 때 담아둔 paths 가 있을 때만 찍는다.
     const songRows = (p.songs || []).length
         ? (p.songs || [])
             .map((s) => `
       <tr>
-        <td>${esc(s.projectName)}</td>
+        <td>${esc(s.projectName)}${(s.paths || []).length
+            ? `<div class="muted small">→ ${esc((s.paths || []).join(', '))}</div>` : ''}</td>
         <td class="r">${pct(s.sharePercent)}</td>
         <td class="r">${won(Math.round(s.rawIncome))}</td>
         <td class="r">${won(Math.round(s.income))}</td>

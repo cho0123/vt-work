@@ -8,7 +8,7 @@
 //   5) 별도정산 건                       → computeCaseSettlement
 //
 // 쓰지 않는 것: 저작권(division 'copyright')은 어떤 계산에도 넣지 않는다.
-import { mappedCategoryId, rootIdOf } from './mgmtCategories.js';
+import { mappedCategoryId, rootIdOf, catFullPath } from './mgmtCategories.js';
 
 // ──[ 설정 ]──────────────────────────────────────────────────────────────
 // 금액 기준. 'totalAmount' = 부가세 포함 합계, 'amount' = 공급가.
@@ -160,6 +160,7 @@ export const buildSongRows = ({ projects, transactions, artistId, months, basis 
                 rawAmount: raw,
                 amount: raw * (pct / 100),
                 votizCategory: t.category || '',
+                votizSubDetail: t.subDetail || '',
                 mapped: !!mappedId,
             });
         });
@@ -177,10 +178,11 @@ export const unmappedVotizCategories = (songRows = []) => {
     const out = [];
     songRows.forEach((r) => {
         if (r.mapped) return;
-        const k = r.type + ':' + (r.votizCategory || '');
+        // 하위 단계까지 알려준다 — '제작비 > 곡비-작사' 가 연결 안 됐는지 보이게.
+        const k = r.type + ':' + (r.votizCategory || '') + '|' + (r.votizSubDetail || '');
         if (seen.has(k)) return;
         seen.add(k);
-        out.push({ type: r.type, category: r.votizCategory || '' });
+        out.push({ type: r.type, category: r.votizCategory || '', subDetail: r.votizSubDetail || '' });
     });
     return out;
 };
@@ -357,7 +359,11 @@ export const computeCollab = ({ transactions = [], projectId, link = {}, basis =
 
 // ──[ 확정 스냅샷 ]────────────────────────────────────────────────────────
 // 확정 뒤 곡 금액이 바뀌었는지 비교할 때 쓴다(곡 내역은 잠글 수 없다).
-export const songSummaryOf = (songRows = []) => {
+//
+// categories 를 주면 그 곡이 어느 매니지먼트 항목으로 들어갔는지 **전체 경로**를
+// `paths` 에 함께 담는다(정산서 표시용). 안 주면 예전과 똑같이 동작한다 —
+// **이미 확정된 스냅샷에는 paths 가 없으므로 그때는 지금처럼 곡 이름만 나온다.**
+export const songSummaryOf = (songRows = [], categories = null) => {
     const by = {};
     songRows.forEach((r) => {
         if (!by[r.projectId]) {
@@ -365,10 +371,15 @@ export const songSummaryOf = (songRows = []) => {
                 projectId: r.projectId, projectName: r.projectName,
                 sharePercent: r.sharePercent, rawIncome: 0, rawExpense: 0, income: 0, expense: 0,
             };
+            if (categories) by[r.projectId].paths = [];
         }
         const b = by[r.projectId];
         if (r.type === 'income') { b.rawIncome += r.rawAmount; b.income += r.amount; }
         else { b.rawExpense += r.rawAmount; b.expense += r.amount; }
+        if (categories) {
+            const label = catFullPath(categories, r.categoryId);
+            if (!b.paths.includes(label)) b.paths.push(label);
+        }
     });
     return Object.values(by);
 };
