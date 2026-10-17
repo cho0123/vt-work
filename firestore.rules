@@ -71,6 +71,20 @@ service cloud.firestore {
       allow read, write: if isAllowedUser();
     }
 
+    // ── 상담일지 — 2026-10-18 추가
+    //
+    //   consultations/{id}              짱구 개인일정 '상담' 에 1:1 로 붙는 기록
+    //   consultations/{id}/photos/{pid} 상담지 사진(한 장씩)
+    //
+    // 상담자 실명과 상담 내용이 들어가므로 원장(허용 UID) 전용이다.
+    // (아래 /{document=**} 가 이미 같은 제한을 걸지만, 다른 블록처럼 의도를 적어 둔다)
+    match /consultations/{docId} {
+      allow read, write: if isAllowedUser();
+      match /photos/{photoId} {
+        allow read, write: if isAllowedUser();
+      }
+    }
+
     // 이 앱의 모든 데이터(students, schedules, attendance, expenses,
     // weekly_memos/locks, settlement_memos, site_settings,
     // schedule_cancellations, students/*/payments)는 운영자 전용이다.

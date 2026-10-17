@@ -102,6 +102,8 @@ import { printStudentRecordPdf } from './utils/studentRecordDoc.js';
 import { fixedScheduleOccursOn } from './domain/fixedRecurrence.js';
 // 날짜 표시·24시간 판정은 보티즈 탭도 같이 쓴다(utils/datetime.js 한 벌).
 import { formatWhen, isWithin24h } from './utils/datetime.js';
+import { ConsultationModal } from './components/ConsultationModal.jsx';
+import { ConsultationsPage } from './components/ConsultationsPage.jsx';
 
 const WEEKDAY_LABELS = ['일', '월', '화', '수', '목', '금', '토'];
 
@@ -677,6 +679,11 @@ function App() {
     const [selectedMakeupId, setSelectedMakeupId] = useState(null);
 
     const [weeklyMemo, setWeeklyMemo] = useState('');
+    // 상담일지(짱구 개인일정 '상담' 에 붙는 기록). 보고 있는 주의 것만 날짜 범위로 읽는다
+    // (한 필드 범위 조건이라 복합 색인이 필요 없다). { scheduleId: 상담일지 }
+    const [weekConsults, setWeekConsults] = useState({});
+    const [consultTarget, setConsultTarget] = useState(null);   // 상담일지 창을 연 일정
+    const [showConsultPage, setShowConsultPage] = useState(false);
     const [availableStudents, setAvailableStudents] = useState([]);
 
     // --- [출석 관리 상태] ---
@@ -1304,6 +1311,25 @@ function App() {
             setWeeklyMemo(docSnap.exists() ? docSnap.data().text : '')
         );
 
+        // 이 주의 상담일지만 읽는다(한 필드 범위 조건 → 복합 색인 불필요).
+        // 스케쥴 칸의 📝 표시와 팝업의 '작성/보기' 판단에 쓴다.
+        getDocs(
+            query(collection(db, 'consultations'), where('date', '>=', startStr), where('date', '<=', endStr))
+        )
+            .then((snap) => {
+                const map = {};
+                snap.forEach((d) => {
+                    const data = { id: d.id, ...d.data() };
+                    if (data.scheduleId) map[data.scheduleId] = data;
+                });
+                setWeekConsults(map);
+            })
+            .catch((e) => {
+                // 상담일지는 곁다리 정보다. 못 읽어도 스케쥴 화면은 그대로 쓴다.
+                console.warn('상담일지를 못 읽었습니다(📝 표시만 영향).', e && e.message);
+                setWeekConsults({});
+            });
+
         const fetchLockStatus = async () => {
             const lockDoc = await getDoc(doc(db, 'weekly_locks', startStr));
             setIsWeekLocked(lockDoc.exists() ? lockDoc.data().locked : false);
@@ -1876,6 +1902,9 @@ function App() {
     //   **실제 보강을 한 주에** 완료 수업으로 잡힌다.
     // - 아티스트는 회당 결제가 아니라 누적 방식이라 금액에서 빼고 횟수만 따로 센다(M(15+2) 의 +2).
     // - 월정산 학생은 포함한다.
+    // 상담일지 목록에서 '일정 없음' 을 가리는 데 쓴다(전체 스케쥴은 이미 메모리에 있다).
+    const scheduleIdSet = useMemo(() => new Set((attSchedules || []).map((s) => s.id)), [attSchedules]);
+
     const weeklySummary = useMemo(() => {
         const byId = new Map(students.map((st) => [st.id, st]));
         let mAmount = 0,
@@ -3542,7 +3571,16 @@ function App() {
 
                 {/* 메인 컨텐츠 영역 - 남은 공간 차지 (flex-1) & 내부 스크롤 제어 */}
                 <main className="flex-1 flex flex-col overflow-hidden relative">
-                    {activeTab === 'schedule' && (
+                    {/* 상담일지 목록 — 스케쥴 위에 뜨는 전환 화면 */}
+                    {activeTab === 'schedule' && showConsultPage && (
+                        <ConsultationsPage
+                            user={user}
+                            scheduleIds={scheduleIdSet}
+                            onBack={() => setShowConsultPage(false)}
+                        />
+                    )}
+
+                    {activeTab === 'schedule' && !showConsultPage && (
                         <ScheduleTab
                             scheduleDate={scheduleDate}
                             setScheduleDate={setScheduleDate}
@@ -3562,6 +3600,8 @@ function App() {
                             weeklySummary={weeklySummary}
                             weeklyMemo={weeklyMemo}
                             handleWeeklyMemoSave={handleWeeklyMemoSave}
+                            weekConsults={weekConsults}
+                            onOpenConsultList={() => setShowConsultPage(true)}
                         />
                     )}
 
@@ -3746,7 +3786,30 @@ function App() {
                     onAddPersonalCategory={handleAddPersonalCategory}
                     onRemovePersonalCategory={handleRemovePersonalCategory}
                     getNextPersonalSeq={getNextPersonalSeq}
+                    consultation={selectedSlot.id ? weekConsults[selectedSlot.id] || null : null}
+                    onOpenConsultation={() =>
+                        setConsultTarget({ id: selectedSlot.id, date: selectedSlot.date })
+                    }
                 />
+
+                {/* 상담일지 창 — 상담 일정 팝업의 링크로 연다 */}
+                {consultTarget && (
+                    <ConsultationModal
+                        date={consultTarget.date}
+                        scheduleId={consultTarget.id}
+                        consult={weekConsults[consultTarget.id] || null}
+                        uid={user.uid}
+                        onSaved={(saved) =>
+                            setWeekConsults((prev) => {
+                                const next = { ...prev };
+                                if (saved) next[consultTarget.id] = saved;
+                                else delete next[consultTarget.id];
+                                return next;
+                            })
+                        }
+                        onClose={() => setConsultTarget(null)}
+                    />
+                )}
 
                 {/* 수강생 등록/수정 모달 (단가 입력 0 제거 로직 적용) */}
                 <StudentFormModal

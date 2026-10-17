@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { FaCheckCircle, FaTimesCircle, FaClock, FaPlus, FaTimes } from 'react-icons/fa';
 import { StudentRotationInfo } from './StudentRotationInfo.jsx';
+import { isConsultSchedule } from '../domain/consultation.js';
 
 /**
  * App.jsx 에서 그대로 옮긴 블록.
@@ -38,8 +39,21 @@ export function ScheduleModal({
     onAddPersonalCategory,
     onRemovePersonalCategory,
     getNextPersonalSeq,
+    consultation,
+    onOpenConsultation,
 }) {
     if (!isScheduleModalOpen) return null;
+
+    // 짱구(보컬) 개인일정 '상담' 을 이미 저장해 둔 일정에서만 상담일지를 쓴다.
+    // ⚠️ 이 팝업은 category 가 '상담' 이면 '수업' 탭으로 열린다(기존 동작).
+    //    그래서 링크는 탭과 상관없이 맨 위에 둔다.
+    const consultTarget =
+        !!selectedSlot.id &&
+        isConsultSchedule({
+            category: scheduleForm.category,
+            gridType: scheduleForm.gridType,
+            studentId: scheduleForm.studentId,
+        });
 
     return (
         <div className="fixed inset-0 z-50 flex items-start sm:items-center justify-center overflow-y-auto bg-gray-900/40 backdrop-blur-md p-4">
@@ -56,6 +70,22 @@ export function ScheduleModal({
                     [V] {selectedSlot.date} {selectedSlot.time}:{selectedMinute}{' '}
                     {scheduleForm.gridType === 'master' ? '쌤일정' : '짱구일정'}
                 </h3>
+
+                {/* 상담일지 — 짱구 개인일정 '상담' 에서만. 기존 내용·버튼은 그대로 둔다. */}
+                {consultTarget && (
+                    <button
+                        type="button"
+                        onClick={onOpenConsultation}
+                        className="mb-4 w-full rounded-xl border border-green-200 bg-white px-3 py-2.5 text-left transition hover:bg-green-50 active:scale-[0.99]"
+                    >
+                        <span className="text-xs font-bold text-green-700">
+                            {consultation ? '📝 상담일지 보기' : '📝 상담일지 작성'}
+                        </span>
+                        {consultation && (
+                            <span className="ml-2 text-sm font-bold text-gray-700">{consultation.name}</span>
+                        )}
+                    </button>
+                )}
 
                 {/* 레슨(학생 지정) 수업이면 학생 로테이션 요약을 보여준다 */}
                 {scheduleForm.category === '레슨' && scheduleForm.studentId && (

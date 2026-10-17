@@ -30,6 +30,7 @@ const TOP_LEVEL_COLLECTIONS = [
     'site_settings',
     'weekly_locks',
     'weekly_memos',
+    'consultations',   // 상담일지(2026-10-18). 사진은 하위 photos 라 여기 안 담긴다.
 ];
 
 // 백업 묶음(kind) — 백업을 세 갈래로 나눠 쌓는다.

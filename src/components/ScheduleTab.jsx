@@ -37,6 +37,8 @@ export function ScheduleTab({
     todosByDate,
     weeklySummary,
     weeklyMemo,
+    weekConsults,
+    onOpenConsultList,
     handleWeeklyMemoSave,
 }) {
     // 취소 내역을 매 칸마다 전체 훑지 않도록, 렌더당 한 번만 조회용 Set 으로 만든다.
@@ -268,6 +270,14 @@ export function ScheduleTab({
                         label="주간 메모"
                         icon={<FaStickyNote className="text-blue-500 text-base" />}
                     />
+
+                    {/* 상담일지 목록 — 스케쥴 위에 전체 폭 화면으로 연다 */}
+                    <button
+                        onClick={onOpenConsultList}
+                        className="shrink-0 inline-flex items-center gap-1.5 rounded-full bg-green-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-green-700 active:scale-95"
+                    >
+                        📝 상담일지
+                    </button>
                 </div>
             </div>
 
@@ -579,6 +589,10 @@ export function ScheduleTab({
                                                             </span>
                                                         )}
                                                         {statusIcon}
+                                                        {/* 상담일지가 있는 상담 일정 */}
+                                                        {weekConsults && weekConsults[item.id] && (
+                                                            <span className="shrink-0 text-[10px]" title="상담일지 있음">📝</span>
+                                                        )}
 
                                                         <span className="truncate font-bold">
                                                             {item.category === '기타' && item.memo ? (
