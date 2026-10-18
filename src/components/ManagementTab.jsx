@@ -99,7 +99,7 @@ export function ManagementTab({ user, projects, allTransactions, onArtistsChange
     const [loaded, setLoaded] = useState(false);
     const [loadError, setLoadError] = useState('');
 
-    const [statusFilter, setStatusFilter] = useState('all');
+    const [statusFilter, setStatusFilter] = useState('active');   // 처음 열면 진행중만 본다
     const [categoryFilter, setCategoryFilter] = useState('all');
     const [keyword, setKeyword] = useState('');
     const [openId, setOpenId] = useState(null);   // 상세가 열린 아티스트 id
@@ -167,22 +167,61 @@ export function ManagementTab({ user, projects, allTransactions, onArtistsChange
     // 연결표는 지워진 항목·세부항목을 걸러 쓴다(계산에 바로 넘기는 값).
     const cleanVotizMap = useMemo(() => normalizeVotizMap(votizMap, categories), [votizMap, categories]);
 
-    const visibleArtists = useMemo(() => {
+    // 검색어까지만 걸러둔 목록. 탭 건수는 여기서 나머지 한 조건만 더 걸어 센다
+    // (구분 탭 = 지금 상태 필터 기준 / 상태 탭 = 지금 구분 필터 기준).
+    const searched = useMemo(() => {
         const k = keyword.trim().toLowerCase();
-        const list = artists
-            .filter((a) => statusFilter === 'all' || (a.status || 'active') === statusFilter)
-            .filter((a) => categoryFilter === 'all' || categoryOf(a) === categoryFilter)
-            .filter((a) => !k
-                || (a.stageName || '').toLowerCase().includes(k)
-                || (a.realName || '').toLowerCase().includes(k)
-                || (a.agencyName || '').toLowerCase().includes(k));
+        if (!k) return artists;
+        return artists.filter((a) =>
+            (a.stageName || '').toLowerCase().includes(k)
+            || (a.realName || '').toLowerCase().includes(k)
+            || (a.agencyName || '').toLowerCase().includes(k));
+    }, [artists, keyword]);
+
+    const matchStatus = (a, f) => f === 'all' || (a.status || 'active') === f;
+    const matchCategory = (a, f) => f === 'all' || categoryOf(a) === f;
+
+    const categoryCounts = useMemo(() => {
+        const c = { all: 0, member: 0, collab: 0 };
+        searched.filter((a) => matchStatus(a, statusFilter)).forEach((a) => {
+            c.all += 1;
+            c[categoryOf(a)] += 1;
+        });
+        return c;
+    }, [searched, statusFilter]);
+
+    const statusCounts = useMemo(() => {
+        const c = { all: 0, active: 0, ended: 0 };
+        searched.filter((a) => matchCategory(a, categoryFilter)).forEach((a) => {
+            c.all += 1;
+            c[(a.status || 'active') === 'active' ? 'active' : 'ended'] += 1;
+        });
+        return c;
+    }, [searched, categoryFilter]);
+
+    const visibleArtists = useMemo(() => {
+        const list = searched
+            .filter((a) => matchStatus(a, statusFilter))
+            .filter((a) => matchCategory(a, categoryFilter));
         return list.sort((a, b) => {
             const sa = (a.status || 'active') === 'active' ? 0 : 1;
             const sb = (b.status || 'active') === 'active' ? 0 : 1;
             if (sa !== sb) return sa - sb;
             return (a.stageName || '').localeCompare(b.stageName || '');
         });
-    }, [artists, statusFilter, categoryFilter, keyword]);
+    }, [searched, statusFilter, categoryFilter]);
+
+    // 아티스트별 연결된 곡 이름 — 보티즈 탭이 이미 받아둔 projects 를 그대로 쓴다(추가 조회 0회).
+    const songsByArtist = useMemo(() => {
+        const map = {};
+        (projects || []).forEach((p) => {
+            (Array.isArray(p.artists) ? p.artists : []).forEach((link) => {
+                if (!link || !link.artistId) return;
+                (map[link.artistId] = map[link.artistId] || []).push(p.name || '(이름없음)');
+            });
+        });
+        return map;
+    }, [projects]);
 
     const openArtist = async (a) => {
         setInfoOpen(false);   // 다른 아티스트를 고르면 다시 접힌 상태로 시작
@@ -427,11 +466,19 @@ export function ManagementTab({ user, projects, allTransactions, onArtistsChange
                     <div className="space-y-2">
                         <Toggle
                             value={categoryFilter} onChange={setCategoryFilter}
-                            options={[{ key: 'all', label: '전체' }, { key: 'member', label: '소속' }, { key: 'collab', label: '콜라보' }]}
+                            options={[
+                                { key: 'all', label: '전체', count: categoryCounts.all },
+                                { key: 'member', label: '소속', count: categoryCounts.member },
+                                { key: 'collab', label: '콜라보', count: categoryCounts.collab },
+                            ]}
                         />
                         <Toggle
                             value={statusFilter} onChange={setStatusFilter}
-                            options={[{ key: 'all', label: '전체' }, { key: 'active', label: '진행중' }, { key: 'ended', label: '종료' }]}
+                            options={[
+                                { key: 'all', label: '전체', count: statusCounts.all },
+                                { key: 'active', label: '진행중', count: statusCounts.active },
+                                { key: 'ended', label: '종료', count: statusCounts.ended },
+                            ]}
                         />
                         <input className={inputClass + ' bg-white'} placeholder="이름 검색 (활동명 · 본명 · 소속사)"
                             value={keyword} onChange={(e) => setKeyword(e.target.value)} />
@@ -446,7 +493,8 @@ export function ManagementTab({ user, projects, allTransactions, onArtistsChange
                             </div>
                         )}
                         {visibleArtists.map((a) => (
-                            <ArtistCard key={a.id} artist={a} active={openId === a.id && !isNew} onClick={() => openArtist(a)} />
+                            <ArtistCard key={a.id} artist={a} songs={songsByArtist[a.id]}
+                                active={openId === a.id && !isNew} onClick={() => openArtist(a)} />
                         ))}
                     </div>
                 </div>
@@ -477,10 +525,13 @@ export function ManagementTab({ user, projects, allTransactions, onArtistsChange
 function Toggle({ value, onChange, options }) {
     return (
         <div className="flex gap-1 bg-gray-200/70 p-1 rounded-2xl">
-            {options.map(({ key, label }) => (
+            {options.map(({ key, label, count }) => (
                 <button key={key} onClick={() => onChange(key)}
                     className={`flex-1 px-3 py-1.5 rounded-xl text-sm font-bold transition ${value === key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
                     {label}
+                    {count !== undefined && (
+                        <span className={`ml-1 text-xs font-bold ${value === key ? 'text-gray-400' : 'text-gray-400'}`}>{count}</span>
+                    )}
                 </button>
             ))}
         </div>
@@ -489,43 +540,42 @@ function Toggle({ value, onChange, options }) {
 
 // ──[ 목록 카드 ]──
 // 소속은 계약기간·만료 배지를, 콜라보는 소속사명을 보여준다(계약 만료 개념이 없다).
-function ArtistCard({ artist, active, onClick }) {
+function ArtistCard({ artist, songs, active, onClick }) {
     const a = artist;
     const alive = (a.status || 'active') === 'active';
     const collab = categoryOf(a) === 'collab';
     const left = daysUntil(a.contractEnd);
+    // 연결된 보티즈 곡 — 첫 곡 + 외 n곡. 없으면 아무것도 안 쓴다.
+    const songText = songs && songs.length
+        ? songs.length === 1 ? songs[0] : songs[0] + ' 외 ' + (songs.length - 1) + '곡'
+        : '';
     return (
         <div onClick={onClick}
             className={`cursor-pointer rounded-xl border p-3 transition ${active ? 'border-emerald-400 bg-emerald-50/60 ring-1 ring-emerald-200' : 'border-gray-100 bg-white hover:border-emerald-300 hover:shadow-sm'}`}>
-            <div className="flex items-center justify-between gap-2 flex-wrap">
-                <div className="flex items-center gap-1.5 min-w-0">
+            <div className="flex items-center justify-between gap-2">
+                <div className="flex items-baseline gap-1.5 min-w-0">
+                    {/* 상태는 점으로 — 진행중 초록, 종료 회색 */}
+                    <span className={`shrink-0 self-center w-1.5 h-1.5 rounded-full ${alive ? 'bg-green-500' : 'bg-gray-300'}`}
+                        title={alive ? '진행중' : '종료'} />
                     <span className={`font-bold truncate ${active ? 'text-emerald-800' : 'text-gray-800'}`}>{a.stageName || '(활동명 없음)'}</span>
-                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ring-1 ${collab ? 'bg-violet-50 text-violet-700 ring-violet-200' : 'bg-emerald-50 text-emerald-700 ring-emerald-200'}`}>
-                        {CATEGORY_LABEL[categoryOf(a)]}
-                    </span>
-                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ring-1 ${alive ? 'bg-green-50 text-green-700 ring-green-200' : 'bg-gray-100 text-gray-500 ring-gray-200'}`}>
-                        {alive ? '진행중' : '종료'}
-                    </span>
-                    {!collab && alive && left !== null && left < 0 && (
-                        <span className="shrink-0 rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-700 ring-1 ring-red-200">
-                            계약 만료 ({0 - left}일 지남)
-                        </span>
-                    )}
-                    {!collab && alive && left !== null && left >= 0 && left <= 30 && (
-                        <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-800 ring-1 ring-amber-200">
-                            계약 만료 D-{left}
-                        </span>
+                    {/* 구분은 작은 회색 글씨 */}
+                    <span className="shrink-0 text-[11px] text-gray-400">{CATEGORY_LABEL[categoryOf(a)]}</span>
+                    {songText && (
+                        <span className="truncate text-[11px] text-gray-400" title={(songs || []).join(', ')}>· {songText}</span>
                     )}
                 </div>
-                {collab ? (
-                    a.agencyName ? (
-                        <span className="shrink-0 text-xs font-medium text-gray-500 truncate">🏢 {a.agencyName}</span>
-                    ) : null
-                ) : (
-                    <span className="shrink-0 text-xs font-medium text-gray-500">
-                        {a.contractStart || '?'} ~ {a.contractEnd || '?'}
-                    </span>
-                )}
+                <div className="shrink-0 flex items-center gap-2">
+                    {/* 계약 만료는 소속만 */}
+                    {!collab && alive && left !== null && left < 0 && (
+                        <span className="text-[11px] font-bold text-red-500">만료 {0 - left}일 지남</span>
+                    )}
+                    {!collab && alive && left !== null && left >= 0 && left <= 30 && (
+                        <span className="text-[11px] font-bold text-amber-600">만료 D-{left}</span>
+                    )}
+                    {collab
+                        ? (a.agencyName ? <span className="text-xs font-medium text-gray-500 truncate">🏢 {a.agencyName}</span> : null)
+                        : <span className="text-xs font-medium text-gray-400">{a.contractStart || '?'} ~ {a.contractEnd || '?'}</span>}
+                </div>
             </div>
         </div>
     );

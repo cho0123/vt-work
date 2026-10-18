@@ -499,6 +499,8 @@ function App() {
     // 정산 관리
     const [currentDate, setCurrentDate] = useState(new Date());
     const [settlementIncome, setSettlementIncome] = useState([]);
+    // 그 달에 실제로 입금된 결제(paymentDate 기준). 총매출 카드의 '결제' 줄에만 쓴다.
+    const [settlementPaidByDate, setSettlementPaidByDate] = useState([]);
     const [settlementUnpaid, setSettlementUnpaid] = useState([]);
     const [monthlySchedules, setMonthlySchedules] = useState([]); // [NEW] 정산용 월별 스케줄 데이터
     const [movingSchedule, setMovingSchedule] = useState(null); // [NEW] 일정 이동(보류) 상태
@@ -883,12 +885,18 @@ function App() {
         const byStudent = paymentsCacheRef.current.byStudent;
         const allPayments = [];
         const allUnpaid = [];
+        const allPaidThisMonth = [];   // 실제 입금일(paymentDate) 기준 — 카드의 '결제' 줄
         for (const student of students) {
             const docs = byStudent.get(student.id) || [];
             for (const data of docs) {
                 const normTDate = (data.targetDate || '').replace(/\./g, '-');
                 if (normTDate.startsWith(yearMonth)) {
                     allPayments.push({ ...data, studentName: student.name, studentId: student.id });
+                }
+                // 재등록일(targetDate)이 아니라 **돈이 들어온 날**로 세는 줄.
+                const normPDate = (data.paymentDate || '').replace(/\./g, '-');
+                if (normPDate.startsWith(yearMonth)) {
+                    allPaidThisMonth.push({ ...data, studentName: student.name, studentId: student.id });
                 }
             }
             (student.unpaidList || [])
@@ -900,6 +908,7 @@ function App() {
         allUnpaid.sort((a, b) => new Date(a.targetDate) - new Date(b.targetDate));
         setSettlementIncome(allPayments);
         setSettlementUnpaid(allUnpaid);
+        setSettlementPaidByDate(allPaidThisMonth);
 
         // [NEW] '미마감' 배너 갱신 — 정산탭에서만. 메모리 계산이라 읽기 비용 없음.
         if (activeTab === 'settlement') {
@@ -944,6 +953,57 @@ function App() {
         );
         return paid + unpaid;
     }, [settlementIncome, settlementUnpaid]);
+
+    /**
+     * 카드 '진행' 줄 — 그 달 1일 ~ 기준일까지 **실제 진행된(완료) 수업**.
+     *
+     * 기준일: 이번 달을 보면 오늘, 지난 달을 보면 그 달 말일(미래 달도 말일).
+     * 금액 규칙은 스케쥴탭 주간 요약(weeklySummary)과 **같은 한 벌**이다 —
+     *   마스터는 30분이어도 정가, 보컬은 30분·하프가 반값(vocalRateFactorFor),
+     *   아티스트 학생은 회당 결제가 아니라 누적이라 **금액에서 빼고 횟수만** 센다.
+     * 데이터는 세션에 이미 올라와 있는 전체 스케쥴(attSchedules) + students — 추가 조회 0회.
+     */
+    const currentMonthProgress = useMemo(() => {
+        const byId = new Map(students.map((st) => [st.id, st]));
+        const y = currentDate.getFullYear();
+        const m = currentDate.getMonth();
+        const first = formatDateLocal(new Date(y, m, 1));
+        const lastOfMonth = new Date(y, m + 1, 0);
+        const today = new Date();
+        const isThisMonth = y === today.getFullYear() && m === today.getMonth();
+        const until = formatDateLocal(isThisMonth && today < lastOfMonth ? today : lastOfMonth);
+
+        let mAmount = 0, mCount = 0, mArtist = 0, vAmount = 0, vCount = 0, vArtist = 0;
+        for (const sc of attSchedules) {
+            if (!sc.studentId) continue;                 // 개인일정 제외
+            if (sc.status !== 'completed') continue;     // 실제로 진행된 것만
+            if (!sc.date || sc.date < first || sc.date > until) continue;
+            const st = byId.get(sc.studentId);
+            if (!st) continue;
+            const isMaster = sc.gridType === 'master' || !sc.gridType;
+            if (st.isArtist) {
+                if (isMaster) mArtist++; else vArtist++;
+                continue;
+            }
+            if (isMaster) {
+                mCount++;
+                mAmount += Number(st.rates?.master || 0);
+            } else {
+                vCount++;
+                vAmount += Number(st.rates?.vocal || 0) * vocalRateFactorFor(sc, st);
+            }
+        }
+        return { mAmount, mCount, mArtist, vAmount, vCount, vArtist, until };
+    }, [attSchedules, students, currentDate]);
+
+    /** 카드 '결제' 줄 — 그 달에 실제로 입금된 금액과 건수(입금일 기준). */
+    const currentMonthPaid = useMemo(() => {
+        const amount = settlementPaidByDate.reduce(
+            (acc, cur) => acc + Number(String(cur.amount || 0).replace(/[^0-9]/g, '')),
+            0
+        );
+        return { amount, count: settlementPaidByDate.length };
+    }, [settlementPaidByDate]);
 
     const currentMonthNetProfit = useMemo(() => {
         return currentMonthTotalRevenue - currentMonthTotalExpense;
@@ -3727,6 +3787,8 @@ function App() {
                             currentMonthTotalRevenue={currentMonthTotalRevenue}
                             currentMonthNetProfit={currentMonthNetProfit}
                             currentMonthRevenueBreakdown={currentMonthRevenueBreakdown}
+                            currentMonthProgress={currentMonthProgress}
+                            currentMonthPaid={currentMonthPaid}
                             currentMonthPrefix={currentMonthPrefix}
                             expenses={expenses}
                             expenseForm={expenseForm}
