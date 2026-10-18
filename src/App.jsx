@@ -955,7 +955,12 @@ function App() {
     }, [settlementIncome, settlementUnpaid]);
 
     /**
-     * 카드 '진행' 줄 — 그 달 1일 ~ 기준일까지 **실제 진행된(완료) 수업**.
+     * 카드 '진행' 줄 — 그 달 1일 ~ 기준일까지 **완료 + 결석** 수업.
+     *
+     * 결석도 넣는 이유: 결석은 수강 횟수에서 차감된다(돈을 받은 회차가 소진된다).
+     * ⚠️ 스케쥴탭 주간 요약(weeklySummary)과는 세는 대상이 다르다 — 그쪽은 '그 주에 잡힌'
+     *    수업(예정 포함, 연기 원본만 제외)이고, 여기는 '이미 지나간' 완료·결석만 센다.
+     *    금액 규칙(단가·반값·아티스트)은 두 곳이 같은 한 벌이다.
      *
      * 기준일: 이번 달을 보면 오늘, 지난 달을 보면 그 달 말일(미래 달도 말일).
      * 금액 규칙은 스케쥴탭 주간 요약(weeklySummary)과 **같은 한 벌**이다 —
@@ -976,7 +981,7 @@ function App() {
         let mAmount = 0, mCount = 0, mArtist = 0, vAmount = 0, vCount = 0, vArtist = 0;
         for (const sc of attSchedules) {
             if (!sc.studentId) continue;                 // 개인일정 제외
-            if (sc.status !== 'completed') continue;     // 실제로 진행된 것만
+            if (sc.status !== 'completed' && sc.status !== 'absent') continue;   // 완료 + 결석
             if (!sc.date || sc.date < first || sc.date > until) continue;
             const st = byId.get(sc.studentId);
             if (!st) continue;

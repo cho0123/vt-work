@@ -282,7 +282,8 @@ export function SettlementTab({
                     </div>
                     {/* 재등록 / 진행 / 결제 세 줄.
                         · 재등록 = 그 달 재등록일(targetDate) 기준 결제 + 미수금. M/V 는 학생 수강료 비율로 나눈 추정값.
-                        · 진행   = 그 달 1일~기준일까지 완료된 수업. 스케쥴·단가로 정확히 M/V 가 갈린다.
+                        · 진행   = 그 달 1일~기준일까지 **완료 + 결석** 수업(결석도 수강 횟수에서 차감된다).
+                                   스케쥴·단가로 정확히 M/V 가 갈린다.
                         · 결제   = 그 달에 실제로 입금된 금액(입금일 기준). 결제 데이터에 M/V 구분이 없어 합계만 쓴다. */}
                     <div className="mt-2 space-y-1 text-[10px] font-bold bg-gray-50 rounded-lg px-2 py-1.5">
                         <div className="flex items-center gap-2 text-gray-400" title="그 달 재등록일 기준 결제 + 미수금 (M/V 는 학생 수강료 비율로 나눈 추정값)">
@@ -297,7 +298,7 @@ export function SettlementTab({
                             </span>
                         </div>
                         {currentMonthProgress && (
-                            <div className="flex items-center gap-2 text-gray-400" title={`1일 ~ ${currentMonthProgress.until} 완료된 수업 (아티스트는 금액에서 빼고 횟수만)`}>
+                            <div className="flex items-center gap-2 text-gray-400" title={`1일 ~ ${currentMonthProgress.until} 완료 + 결석 수업 (결석도 수강 횟수에서 차감된다 · 아티스트는 금액에서 빼고 횟수만)`}>
                                 <span className="w-8 shrink-0 text-gray-500">진행</span>
                                 <span className="flex items-center gap-1">
                                     <div className="w-1.5 h-1.5 rounded-full bg-orange-400"></div>
@@ -307,6 +308,7 @@ export function SettlementTab({
                                     <div className="w-1.5 h-1.5 rounded-full bg-blue-400"></div>
                                     V {currentMonthProgress.vCount}회{currentMonthProgress.vArtist ? `+${currentMonthProgress.vArtist}` : ''} · {formatCurrency(currentMonthProgress.vAmount)}
                                 </span>
+                                <span className="text-gray-300">완료+결석</span>
                             </div>
                         )}
                         {currentMonthPaid && (
