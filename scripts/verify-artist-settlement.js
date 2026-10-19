@@ -13,6 +13,7 @@ import {
     unmappedVotizCategories,
     computeCollab,
     buildSongRows,
+    addMonths, COLLAB_GRACE_MONTHS, collabGraceUntil, collabDisplayEnded, collabInGrace,
     songSummaryOf,
     diffSongSummary,
     memberSharePercent,
@@ -985,6 +986,53 @@ eq('경로를 붙여도 금액은 안 바뀐다',
 
 // 확정 뒤 비교(diffSongSummary)는 금액만 보므로 paths 가 있든 없든 같다
 eq('paths 가 있어도 확정분 비교 결과는 같다', diffSongSummary(plainSum, pathSum), []);
+
+// -- [ 17. 콜라보 종료 표시 여유 (+3개월) ] --
+console.log('');
+console.log('-- 17. 콜라보 종료 표시 여유');
+
+eq('여유 개월 수', COLLAB_GRACE_MONTHS, 3);
+eq('개월 더하기', [addMonths('2024-06', 3), addMonths('2024-11', 3), addMonths('2024-01', -1)],
+    ['2024-09', '2025-02', '2023-12']);
+eq('여유 마지막 달', collabGraceUntil('2024-06'), '2024-09');
+
+// 종료월 2024-06 → 2024-09 까지 진행 중, 2024-10 부터 종료
+eq('종료월 당월은 진행 중', collabDisplayEnded('2024-06', '2024-06'), false);
+eq('+1 개월은 진행 중', collabDisplayEnded('2024-06', '2024-07'), false);
+eq('+3 개월은 진행 중', collabDisplayEnded('2024-06', '2024-09'), false);
+eq('+4 개월부터 종료', collabDisplayEnded('2024-06', '2024-10'), true);
+eq('한참 뒤도 종료', collabDisplayEnded('2024-06', '2026-10'), true);
+eq('종료월 전이면 당연히 진행 중', collabDisplayEnded('2024-06', '2024-03'), false);
+eq('종료월이 없으면 종료 아님', collabDisplayEnded('', '2026-10'), false);
+
+// 여유 기간 안내(= 종료월 다음 달 ~ +3개월)
+eq('종료월 당월은 안내 없음', collabInGrace('2024-06', '2024-06'), false);
+eq('+1 ~ +3 개월은 안내', ['2024-07', '2024-08', '2024-09'].map((m) => collabInGrace('2024-06', m)),
+    [true, true, true]);
+eq('+4 개월은 안내 없음(이미 종료)', collabInGrace('2024-06', '2024-10'), false);
+eq('종료 전은 안내 없음', collabInGrace('2024-06', '2024-05'), false);
+
+// 여유 개월 수를 바꿔 쓸 수 있다
+eq('여유 0 이면 종료월 다음 달부터 종료', collabDisplayEnded('2024-06', '2024-07', 0), true);
+eq('여유 6 이면 +6 까지 진행 중',
+    [collabDisplayEnded('2024-06', '2024-12', 6), collabDisplayEnded('2024-06', '2025-01', 6)], [false, true]);
+
+// 해를 넘겨도 맞는다
+eq('연말 종료 → 다음 해 3월까지 진행 중',
+    ['2024-12', '2025-01', '2025-03', '2025-04'].map((m) => collabDisplayEnded('2024-12', m)),
+    [false, false, false, true]);
+
+// 표시 전용 — 공유 대상 계산은 그대로다
+const graceLink = { recoupAmount: 0, sharePercent: 30, startMonth: '2024-01', periodMonths: 6 };
+const graceTx = [
+    { id: 'g1', projectId: 'G', division: 'votiz', type: 'income', category: 'source', date: '2024-03-10', amount: 1000, totalAmount: 1000 },
+    { id: 'g2', projectId: 'G', division: 'votiz', type: 'income', category: 'source', date: '2024-08-10', amount: 500, totalAmount: 500 },
+];
+const graceCol = computeCollab({ transactions: sourceIncomeOnly(graceTx), projectId: 'G', link: graceLink });
+eq('공유 기간은 그대로 2024-01 ~ 2024-06', [graceCol.startMonth, graceCol.endMonth], ['2024-01', '2024-06']);
+eq('여유 기간 수익은 공유 대상이 아니다(계산 불변)', graceCol.artistShare, 300);
+eq('기간 종료 후 수익으로 잡힌다', [graceCol.incomeAfterEndCount, graceCol.incomeAfterEnd], [1, 500]);
+eq('그래도 화면에서는 2024-09 까지 진행 중', collabDisplayEnded(graceCol.endMonth, '2024-09'), false);
 
 // -- [ 결과 ] --
 console.log(`\n${pass}/${pass + fail} 통과` + (fail ? ` — 실패 ${fail}건` : ''));

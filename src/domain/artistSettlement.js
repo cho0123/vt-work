@@ -91,6 +91,37 @@ export const monthRange = (startMonth, months) => {
 
 export const ymOf = (dateStr) => String(dateStr || '').slice(0, 7);
 
+// 'YYYY-MM' 에 n 개월 더하기(음수도 된다).
+export const addMonths = (ym, n) => {
+    const [y, m] = String(ym || '').split('-').map(Number);
+    if (!y || !m) return '';
+    const d = new Date(y, m - 1 + Number(n || 0), 1);
+    return d.getFullYear() + '-' + pad2(d.getMonth() + 1);
+};
+
+// ──[ 콜라보 '종료' 표시 여유 ]────────────────────────────────────────────
+// 공유 기간이 끝나도 유통사 정산이 몇 달 늦게 들어오므로, **화면에서 '종료'로 접기 전에**
+// 몇 달 더 진행 중으로 보여준다. 여유 개월 수는 여기 한 줄만 고치면 된다.
+// ⚠️ **표시 전용이다.** 공유 대상 계산(공유 기간 안의 음원수익만)·자동 배분 조건·정산 계산은
+//    이 값을 보지 않는다 — computeCollab 의 periodMonths 는 그대로다.
+export const COLLAB_GRACE_MONTHS = 3;
+
+/** 여유까지 포함한 마지막 달. 종료월 2024-06 + 3 → 2024-09 */
+export const collabGraceUntil = (endMonth, grace = COLLAB_GRACE_MONTHS) =>
+    (endMonth ? addMonths(endMonth, grace) : '');
+
+/** 화면에서 '종료'로 접을지. 여유 달까지 지나야 종료다. */
+export const collabDisplayEnded = (endMonth, thisMonth, grace = COLLAB_GRACE_MONTHS) => {
+    if (!endMonth || !thisMonth) return false;
+    return collabGraceUntil(endMonth, grace) < thisMonth;
+};
+
+/** 공유 기간은 끝났지만 아직 여유 기간 안인가(= 정산 마무리 기간). */
+export const collabInGrace = (endMonth, thisMonth, grace = COLLAB_GRACE_MONTHS) => {
+    if (!endMonth || !thisMonth) return false;
+    return endMonth < thisMonth && !collabDisplayEnded(endMonth, thisMonth, grace);
+};
+
 // ──[ 비율 ]──────────────────────────────────────────────────────────────
 // 그 수익항목에서 아티스트가 가져가는 %. 일괄이면 항목과 무관하게 같은 값.
 export const artistPercentFor = (artist, categoryId) => {

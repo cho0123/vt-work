@@ -12,12 +12,13 @@ import {
     computeGeneralSettlement, computeCaseSettlement, computeCollab,
     buildSongRows, songSummaryOf, diffSongSummary, membersMissingCategory, unmappedVotizCategories,
     monthsOfPeriod, periodLabel, periodKey, periodCount, linkTypeOf,
+    collabDisplayEnded, collabInGrace, collabGraceUntil,
 } from '../domain/artistSettlement.js';
 import { printArtistSettlement } from '../utils/artistSettlementDoc.js';
 import { sourceIncomeOnly } from '../domain/collabPayout.js';
 import { catFullPath } from '../domain/mgmtCategories.js';
 import { computePayout, payoutSnapshot, payoutOfSettlement, TAX_TYPE_LABEL } from '../domain/artistPayout.js';
-import { effectiveTaxType, payeeInfo, payeeSnapshot, payeeOfSettlement } from '../domain/artistProfile.js';
+import { effectiveTaxType, payeeInfo, payeeSnapshot, payeeOfSettlement, categoryOf } from '../domain/artistProfile.js';
 
 const inputClass = "w-full p-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-gray-800 outline-none transition text-sm";
 const selectClass = inputClass + " appearance-none";
@@ -161,7 +162,21 @@ export function ArtistSettlementPanel({
             .filter(Boolean);
     }, [projects, allTransactions, artistId, months]);
 
+    // 공유 기간이 끝난 곡과 진행 중인 곡을 나눈다 — **표시 전용**이다(계산·확정은 그대로).
+    // 종료월이 지나도 **COLLAB_GRACE_MONTHS(3) 개월**은 진행 중으로 둔다(유통사 정산이 늦게 들어오므로).
+    const thisMonth = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+    const liveCollabs = collabs.filter((c) => !collabDisplayEnded(c.endMonth, thisMonth));
+    const endedCollabs = collabs.filter((c) => collabDisplayEnded(c.endMonth, thisMonth));
+
+    // 확정은 지금까지처럼 **전체** 기준으로 센다(계산을 바꾸지 않는다).
     const collabPeriodTotal = collabs.reduce((a, c) => a + c.periodShare, 0);
+
+    // 콜라보 아티스트인데 장부도 별도정산 건도 없으면 일반 정산 영역은 보여줄 게 없다.
+    const isCollabArtist = categoryOf(artist) === 'collab';
+    const hasLedger = (periodRows || []).length > 0;
+    const showGeneral = !(isCollabArtist && !hasLedger && (cases || []).length === 0);
+    // 기간 선택은 일반 정산이나 진행 중인 콜라보가 있을 때만 쓸모가 있다.
+    const showPeriodPicker = showGeneral || liveCollabs.length > 0;
     const confirmedCollab = useMemo(
         () => settlements.find((s) => s.kind === 'collab' && s.periodKey === key) || null,
         [settlements, key]
@@ -306,6 +321,51 @@ export function ArtistSettlementPanel({
         } finally { setBusy(false); }
     };
 
+    // 콜라보 곡 카드. ended 면 '선택한 달 공유액'·진행 막대를 빼고 요약만 보여준다.
+    // ⚠️ 컴포넌트가 아니라 그리는 함수다(렌더마다 새 타입이 되면 입력 포커스가 날아간다).
+    const renderCollab = (c, ended) => (
+        <div key={c.projectId} className={`rounded-xl p-3 space-y-1 ${ended ? 'bg-gray-50 ring-1 ring-gray-200' : 'bg-indigo-50/50'}`}>
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+                <span className="flex items-center gap-2 font-bold text-gray-800 text-sm">
+                    {c.projectName}
+                    {ended && (
+                        <span className="rounded-full bg-gray-200 px-2 py-0.5 text-[10px] font-bold text-gray-600">공유 종료</span>
+                    )}
+                </span>
+                {!ended && (
+                    <span className="text-xs font-bold text-indigo-700">{label} 공유액 {won(c.periodShare)}</span>
+                )}
+            </div>
+            {!ended && (
+                <div className="h-2 rounded-full bg-white overflow-hidden ring-1 ring-indigo-100">
+                    <div className="h-full bg-indigo-500" style={{ width: Math.round(c.recoupProgress * 100) + '%' }} />
+                </div>
+            )}
+            <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] text-gray-600">
+                <span>회수 {won(c.recoveredAmount)} / {won(c.recoupAmount)} ({Math.round(c.recoupProgress * 100)}%)</span>
+                <span>남은 제작비 <b>{won(c.remainingRecoup)}</b></span>
+                <span>공유율 {pctText(c.sharePercent)}</span>
+                <span>기간 {c.startMonth} ~ {c.endMonth}</span>
+                <span>누적 공유액 {won(c.artistShare)}</span>
+            </div>
+            {c.incomeBeforeStartCount > 0 && (
+                <div className="text-[11px] font-bold text-amber-700">
+                    ⚠️ 공유 시작월({c.startMonth}) 이전 수익이 {c.incomeBeforeStartCount}건 {won(c.incomeBeforeStart)} 있습니다 — 공유 대상이 아닙니다.
+                </div>
+            )}
+            {collabInGrace(c.endMonth, thisMonth) && (
+                <div className="text-[11px] font-bold text-amber-700">
+                    공유 기간 종료 · 정산 마무리 기간(~{collabGraceUntil(c.endMonth)})
+                </div>
+            )}
+            {c.incomeAfterEndCount > 0 && (
+                <div className="text-[11px] font-bold text-gray-500">
+                    기간 종료({c.endMonth}) 이후 수익 {c.incomeAfterEndCount}건 {won(c.incomeAfterEnd)} — 공유 대상이 아닙니다.
+                </div>
+            )}
+        </div>
+    );
+
     const printDoc = (s) => {
         printArtistSettlement({
             artistName: artist.stageName || '(이름없음)',
@@ -352,18 +412,20 @@ export function ArtistSettlementPanel({
                         </span>
                     )}
                 </div>
-                <div className="flex items-center gap-2">
-                    <select className={selectClass + ' w-28'} value={year} onChange={(e) => setYear(Number(e.target.value))}>
-                        {years.map((y) => <option key={y} value={y}>{y}년</option>)}
-                    </select>
-                    {periodCount(cycle) > 1 && (
-                        <select className={selectClass + ' w-28'} value={index} onChange={(e) => setIndex(Number(e.target.value))}>
-                            {Array.from({ length: periodCount(cycle) }, (_, i) => i + 1).map((i) => (
-                                <option key={i} value={i}>{periodLabel(cycle, year, i).replace(year + '년 ', '')}</option>
-                            ))}
+                {showPeriodPicker && (
+                    <div className="flex items-center gap-2">
+                        <select className={selectClass + ' w-28'} value={year} onChange={(e) => setYear(Number(e.target.value))}>
+                            {years.map((y) => <option key={y} value={y}>{y}년</option>)}
                         </select>
-                    )}
-                </div>
+                        {periodCount(cycle) > 1 && (
+                            <select className={selectClass + ' w-28'} value={index} onChange={(e) => setIndex(Number(e.target.value))}>
+                                {Array.from({ length: periodCount(cycle) }, (_, i) => i + 1).map((i) => (
+                                    <option key={i} value={i}>{periodLabel(cycle, year, i).replace(year + '년 ', '')}</option>
+                                ))}
+                            </select>
+                        )}
+                    </div>
+                )}
             </div>
 
             {err && <div className="rounded-xl bg-red-50 border border-red-200 p-3 text-sm font-bold text-red-700">{err}</div>}
@@ -382,7 +444,8 @@ export function ArtistSettlementPanel({
                 </div>
             )}
 
-            {/* 일반 정산 */}
+            {/* 일반 정산 — 콜라보 아티스트이고 장부·별도정산 건이 하나도 없으면 숨긴다 */}
+            {showGeneral && (
             <div className="space-y-2">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                     <span className="text-xs font-bold text-gray-500">{label} · 일반 정산</span>
@@ -468,8 +531,9 @@ export function ArtistSettlementPanel({
                     </>
                 )}
             </div>
+            )}
 
-            {/* 콜라보 */}
+            {/* 콜라보 — 진행 중인 곡은 지금 그대로, 공유 기간이 끝난 곡은 아래 묶음에 요약만 */}
             {collabs.length > 0 && (
                 <div className="space-y-2">
                     <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -478,40 +542,21 @@ export function ArtistSettlementPanel({
                             <span className="rounded-full bg-gray-900 px-2.5 py-1 text-[10px] font-bold text-white">
                                 확정됨{confirmedCollab.status === 'paid' ? ' · 지급완료' : ''}
                             </span>
-                        ) : (
+                        ) : liveCollabs.length > 0 ? (
                             <button disabled={busy} onClick={confirmCollab} className={`${pill} bg-indigo-600 text-white hover:bg-indigo-700`}>
                                 콜라보 확정 (실지급 {won(computePayout({ artistShare: collabPeriodTotal, taxType }).netPayout)})
                             </button>
-                        )}
+                        ) : null}
                     </div>
-                    {collabs.map((c) => (
-                        <div key={c.projectId} className="rounded-xl bg-indigo-50/50 p-3 space-y-1">
-                            <div className="flex items-center justify-between gap-2 flex-wrap">
-                                <span className="font-bold text-gray-800 text-sm">{c.projectName}</span>
-                                <span className="text-xs font-bold text-indigo-700">{label} 공유액 {won(c.periodShare)}</span>
-                            </div>
-                            <div className="h-2 rounded-full bg-white overflow-hidden ring-1 ring-indigo-100">
-                                <div className="h-full bg-indigo-500" style={{ width: Math.round(c.recoupProgress * 100) + '%' }} />
-                            </div>
-                            <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-[11px] text-gray-600">
-                                <span>회수 {won(c.recoveredAmount)} / {won(c.recoupAmount)} ({Math.round(c.recoupProgress * 100)}%)</span>
-                                <span>남은 제작비 <b>{won(c.remainingRecoup)}</b></span>
-                                <span>공유율 {pctText(c.sharePercent)}</span>
-                                <span>기간 {c.startMonth} ~ {c.endMonth}</span>
-                                <span>누적 공유액 {won(c.artistShare)}</span>
-                            </div>
-                            {c.incomeBeforeStartCount > 0 && (
-                                <div className="text-[11px] font-bold text-amber-700">
-                                    ⚠️ 공유 시작월({c.startMonth}) 이전 수익이 {c.incomeBeforeStartCount}건 {won(c.incomeBeforeStart)} 있습니다 — 공유 대상이 아닙니다.
-                                </div>
-                            )}
-                            {c.incomeAfterEndCount > 0 && (
-                                <div className="text-[11px] font-bold text-gray-500">
-                                    기간 종료({c.endMonth}) 이후 수익 {c.incomeAfterEndCount}건 {won(c.incomeAfterEnd)} — 공유 대상이 아닙니다.
-                                </div>
-                            )}
+
+                    {liveCollabs.map((c) => renderCollab(c, false))}
+
+                    {endedCollabs.length > 0 && (
+                        <div className="space-y-2 pt-1">
+                            <div className="text-[10px] font-bold text-gray-400">종료된 콜라보 ({endedCollabs.length})</div>
+                            {endedCollabs.map((c) => renderCollab(c, true))}
                         </div>
-                    ))}
+                    )}
                 </div>
             )}
 
