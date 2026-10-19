@@ -27,6 +27,25 @@ export const isConsultSchedule = (sched) =>
 export const EMPTY_CONSULT = { name: '', memo: '' };
 
 /** 목록에 보여줄 메모 첫 줄(길면 자른다). */
+// 저장 시각(초). Firestore Timestamp / Date / 없음 전부 받는다.
+const createdSec = (v) => {
+    if (!v) return 0;
+    if (typeof v.seconds === 'number') return v.seconds;
+    if (v instanceof Date) return v.getTime() / 1000;
+    if (typeof v.toDate === 'function') { try { return v.toDate().getTime() / 1000; } catch { return 0; } }
+    return 0;
+};
+
+/**
+ * 목록 정렬 — **최근 날짜가 맨 위**, 같은 날짜면 **최근에 작성한 것**이 위.
+ * 날짜는 'YYYY-MM-DD' 문자열이라 글자 비교로 충분하다.
+ */
+export const consultationSort = (a, b) => {
+    const d = String((b || {}).date || '').localeCompare(String((a || {}).date || ''));
+    if (d !== 0) return d;
+    return createdSec((b || {}).createdAt) - createdSec((a || {}).createdAt);
+};
+
 export const memoFirstLine = (memo, max = 40) => {
     const first = String(memo || '').split('\n').find((l) => l.trim()) || '';
     return first.length > max ? first.slice(0, max) + '…' : first;

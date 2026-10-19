@@ -10,7 +10,7 @@
 //   PhotoBadge   목록 줄의 📎 장수 배지.
 //   PhotoModal   📎 를 눌렀을 때 뜨는 창. 크게 보기 · 추가 · 한 장씩 삭제.
 //                잠긴 줄(정산 확정)은 readOnly 로 넘기면 보기만 된다.
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { FaCamera, FaPaperclip } from 'react-icons/fa';
 import { db } from '../firebase';
 import { listPhotos, addPhotos, deletePhoto } from '../utils/photos.js';
@@ -109,9 +109,19 @@ export function PhotoModal({ title, parentPath, parentId, uid, readOnly, onCount
         } finally { setBusy(false); }
     };
 
+    // ⚠️ 배경(바깥)을 눌러 닫을 때는 **누른 곳과 뗀 곳이 둘 다 배경**이어야 한다.
+    //    예전엔 뗀 곳만 봐서, 입력칸 안에서 글자를 드래그하다 손이 배경에서 떨어지면
+    //    '바깥 클릭' 으로 처리돼 **쓰던 내용이 그대로 날아갔다.**
+    const backdropDown = useRef(false);
+
     return (
         <div className="fixed inset-0 z-[60] flex items-start md:items-center justify-center bg-black/60 p-3 overflow-y-auto"
-            onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+            onMouseDown={(e) => { backdropDown.current = e.target === e.currentTarget; }}
+            onClick={(e) => {
+                const onBackdrop = e.target === e.currentTarget && backdropDown.current;
+                backdropDown.current = false;
+                if (onBackdrop) onClose();
+            }}>
             <div className="w-full max-w-3xl rounded-2xl bg-white p-4 shadow-xl space-y-3 my-6">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                     <h3 className="font-bold text-gray-800 text-sm truncate">{title || '사진'}</h3>

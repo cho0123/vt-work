@@ -280,42 +280,35 @@ export function SettlementTab({
                     <div className="text-xl font-extrabold text-gray-800 tracking-tight">
                         {formatCurrency(currentMonthTotalRevenue)}원
                     </div>
-                    {/* 재등록 / 진행 / 결제 세 줄.
+                    {/* 재등록 / 진행 / 결제 — 각각 **한 줄**로만 보여준다(설명 글·툴팁 없음).
+                        숫자와 계산 기준은 예전 그대로다.
                         · 재등록 = 그 달 재등록일(targetDate) 기준 결제 + 미수금. M/V 는 학생 수강료 비율로 나눈 추정값.
-                        · 진행   = 그 달 1일~기준일까지 **완료 + 결석** 수업(결석도 수강 횟수에서 차감된다).
-                                   스케쥴·단가로 정확히 M/V 가 갈린다.
-                        · 결제   = 그 달에 실제로 입금된 금액(입금일 기준). 결제 데이터에 M/V 구분이 없어 합계만 쓴다. */}
-                    <div className="mt-2 space-y-1 text-[10px] font-bold bg-gray-50 rounded-lg px-2 py-1.5">
-                        <div className="flex items-center gap-2 text-gray-400" title="그 달 재등록일 기준 결제 + 미수금 (M/V 는 학생 수강료 비율로 나눈 추정값)">
-                            <span className="w-8 shrink-0 text-gray-500">재등록</span>
-                            <span className="flex items-center gap-1">
-                                <div className="w-1.5 h-1.5 rounded-full bg-orange-400"></div>
-                                M {formatCurrency(currentMonthRevenueBreakdown.master)}
-                            </span>
-                            <span className="flex items-center gap-1">
-                                <div className="w-1.5 h-1.5 rounded-full bg-blue-400"></div>
-                                V {formatCurrency(currentMonthRevenueBreakdown.vocal)}
-                            </span>
+                        · 진행   = 그 달 1일~기준일까지 완료 + 결석 수업(결석도 수강 횟수에서 차감된다).
+                        · 결제   = 그 달에 실제로 입금된 금액(입금일 기준). 결제 데이터에 M/V 구분이 없어 합계만 쓴다.
+                        ⚠️ 카드 폭이 좁아도 줄바꿈하지 않게 whitespace-nowrap 으로 묶는다. */}
+                    <div className="mt-2 space-y-0.5 text-[10px] font-bold bg-gray-50 rounded-lg px-2 py-1.5 overflow-x-auto">
+                        <div className="flex items-center gap-1.5 whitespace-nowrap text-gray-500">
+                            <span className="w-7 shrink-0 text-gray-400">재등록</span>
+                            <span className="w-1.5 h-1.5 shrink-0 rounded-full bg-orange-400"></span>
+                            <span>M {formatCurrency(currentMonthRevenueBreakdown.master)}</span>
+                            <span className="text-gray-300">·</span>
+                            <span className="w-1.5 h-1.5 shrink-0 rounded-full bg-blue-400"></span>
+                            <span>V {formatCurrency(currentMonthRevenueBreakdown.vocal)}</span>
                         </div>
                         {currentMonthProgress && (
-                            <div className="flex items-center gap-2 text-gray-400" title={`1일 ~ ${currentMonthProgress.until} 완료 + 결석 수업 (결석도 수강 횟수에서 차감된다 · 아티스트는 금액에서 빼고 횟수만)`}>
-                                <span className="w-8 shrink-0 text-gray-500">진행</span>
-                                <span className="flex items-center gap-1">
-                                    <div className="w-1.5 h-1.5 rounded-full bg-orange-400"></div>
-                                    M {currentMonthProgress.mCount}회{currentMonthProgress.mArtist ? `+${currentMonthProgress.mArtist}` : ''} · {formatCurrency(currentMonthProgress.mAmount)}
-                                </span>
-                                <span className="flex items-center gap-1">
-                                    <div className="w-1.5 h-1.5 rounded-full bg-blue-400"></div>
-                                    V {currentMonthProgress.vCount}회{currentMonthProgress.vArtist ? `+${currentMonthProgress.vArtist}` : ''} · {formatCurrency(currentMonthProgress.vAmount)}
-                                </span>
-                                <span className="text-gray-300">완료+결석</span>
+                            <div className="flex items-center gap-1.5 whitespace-nowrap text-gray-500">
+                                <span className="w-7 shrink-0 text-gray-400">진행</span>
+                                <span className="w-1.5 h-1.5 shrink-0 rounded-full bg-orange-400"></span>
+                                <span>M({currentMonthProgress.mCount}{currentMonthProgress.mArtist ? `+${currentMonthProgress.mArtist}` : ''}) {formatCurrency(currentMonthProgress.mAmount)}</span>
+                                <span className="text-gray-300">·</span>
+                                <span className="w-1.5 h-1.5 shrink-0 rounded-full bg-blue-400"></span>
+                                <span>V({currentMonthProgress.vCount}{currentMonthProgress.vArtist ? `+${currentMonthProgress.vArtist}` : ''}) {formatCurrency(currentMonthProgress.vAmount)}</span>
                             </div>
                         )}
                         {currentMonthPaid && (
-                            <div className="flex items-center gap-2 text-gray-400" title="그 달에 실제로 입금된 금액 (결제 데이터에 마스터/보컬 구분이 없어 합계만 표시)">
-                                <span className="w-8 shrink-0 text-gray-500">결제</span>
-                                <span>{formatCurrency(currentMonthPaid.amount)}원 · {currentMonthPaid.count}건</span>
-                                <span className="text-gray-300">M/V 구분 없음</span>
+                            <div className="flex items-center gap-1.5 whitespace-nowrap text-gray-500">
+                                <span className="w-7 shrink-0 text-gray-400">결제</span>
+                                <span>{formatCurrency(currentMonthPaid.amount)} ({currentMonthPaid.count}건)</span>
                             </div>
                         )}
                     </div>

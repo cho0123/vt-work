@@ -5,7 +5,7 @@
 // 사진은 다른 사진과 같은 방식(consultations/{id}/photos 에 한 장씩, 문서에는 장수만).
 //
 // ⚠️ 새로 쓸 때는 문서가 아직 없으므로, 저장이 끝난 뒤에 사진을 올린다.
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { collection, addDoc, doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { PhotoPicker, PhotoBadge, PhotoModal } from './PhotoAttach.jsx';
@@ -87,9 +87,19 @@ export function ConsultationModal({ date, scheduleId, consult, uid, startEdit, o
         }
     };
 
+    // ⚠️ 배경(바깥)을 눌러 닫을 때는 **누른 곳과 뗀 곳이 둘 다 배경**이어야 한다.
+    //    예전엔 뗀 곳만 봐서, 입력칸 안에서 글자를 드래그하다 손이 배경에서 떨어지면
+    //    '바깥 클릭' 으로 처리돼 **쓰던 내용이 그대로 날아갔다.**
+    const backdropDown = useRef(false);
+
     return (
         <div className="fixed inset-0 z-[55] flex items-start md:items-center justify-center bg-gray-900/50 backdrop-blur-sm p-3 overflow-y-auto"
-            onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+            onMouseDown={(e) => { backdropDown.current = e.target === e.currentTarget; }}
+            onClick={(e) => {
+                const onBackdrop = e.target === e.currentTarget && backdropDown.current;
+                backdropDown.current = false;
+                if (onBackdrop) onClose();
+            }}>
             <div className="w-full max-w-lg my-6 rounded-2xl bg-white p-5 shadow-xl space-y-4">
                 <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-2 min-w-0">

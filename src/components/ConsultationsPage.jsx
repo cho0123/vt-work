@@ -1,7 +1,7 @@
 // 상담일지 목록 — 스케쥴 화면 위에 전체 폭으로 열리는 전환 화면.
 //
 // 스케쥴 탭의 '상담일지' 버튼으로 열고, 위쪽 '← 스케쥴로' 로 돌아간다.
-// 전체 상담일지를 **오래된 날짜부터** 보여주고 25건씩 끊는다.
+// 전체 상담일지를 **최근 날짜부터** 보여주고 25건씩 끊는다(같은 날짜면 최근 작성이 위).
 // 연결된 일정이 지워진 상담일지도 그대로 보이고 '일정 없음' 으로 표시한다.
 //
 // 조회는 date 한 가지로만 정렬한다(한 필드 정렬이라 복합 색인이 필요 없다).
@@ -9,7 +9,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { collection, getDocs, query, orderBy } from 'firebase/firestore';
 import { db } from '../firebase';
 import { FaArrowLeft, FaPaperclip } from 'react-icons/fa';
-import { memoFirstLine } from '../domain/consultation.js';
+import { memoFirstLine, consultationSort } from '../domain/consultation.js';
 import { ConsultationModal } from './ConsultationModal.jsx';
 
 const PER_PAGE = 25;
@@ -24,8 +24,9 @@ export function ConsultationsPage({ user, scheduleIds, onBack }) {
         let alive = true;
         const load = async () => {
             try {
+                // 조회는 date 한 가지로만 정렬하고(복합 색인 불필요), 최근 순 정리는 메모리에서 한다.
                 const snap = await getDocs(query(collection(db, 'consultations'), orderBy('date')));
-                if (alive) setRows(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+                if (alive) setRows(snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort(consultationSort));
             } catch (e) {
                 if (alive) { setRows([]); setErr('상담일지를 불러오지 못했습니다: ' + (e && e.message ? e.message : '')); }
             }
@@ -36,9 +37,11 @@ export function ConsultationsPage({ user, scheduleIds, onBack }) {
 
     const list = useMemo(() => rows || [], [rows]);
     const totalPages = Math.max(1, Math.ceil(list.length / PER_PAGE));
+    // 지우다 보면 마지막 페이지가 사라질 수 있다 — 그때는 마지막 페이지를 보여준다.
+    const safePage = Math.min(page, totalPages);
     const pageRows = useMemo(
-        () => list.slice((page - 1) * PER_PAGE, page * PER_PAGE),
-        [list, page]
+        () => list.slice((safePage - 1) * PER_PAGE, safePage * PER_PAGE),
+        [list, safePage]
     );
 
     // 저장·삭제 뒤 목록을 메모리에서 맞춘다(다시 읽지 않는다).
@@ -47,7 +50,7 @@ export function ConsultationsPage({ user, scheduleIds, onBack }) {
             const base = prev || [];
             if (!saved) return base.filter((r) => !open || r.id !== open.id);
             const without = base.filter((r) => r.id !== saved.id);
-            return [...without, saved].sort((a, b) => String(a.date).localeCompare(String(b.date)));
+            return [...without, saved].sort(consultationSort);
         });
     };
 
@@ -60,7 +63,7 @@ export function ConsultationsPage({ user, scheduleIds, onBack }) {
                 </button>
                 <h2 className="text-lg font-extrabold text-gray-800">상담일지</h2>
                 <span className="text-xs font-medium text-gray-400">
-                    {rows === null ? '불러오는 중...' : `전체 ${list.length}건 · 오래된 순`}
+                    {rows === null ? '불러오는 중...' : `전체 ${list.length}건 · 최근 순`}
                 </span>
             </div>
 
@@ -104,10 +107,10 @@ export function ConsultationsPage({ user, scheduleIds, onBack }) {
 
             {totalPages > 1 && (
                 <div className="shrink-0 flex justify-center items-center gap-2 pt-3">
-                    <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}
+                    <button onClick={() => setPage(Math.max(1, safePage - 1))} disabled={safePage === 1}
                         className="rounded-full px-3 py-1.5 text-sm font-bold text-gray-600 ring-1 ring-gray-200 disabled:opacity-40 hover:bg-gray-50">이전</button>
-                    <span className="px-2 text-sm text-gray-500">{page} / {totalPages}</span>
-                    <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page === totalPages}
+                    <span className="px-2 text-sm text-gray-500">{safePage} / {totalPages}</span>
+                    <button onClick={() => setPage(Math.min(totalPages, safePage + 1))} disabled={safePage === totalPages}
                         className="rounded-full px-3 py-1.5 text-sm font-bold text-gray-600 ring-1 ring-gray-200 disabled:opacity-40 hover:bg-gray-50">다음</button>
                 </div>
             )}
