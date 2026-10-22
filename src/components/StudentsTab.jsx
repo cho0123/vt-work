@@ -58,6 +58,7 @@ export function StudentsTab({
     setExpandedStudentId,
     setViewingStudentAtt,
     calculateRotationStarts,
+    cycleAmountFor,
     toggleStatus,
     handleDelete,
     handleEditClick,
@@ -248,11 +249,15 @@ export function StudentsTab({
                                 let totalPaidAmount = 0;
                                 let totalUnpaidAmount = 0;
                                 if (isExpanded) {
+                                    // 아직 안 받은 청구는 저장값이 아니라 **그 사이클 수업들의 단가 합**으로 보여준다.
+                                    // (저장값은 안 고친다 — 사이클 시작일이 아니면 저장값 그대로)
+                                    const unpaidAmountOf = (item) =>
+                                        cycleAmountFor?.(student, item.targetDate) ?? item.amount ?? totalAmount;
                                     const unpaidRows = unpaidItems.map((item) => ({
                                         id: item.id,
                                         type: 'unpaid',
                                         paymentDate: '-',
-                                        amount: item.amount || totalAmount,
+                                        amount: unpaidAmountOf(item),
                                         paymentMethod: 'unpaid',
                                         targetDate: item.targetDate,
                                         isCashReceipt: false,
@@ -277,7 +282,7 @@ export function StudentsTab({
                                         0
                                     );
                                     totalUnpaidAmount = unpaidItems.reduce(
-                                        (acc, cur) => acc + Number(cur.amount || 0),
+                                        (acc, cur) => acc + Number(unpaidAmountOf(cur) || 0),
                                         0
                                     );
                                 }
@@ -876,6 +881,15 @@ export function StudentsTab({
                                                                                           ? '누적금 사용'
                                                                                           : pay.paymentMethod;
                                                                             const extra = Number(pay.extraAmount) || 0;
+                                                                            // 결제 완료 건은 **저장된 금액을 그대로 둔다.**
+                                                                            // 그 사이클 수업들의 단가 합과 다르면 차액만 작게 알려준다.
+                                                                            const cycleSum = isUnpaidItem
+                                                                                ? null
+                                                                                : cycleAmountFor?.(student, pay.targetDate);
+                                                                            const gap =
+                                                                                cycleSum == null
+                                                                                    ? 0
+                                                                                    : Number(pay.amount || 0) - cycleSum;
                                                                             return (
                                                                                 <tr
                                                                                     key={
@@ -911,7 +925,16 @@ export function StudentsTab({
                                                                                                 )}
                                                                                                 원
                                                                                             </span>
-                                                                                            {!isUnpaidItem && extra > 0 && (
+                                                                                            {!isUnpaidItem && gap !== 0 && (
+                                                                                <span
+                                                                                    className="inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-bold leading-none text-amber-700"
+                                                                                    title={`이 사이클 수업들의 단가 합은 ${formatCurrency(cycleSum)}원입니다`}
+                                                                                >
+                                                                                    차액 {gap > 0 ? '+' : '-'}
+                                                                                    {formatCurrency(Math.abs(gap))}
+                                                                                </span>
+                                                                            )}
+                                                                            {!isUnpaidItem && extra > 0 && (
                                                                                                 <span
                                                                                                     className="inline-flex items-center rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-bold leading-none text-sky-700"
                                                                                                     title="추가결제(누적 입금으로 적립됨)"

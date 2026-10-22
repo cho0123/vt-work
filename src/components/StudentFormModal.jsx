@@ -15,6 +15,7 @@ export function StudentFormModal({
     handleRateChange,
     handleSubmit,
     calculateTotalAmount,
+    cycleProgress,
     saveNotice,
     clearSaveNotice,
 }) {
@@ -188,6 +189,16 @@ export function StudentFormModal({
                                 로테이션 변경
                             </button>
                         </div>
+
+                        {/* 지금 사이클이 진행 중이면 알려준다(막지는 않는다).
+                            사이클은 변경일에 닫지 않고 남은 횟수를 채운 뒤 끝난다. */}
+                        {cycleProgress && (
+                            <div className="mb-2 rounded-xl bg-blue-50 px-3 py-2 text-[11px] font-semibold leading-relaxed text-blue-700">
+                                현재 사이클 {cycleProgress.done}/{cycleProgress.size} 진행 중 — 남은{' '}
+                                {Math.max(0, cycleProgress.size - cycleProgress.done)}회를 채운 뒤 새 사이클이
+                                시작됩니다.
+                            </div>
+                        )}
 
                         {/* 사용법 안내 (수업 구성을 도중에 바꾼 학생 기록법) */}
                         <div className="mb-2 rounded-xl bg-orange-50/60 px-3 py-2 text-[11px] leading-relaxed text-gray-500">

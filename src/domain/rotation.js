@@ -64,16 +64,62 @@ function reqAtFactory(student, isMaster) {
     };
 }
 
+/** 한 종류의 '진행 중인 사이클' 을 다른 종류가 그대로 이어받는다. (아래 설명 참고) */
+function handoverCycle(from, to) {
+    to.cycleIndex = from.cycleIndex;
+    to.filled = from.filled;
+    to.size = from.size;
+    from.filled = 0;
+    from.size = 0;
+}
+
+/**
+ * 한 종류를 한 구간 범위에서 배정한다. 진행 상태(st)는 구간을 넘어 이어진다.
+ * st = { cycleIndex, filled, size } — size 는 그 사이클이 '시작될 때' 의 요구 횟수다.
+ */
+function runSegment(list, from, to, req, perLesson, cycleStart, st) {
+    let i = from;
+    while (i < list.length && (to === null || list[i].date < to)) {
+        const s = list[i];
+        if (st.filled === 0) {
+            st.size = req; // 사이클 크기는 시작 시점 설정으로 고정한다
+            cycleStart[st.cycleIndex] = s.date;
+        }
+        perLesson.set(s.id, { cycleIndex: st.cycleIndex, posInCycle: st.filled, size: st.size });
+        st.filled += s._weight;
+        if (st.size > 0 && st.filled >= st.size) {
+            st.filled -= st.size;
+            st.cycleIndex++;
+            // 이월분(half 등)이 있으면 이 수업이 다음 사이클에도 걸치므로 이 날짜가 시작.
+            // 딱 떨어지게 끝났으면 다음 사이클 시작은 '실제 다음 수업'이 와야 정해진다.
+            // (임시값을 남기면 다음 수업 등록 전에 마지막 수업에 재등록이 잘못 뜬다 — 전영림 사례)
+            if (st.filled > 0) {
+                st.size = req;
+                cycleStart[st.cycleIndex] = s.date;
+            } else {
+                st.size = 0;
+            }
+        }
+        i++;
+    }
+    return i;
+}
+
 /**
  * 시점별 이력(scheduleHistory) 학생의 사이클 배정 — 마스터·보컬을 함께 배정한다.
  *
- * 구간(from ~ 다음 from 전)마다 그 구간의 설정으로 각 타입을 독립 배정하되,
- * **구간이 바뀌면 두 타입 모두 '그때까지 둘 중 더 많이 진행된 번호 + 1'부터 같이 시작한다.**
- * 안 그러면 한 타입만 쉬는 구간에서 번호가 어긋난다 — 전영림: 보컬만 하는 구간(R15)이
- * 끝나고 마스터가 재개되자, 마스터는 자기 기준 15번째라 이미 지난 R15를 또 썼다.
- * 구간 경계에서 진행 중이던 사이클은 그대로 닫는다(다음 구간은 새 번호로 새 사이클).
+ * 구간(from ~ 다음 from 전)마다 그 구간의 설정으로 각 타입을 배정하되, 경계에서 이렇게 한다.
  *
- * @returns { mPerLesson, vPerLesson: Map(id -> {cycleIndex, posInCycle}), mCycleStart, vCycleStart: string[] }
+ * 1) **진행 중이던 사이클은 닫지 않는다.** 정해진 횟수(시작 시점 설정)를 채운 뒤에 끝난다.
+ *    설정을 사이클 한가운데에서 바꾸면 그 사이클이 거기서 끝나 **4회짜리가 3회 만에 청구**됐다
+ *    (이종민 2026-09/10 사례). 사이클은 번호도 횟수도 그대로 이어간다.
+ * 2) 더 이상 안 하는 종류에 진행 중인 사이클이 남아 있으면 **이제 하는 종류가 이어받는다**
+ *    (마스터 3회 하다 보컬로 바꾸면 → 보컬 1회로 그 사이클을 채운다 = 마스터3+보컬1 = 한 사이클).
+ * 3) 진행 중이 아닌(filled 0) 종류만 '둘 중 더 많이 진행된 번호' 로 맞춘다.
+ *    안 그러면 한 타입만 쉬는 구간에서 번호가 어긋난다 — 전영림: 보컬만 하는 구간(R15)이
+ *    끝나고 마스터가 재개되자, 마스터는 자기 기준 15번째라 이미 지난 R15를 또 썼다.
+ *
+ * @returns { mPerLesson, vPerLesson: Map(id -> {cycleIndex, posInCycle, size}), mCycleStart, vCycleStart: string[] }
  */
 export function assignCyclesTimeline(mScheds, vScheds, student) {
     const hist = student.scheduleHistory;
@@ -81,7 +127,8 @@ export function assignCyclesTimeline(mScheds, vScheds, student) {
     const vPerLesson = new Map();
     const mCycleStart = [];
     const vCycleStart = [];
-    let base = 0; // 이번 구간에서 시작할 사이클 번호 (마·보 공통)
+    const M = { cycleIndex: 0, filled: 0, size: 0 };
+    const V = { cycleIndex: 0, filled: 0, size: 0 };
     let mi = 0;
     let vi = 0;
 
@@ -89,35 +136,16 @@ export function assignCyclesTimeline(mScheds, vScheds, student) {
         const to = seg + 1 < hist.length ? hist[seg + 1].from : null; // null = 끝까지
         const { reqM, reqV } = computeRequirementOf(hist[seg].schedule);
 
-        // 한 타입을 이 구간 범위에서 배정한다.
-        const run = (list, from, req, perLesson, cycleStart) => {
-            let i = from;
-            let cycleIndex = base;
-            let filled = 0;
-            while (i < list.length && (to === null || list[i].date < to)) {
-                const s = list[i];
-                if (filled === 0) cycleStart[cycleIndex] = s.date;
-                perLesson.set(s.id, { cycleIndex, posInCycle: filled });
-                filled += s._weight;
-                if (req > 0 && filled >= req) {
-                    filled -= req;
-                    cycleIndex++;
-                    // 이월분(half 등)이 있으면 이 수업이 다음 사이클에도 걸치므로 이 날짜가 시작.
-                    // 딱 떨어지게 끝났으면 다음 사이클 시작은 '실제 다음 수업'이 와야 정해진다.
-                    // (임시값을 남기면 다음 수업 등록 전에 마지막 수업에 재등록이 잘못 뜬다 — 전영림 사례)
-                    if (filled > 0) cycleStart[cycleIndex] = s.date;
-                }
-                i++;
-            }
-            // 진행 중(filled>0)이던 사이클도 '시작된' 것으로 세어 다음 구간 번호에 반영한다.
-            return { next: i, nextBase: filled > 0 ? cycleIndex + 1 : cycleIndex };
-        };
+        // (2) 안 하는 종류의 진행 중 사이클을 하는 종류가 이어받는다.
+        if (reqM === 0 && M.filled > 0 && reqV > 0 && V.filled === 0) handoverCycle(M, V);
+        else if (reqV === 0 && V.filled > 0 && reqM > 0 && M.filled === 0) handoverCycle(V, M);
+        // (3) 쉬고 있던(진행 중이 아닌) 종류만 번호를 맞춘다.
+        const sync = Math.max(M.cycleIndex, V.cycleIndex);
+        if (M.filled === 0) M.cycleIndex = sync;
+        if (V.filled === 0) V.cycleIndex = sync;
 
-        const rm = run(mScheds, mi, reqM, mPerLesson, mCycleStart);
-        const rv = run(vScheds, vi, reqV, vPerLesson, vCycleStart);
-        mi = rm.next;
-        vi = rv.next;
-        base = Math.max(rm.nextBase, rv.nextBase);
+        mi = runSegment(mScheds, mi, to, reqM, mPerLesson, mCycleStart, M);
+        vi = runSegment(vScheds, vi, to, reqV, vPerLesson, vCycleStart, V);
     }
     return { mPerLesson, vPerLesson, mCycleStart, vCycleStart };
 }

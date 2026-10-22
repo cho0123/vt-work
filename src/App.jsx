@@ -97,7 +97,9 @@ import {
     sortByDateTime,
     scheduleForDate,
     computeRequirementOf,
+    splitByType,
 } from './domain/rotation.js';
+import { cycleAmountsOf } from './domain/cycleAmount.js';
 import { printStudentRecordPdf } from './utils/studentRecordDoc.js';
 import { fixedScheduleOccursOn } from './domain/fixedRecurrence.js';
 // 날짜 표시·24시간 판정은 보티즈 탭도 같이 쓴다(utils/datetime.js 한 벌).
@@ -905,7 +907,15 @@ function App() {
             }
             (student.unpaidList || [])
                 .filter((item) => item.targetDate && item.targetDate.startsWith(yearMonth))
-                .forEach((item) => allUnpaid.push({ ...item, studentName: student.name, studentId: student.id }));
+                .forEach((item) =>
+                    allUnpaid.push({
+                        ...item,
+                        // 아직 안 받은 청구는 저장값 대신 사이클 단가 합으로 보여준다(저장값은 안 고친다).
+                        amount: cycleAmountFor(student, item.targetDate) ?? item.amount,
+                        studentName: student.name,
+                        studentId: student.id,
+                    })
+                );
         }
 
         allPayments.sort((a, b) => new Date(a.targetDate) - new Date(b.targetDate));
@@ -2023,7 +2033,11 @@ function App() {
             }));
         const unpaid = (student.unpaidList || [])
             .filter((u) => u.targetDate)
-            .map((u) => ({ targetDate: u.targetDate, amount: u.amount, isUnpaid: true }));
+            .map((u) => ({
+                targetDate: u.targetDate,
+                amount: cycleAmountFor(student, u.targetDate) ?? u.amount,
+                isUnpaid: true,
+            }));
         const merged = [...paid, ...unpaid].sort((a, b) => a.targetDate.localeCompare(b.targetDate));
 
         if (merged.length === 0) {
@@ -3432,7 +3446,9 @@ function App() {
             return;
 
         try {
-            const amount = calculateTotalAmount(student);
+            // 청구 금액 = 그 사이클에 들어간 수업들의 단가 합.
+            // 사이클을 못 찾으면(예외적인 날짜) 예전처럼 4주 계획 금액을 쓴다.
+            const amount = cycleAmountFor(student, targetDateStr) ?? calculateTotalAmount(student);
             const newItem = {
                 id: Date.now().toString(),
                 targetDate: targetDateStr,
@@ -3466,6 +3482,69 @@ function App() {
         }
         return m;
     }, [attSchedules]);
+
+    // 금액 계산용 수업 묶음 — 진행된 것(완료·결석) + 아직 안 한 '예정' 수업.
+    // 회차 계산에 쓰는 목록에 예정 수업만 덧붙인 것이라, 지난 사이클의 묶음은 그대로다.
+    // (지난 날짜인데 완료/결석 표시가 없는 수업은 '안 한 수업'이므로 넣지 않는다)
+    const moneySchedsByStudent = useMemo(() => {
+        const todayStr = formatDateLocal(new Date());
+        const m = new Map();
+        for (const s of attSchedules) {
+            if (!s.studentId || !s.date || s.date === 'FIXED') continue;
+            const done = s.status === 'completed' || s.status === 'absent';
+            const planned = !s.status && s.date >= todayStr;
+            if (!done && !planned) continue;
+            const arr = m.get(s.studentId);
+            if (arr) arr.push(s);
+            else m.set(s.studentId, [s]);
+        }
+        return m;
+    }, [attSchedules]);
+
+    // 사이클(로테이션 한 바퀴)마다 '그 사이클에 들어간 수업의 단가 합'.
+    // 재등록 청구 금액과 미결제 표시 금액이 이 값을 쓴다. (domain/cycleAmount.js)
+    const cycleAmountCache = useMemo(() => {
+        const m = new Map();
+        for (const st of students) {
+            const buffer = rotationBufferDate(st.firstDate, formatDateLocal);
+            const list = (moneySchedsByStudent.get(st.id) || []).filter((x) => x.date >= buffer);
+            m.set(st.id, cycleAmountsOf(list, st));
+        }
+        return m;
+    }, [students, moneySchedsByStudent]);
+
+    /**
+     * 재등록일(사이클 시작일)의 청구 금액 = 그 사이클 수업들의 단가 합.
+     * 그 날짜가 사이클 시작이 아니면(월정산 청구 등) null — 그때는 저장된 금액을 그대로 쓴다.
+     */
+    const cycleAmountFor = (student, targetDate) => {
+        if (!student || !targetDate) return null;
+        const map = cycleAmountCache.get(student.id);
+        if (!map) return null;
+        const info = map.get(String(targetDate).replace(/\./g, '-'));
+        return info ? info.amount : null;
+    };
+
+    /**
+     * 지금 진행 중인(아직 다 못 채운) 사이클이 몇 회째인지. 없으면 null.
+     * 정보수정 팝업에서 '[로테이션 변경]을 지금 누르면 어떻게 되는지' 안내에만 쓴다.
+     */
+    const cycleProgressOf = (student) => {
+        if (!student || !student.id) return null;
+        const buffer = rotationBufferDate(student.firstDate, formatDateLocal);
+        const list = sortByDateTime((attSchedulesByStudent.get(student.id) || []).filter((s) => s.date >= buffer));
+        if (!list.length) return null;
+        const lastIdx = getRotationInfo(list, list[list.length - 1].id, student).index;
+        if (lastIdx < 0) return null;
+        const inCycle = list.filter((s) => getRotationInfo(list, s.id, student).index === lastIdx);
+        if (!inCycle.length) return null;
+        const { mScheds, vScheds } = splitByType(inCycle);
+        const done = [...mScheds, ...vScheds].reduce((a, s) => a + s._weight, 0);
+        const { reqM, reqV } = computeRequirementOf(scheduleForDate(student, inCycle[0].date));
+        const size = reqM + reqV;
+        if (size <= 0 || done >= size) return null; // 진행 중인 사이클이 없다
+        return { done, size, start: inCycle[0].date };
+    };
 
     // 학생별 로테이션 시작일을 미리 계산해 둔다.
     // 학생 목록이나 스케쥴이 실제로 바뀔 때만 돌기 때문에, 검색어를 치거나 다른 곳을
@@ -3754,6 +3833,7 @@ function App() {
                     {/* ----- 학생 관리 탭 (기존 유지) ----- */}
                     {activeTab === 'students' && (
                         <StudentsTab
+                            cycleAmountFor={cycleAmountFor}
                             students={students}
                             filteredStudents={filteredStudents}
                             currentItems={currentItems}
@@ -3945,6 +4025,7 @@ function App() {
                     handleRateChange={handleRateChange}
                     handleSubmit={handleSubmit}
                     calculateTotalAmount={calculateTotalAmount}
+                    cycleProgress={editingId ? cycleProgressOf(students.find((x) => x.id === editingId)) : null}
                     saveNotice={studentSaveNotice}
                     clearSaveNotice={() => setStudentSaveNotice('')}
                 />
