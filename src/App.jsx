@@ -3526,6 +3526,19 @@ function App() {
     };
 
     /**
+     * 그 사이클 도중에 로테이션(주간 설정)이 바뀌었는지.
+     * 결제 완료 건의 '차액' 표시를 **설정이 바뀐 사이클에만** 띄우려고 쓴다.
+     * (옛 할인·부분결제로 생긴 차액에는 안 띄운다)
+     */
+    const cycleMixedFor = (student, targetDate) => {
+        if (!student || !targetDate) return false;
+        const map = cycleAmountCache.get(student.id);
+        if (!map) return false;
+        const info = map.get(String(targetDate).replace(/\./g, '-'));
+        return !!(info && info.changedMidCycle);
+    };
+
+    /**
      * 지금 진행 중인(아직 다 못 채운) 사이클이 몇 회째인지. 없으면 null.
      * 정보수정 팝업에서 '[로테이션 변경]을 지금 누르면 어떻게 되는지' 안내에만 쓴다.
      */
@@ -3834,6 +3847,7 @@ function App() {
                     {activeTab === 'students' && (
                         <StudentsTab
                             cycleAmountFor={cycleAmountFor}
+                            cycleMixedFor={cycleMixedFor}
                             students={students}
                             filteredStudents={filteredStudents}
                             currentItems={currentItems}

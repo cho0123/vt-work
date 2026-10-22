@@ -8,7 +8,7 @@
 import {
     getRotationInfo, findRotationStarts, computeRequirement, sortByDateTime,
 } from '../src/domain/rotation.js';
-import { cycleAmountsOf } from '../src/domain/cycleAmount.js';
+import { cycleAmountsOf, changedMidCycle } from '../src/domain/cycleAmount.js';
 
 let pass = 0;
 let fail = 0;
@@ -98,6 +98,21 @@ const amounts = (list, st) => [...cycleAmountsOf(list, st)].sort().map(([d, v]) 
     const list = sortByDateTime([L('m1', '2026-09-01', 'master'), L('v1', '2026-09-02', 'vocal')]);
     // 마스터 1 + 보컬 1 만 잡혀 있다 → 남은 마스터3·보컬3 은 정가 1회분으로.
     eq('진행중 — 남은 횟수는 정가 1회분', amounts(list, st), ['2026-09-01:1600000']);
+}
+
+// -- 5. '차액' 배지는 사이클 도중에 설정이 바뀐 경우에만 --
+{
+    const 중간변경 = {
+        scheduleHistory: [
+            { from: '2026-01-01', schedule: weeks(1, 0) },
+            { from: '2026-09-28', schedule: weeks(0, 1) },
+        ],
+    };
+    const 변경없음 = { schedule: weeks(1, 0) };
+    eq('배지 - 사이클 도중에 바뀌면 표시', changedMidCycle(중간변경, '2026-09-10', '2026-10-02'), true);
+    eq('배지 - 변경일이 사이클 시작일이면 표시 안 함', changedMidCycle(중간변경, '2026-09-28', '2026-10-20'), false);
+    eq('배지 - 사이클이 끝난 뒤 바뀌면 표시 안 함', changedMidCycle(중간변경, '2026-08-11', '2026-09-01'), false);
+    eq('배지 - 이력이 없는 학생(옛 할인 등)은 표시 안 함', changedMidCycle(변경없음, '2026-09-10', '2026-10-02'), false);
 }
 
 console.log(`\n${pass}/${pass + fail} 통과`);

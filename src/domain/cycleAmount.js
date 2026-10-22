@@ -49,13 +49,25 @@ export function planUnitsAt(student, dateStr) {
 }
 
 /**
+ * 그 사이클 **도중에** 주간 설정이 바뀌었는지.
+ * 사이클 시작 **뒤** 부터 마지막 수업까지 사이에 변경일(scheduleHistory.from)이 있으면 true.
+ * 변경일이 사이클 시작일과 같으면 깔끔한 경계이므로 false 다.
+ * (금액이 정가와 다를 때 '차액' 을 알릴지 정하는 데만 쓴다 — 계산에는 안 쓴다)
+ */
+export function changedMidCycle(student, startDate, lastDate) {
+    const hist = student?.scheduleHistory;
+    if (!Array.isArray(hist) || hist.length < 2) return false;
+    return hist.some((h) => h.from && h.from > startDate && h.from <= lastDate);
+}
+
+/**
  * 사이클별 금액.
  *
  * @param scheds   그 학생의 수업 목록 — 진행된 것(완료·결석) + 아직 안 한 예정 수업.
  *                 연기 원본(reschedule*)처럼 회차에서 빠지는 것은 **넣지 말 것**
  *                 (회차 계산과 같은 목록이어야 사이클이 어긋나지 않는다).
  * @param student  단가(rates)·설정(schedule/scheduleHistory)을 가진 학생
- * @returns Map(사이클 시작일 'YYYY-MM-DD' -> { amount, lessonCount, size, remaining, planAmount })
+ * @returns Map(사이클 시작일 'YYYY-MM-DD' -> { amount, lessonCount, size, remaining, planAmount, changedMidCycle })
  *          amount = 들어 있는 수업들의 단가 합 + 아직 안 잡힌 남은 횟수 × 종류별 1회분
  */
 export function cycleAmountsOf(scheds, student) {
@@ -78,6 +90,7 @@ export function cycleAmountsOf(scheds, student) {
 
     for (const lessons of groups.values()) {
         const start = lessons.reduce((m, s) => (s.date < m ? s.date : m), lessons[0].date);
+        const last = lessons.reduce((m, s) => (s.date > m ? s.date : m), lessons[0].date);
         const u = planUnitsAt(student, start); // 사이클 크기·단가는 시작 시점 설정 기준
 
         let done = 0;
@@ -108,6 +121,7 @@ export function cycleAmountsOf(scheds, student) {
             size: u.size,
             remaining: remainTotal,
             planAmount: u.planAmount,
+            changedMidCycle: changedMidCycle(student, start, last),
         });
     }
     return out;

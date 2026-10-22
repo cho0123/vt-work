@@ -59,6 +59,7 @@ export function StudentsTab({
     setViewingStudentAtt,
     calculateRotationStarts,
     cycleAmountFor,
+    cycleMixedFor,
     toggleStatus,
     handleDelete,
     handleEditClick,
@@ -882,14 +883,20 @@ export function StudentsTab({
                                                                                           : pay.paymentMethod;
                                                                             const extra = Number(pay.extraAmount) || 0;
                                                                             // 결제 완료 건은 **저장된 금액을 그대로 둔다.**
-                                                                            // 그 사이클 수업들의 단가 합과 다르면 차액만 작게 알려준다.
+                                                                            // 단가 합과 다르면 차액을 알리되, **그 사이클 도중에 로테이션이
+                                                                            // 바뀐 경우에만** 띄운다. (옛 할인·부분결제로 생긴 차액까지
+                                                                            // 띄우면 지난 기록에 경고가 잔뜩 붙는다)
                                                                             const cycleSum = isUnpaidItem
                                                                                 ? null
                                                                                 : cycleAmountFor?.(student, pay.targetDate);
-                                                                            const gap =
+                                                                            const gapRaw =
                                                                                 cycleSum == null
                                                                                     ? 0
                                                                                     : Number(pay.amount || 0) - cycleSum;
+                                                                            const gap =
+                                                                                gapRaw !== 0 && cycleMixedFor?.(student, pay.targetDate)
+                                                                                    ? gapRaw
+                                                                                    : 0;
                                                                             return (
                                                                                 <tr
                                                                                     key={
