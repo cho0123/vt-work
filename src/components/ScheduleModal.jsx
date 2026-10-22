@@ -23,6 +23,7 @@ export function ScheduleModal({
     schedules,
     historySchedules,
     movingSchedule,
+    handleStartMove,
     setMovingSchedule,
     isScheduleLocked,
     isWeekLocked,
@@ -639,14 +640,10 @@ export function ScheduleModal({
                                         </button>
                                     ) : (
                                         <button
-                                            onClick={() => {
-                                                setMovingSchedule({
-                                                    ...scheduleForm,
-                                                    id: selectedSlot.id,
-                                                    status: scheduleForm.status,
-                                                });
-                                                setIsScheduleModalOpen(false);
-                                            }}
+                                            /* 대기 상태 만들기는 App 의 handleStartMove 한 곳에서 한다.
+                                               여기서 폼으로 직접 만들면 폼과 문서번호가 서로 다른
+                                               스케쥴에서 나올 수 있었다(이동 복제 사고). */
+                                            onClick={handleStartMove}
                                             disabled={isWeekLocked || isScheduleLocked}
                                             className="flex-1 rounded-xl bg-orange-400 px-3 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:bg-orange-500 active:scale-95 disabled:bg-gray-200 disabled:text-gray-400 disabled:shadow-none disabled:active:scale-100"
                                         >

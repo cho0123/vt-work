@@ -504,6 +504,10 @@ function App() {
     const [settlementUnpaid, setSettlementUnpaid] = useState([]);
     const [monthlySchedules, setMonthlySchedules] = useState([]); // [NEW] 정산용 월별 스케줄 데이터
     const [movingSchedule, setMovingSchedule] = useState(null); // [NEW] 일정 이동(보류) 상태
+    // 지금 팝업에 띄운 '진짜' 스케쥴 문서 한 건(유령·빈 칸이면 null).
+    // 이동은 반드시 이 문서 하나만 대상으로 한다 — 폼 내용과 문서 번호가 서로 다른
+    // 스케쥴에서 나오는 일이 없게 하려는 것이다(아래 handleStartMove 참고).
+    const [openedSchedule, setOpenedSchedule] = useState(null);
     const [expenses, setExpenses] = useState([]);
     const [settlementMemo, setSettlementMemo] = useState('');
     const [studentMemo, setStudentMemo] = useState(''); // [NEW] 학생관리 탭 메모
@@ -2102,13 +2106,31 @@ function App() {
     const handleSlotClick = async (dateStr, hourStr, dayOfWeek, existingItem = null, gridType = 'master') => {
         const editingName = existingItem ? existingItem.studentName : null;
 
+        // [FIX] 이동 대기 중에 '다른 진짜 스케쥴' 을 누르면 앞의 대기를 완전히 해제하고,
+        // 새로 누른 그 스케쥴만 다룬다.
+        // 예전엔 대기 중이면 클릭한 칸이 유령인지 진짜 수업인지 가리지 않고 폼을 '이동 중인
+        // 학생' 으로 채웠다. 그 상태에서 '이동' 을 누르면 폼(A 의 내용) + 문서번호(B 의 것)가
+        // 섞인 대기 상태가 만들어져, '이동 완료' 가 B 의 문서에 A 를 덮어썼다.
+        // → 이동한 자리에 A 가 하나 더 생기고 B 의 수업은 사라졌다(운영 사고).
+        // 유령 칸(isGhost)과 빈 칸은 이동 목적지이므로 예전 그대로 둔다.
+        const abandonMove = !!(
+            movingSchedule &&
+            existingItem &&
+            !existingItem.isGhost &&
+            existingItem.id &&
+            existingItem.id !== movingSchedule.id
+        );
+        if (abandonMove) setMovingSchedule(null);
+        // 아래에서는 상태 대신 이 지역 변수를 쓴다(setState 는 이 함수 안에서 바로 반영되지 않는다).
+        const moving = abandonMove ? null : movingSchedule;
+
         // [FIX] 일정 이동은 '같은 종류' 칸끼리만 허용한다.
         // 이동 시 gridType 을 목적지 슬롯의 것으로 덮어쓰기 때문에(아래 setScheduleForm),
         // 보컬 수업을 마스터 칸에 놓으면 마스터 수업으로 바뀌어 버렸다(로테이션·정산까지 어긋남).
         // 수업(레슨/상담)에만 적용한다. 개인일정은 기존대로 둔다.
-        if (movingSchedule) {
-            const movingIsLesson = movingSchedule.category === '레슨' || movingSchedule.category === '상담';
-            const fromGrid = movingSchedule.gridType || 'master';
+        if (moving) {
+            const movingIsLesson = moving.category === '레슨' || moving.category === '상담';
+            const fromGrid = moving.gridType || 'master';
             const toGrid = gridType || 'master';
             if (movingIsLesson && fromGrid !== toGrid) {
                 const gridName = (g) => (g === 'vocal' ? '보컬' : '마스터');
@@ -2192,27 +2214,31 @@ function App() {
             });
             setSelectedMinute(timeParts[1]);
 
-            // [FIX] 이동 중(movingSchedule)일 때, Ghost 스케줄(existingItem)을 클릭하면
+            // 이동의 유일한 대상이 될 문서. 유령은 문서가 없으므로 null.
+            setOpenedSchedule(isGhost || !existingItem.id ? null : existingItem);
+
+            // [FIX] 이동 중(moving)일 때, Ghost 스케줄(existingItem)을 클릭하면
             // Ghost의 학생 정보가 아닌 '이동 중인 학생' 정보로 폼을 채워야 함.
-            if (movingSchedule) {
+            // (진짜 수업을 누른 경우는 위에서 이동 대기를 해제했으므로 여기 안 걸린다)
+            if (moving) {
                 setScheduleTab(
-                    movingSchedule.category === '레슨' || movingSchedule.category === '상담' ? 'lesson' : 'personal'
+                    moving.category === '레슨' || moving.category === '상담' ? 'lesson' : 'personal'
                 );
                 setScheduleForm({
-                    studentId: movingSchedule.studentId || '',
-                    studentName: movingSchedule.studentName || '',
-                    memo: movingSchedule.memo || '',
-                    category: movingSchedule.category || '레슨',
-                    isFixed: movingSchedule.isFixed || false,
-                    shiftWeekend: movingSchedule.shiftWeekend || false,
-                    recurrence: movingSchedule.recurrence || 'weekly',
-                    dayOfMonth: movingSchedule.dayOfMonth || null,
-                    status: movingSchedule.status || '',
+                    studentId: moving.studentId || '',
+                    studentName: moving.studentName || '',
+                    memo: moving.memo || '',
+                    category: moving.category || '레슨',
+                    isFixed: moving.isFixed || false,
+                    shiftWeekend: moving.shiftWeekend || false,
+                    recurrence: moving.recurrence || 'weekly',
+                    dayOfMonth: moving.dayOfMonth || null,
+                    status: moving.status || '',
                     gridType: existingItem.gridType || 'master', // GridType은 타겟 슬롯 따름
-                    isVocalProgress: movingSchedule.isVocalProgress || false,
-                    broughtForward: movingSchedule.broughtForward || false,
-                    vocalType: movingSchedule.vocalType || '60',
-                    masterType: movingSchedule.masterType || '60',
+                    isVocalProgress: moving.isVocalProgress || false,
+                    broughtForward: moving.broughtForward || false,
+                    vocalType: moving.vocalType || '60',
+                    masterType: moving.masterType || '60',
                 });
             } else {
                 // 일반 클릭 (수정/생성)
@@ -2238,26 +2264,29 @@ function App() {
                 });
             }
         } else {
+            // 빈 칸은 이동 목적지다. 문서가 없으므로 이동 대상으로 삼을 것도 없다.
+            setOpenedSchedule(null);
+
             // [NEW] 이동 중인 스케줄이 있다면 해당 정보로 폼 초기화
-            if (movingSchedule) {
+            if (moving) {
                 setScheduleTab(
-                    movingSchedule.category === '레슨' || movingSchedule.category === '상담' ? 'lesson' : 'personal'
+                    moving.category === '레슨' || moving.category === '상담' ? 'lesson' : 'personal'
                 );
                 setScheduleForm({
-                    studentId: movingSchedule.studentId || '',
-                    studentName: movingSchedule.studentName || '',
-                    memo: movingSchedule.memo || '',
-                    category: movingSchedule.category || '레슨',
-                    isFixed: movingSchedule.isFixed || false,
-                    shiftWeekend: movingSchedule.shiftWeekend || false,
-                    recurrence: movingSchedule.recurrence || 'weekly',
-                    dayOfMonth: movingSchedule.dayOfMonth || null,
-                    status: movingSchedule.status || '',
+                    studentId: moving.studentId || '',
+                    studentName: moving.studentName || '',
+                    memo: moving.memo || '',
+                    category: moving.category || '레슨',
+                    isFixed: moving.isFixed || false,
+                    shiftWeekend: moving.shiftWeekend || false,
+                    recurrence: moving.recurrence || 'weekly',
+                    dayOfMonth: moving.dayOfMonth || null,
+                    status: moving.status || '',
                     gridType: gridType, // 이동하려는 새 슬롯의 gridType 적용
-                    isVocalProgress: movingSchedule.isVocalProgress || false,
-                    broughtForward: movingSchedule.broughtForward || false,
-                    vocalType: movingSchedule.vocalType || '60',
-                    masterType: movingSchedule.masterType || '60',
+                    isVocalProgress: moving.isVocalProgress || false,
+                    broughtForward: moving.broughtForward || false,
+                    vocalType: moving.vocalType || '60',
+                    masterType: moving.masterType || '60',
                 });
             } else {
                 setScheduleTab('lesson');
@@ -2729,6 +2758,29 @@ function App() {
             console.error('삭제 중 오류:', error);
             alert('삭제 처리에 실패했습니다.');
         }
+    };
+
+    // 팝업의 '이동' 버튼 — 이동 대기 상태를 만든다.
+    // 예전엔 모달 안에서 `{...scheduleForm, id: selectedSlot.id}` 로 직접 만들었는데,
+    // 폼(이동 중인 학생)과 문서번호(클릭한 수업)가 서로 다른 스케쥴에서 나올 수 있었다.
+    // 이제 **팝업에 띄운 그 문서 한 건**(openedSchedule)만 대상으로 삼는다.
+    const handleStartMove = () => {
+        if (isWeekLocked || isScheduleLocked) return;
+
+        const src = openedSchedule;
+        if (!src || !src.id || src.id !== selectedSlot.id) {
+            // 대상이 분명하지 않으면 아무것도 하지 않는다(엉뚱한 문서를 들고 가는 사고 방지).
+            alert('이동할 일정을 찾지 못했습니다. 팝업을 닫고 다시 선택해주세요.');
+            return;
+        }
+
+        // 폼에 손대 둔 내용(메모·상태 등)은 '같은 일정일 때만' 함께 들고 간다.
+        const sameTarget =
+            String(scheduleForm.studentId || '') === String(src.studentId || '') &&
+            (scheduleForm.category || '') === (src.category || '');
+
+        setMovingSchedule({ ...src, ...(sameTarget ? scheduleForm : {}), id: src.id });
+        setIsScheduleModalOpen(false);
     };
 
     // [NEW] 일정 이동(보류 -> 이동) 처리 함수
@@ -3667,6 +3719,8 @@ function App() {
                             handleWeeklyMemoSave={handleWeeklyMemoSave}
                             weekConsults={weekConsults}
                             onOpenConsultList={() => setShowConsultPage(true)}
+                            movingSchedule={movingSchedule}
+                            onCancelMove={() => setMovingSchedule(null)}
                         />
                     )}
 
@@ -3838,6 +3892,7 @@ function App() {
                     historySchedules={historySchedules}
                     movingSchedule={movingSchedule}
                     setMovingSchedule={setMovingSchedule}
+                    handleStartMove={handleStartMove}
                     isScheduleLocked={isScheduleLocked}
                     isWeekLocked={isWeekLocked}
                     handleScheduleSave={handleScheduleSave}

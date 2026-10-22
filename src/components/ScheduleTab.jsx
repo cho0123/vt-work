@@ -40,6 +40,8 @@ export function ScheduleTab({
     weekConsults,
     onOpenConsultList,
     handleWeeklyMemoSave,
+    movingSchedule,
+    onCancelMove,
 }) {
     // 취소 내역을 매 칸마다 전체 훑지 않도록, 렌더당 한 번만 조회용 Set 으로 만든다.
     // 키: `날짜|시간|학생ID|그리드종류` — 아래 필터의 비교 조건과 동일하다.
@@ -279,6 +281,30 @@ export function ScheduleTab({
                         📝 상담일지
                     </button>
                 </div>
+
+                {/* 이동 대기 중임을 분명히 보여준다.
+                    예전엔 아무 표시가 없어서, 대기 상태인 줄 모르고 다른 수업을 눌렀다가
+                    그 수업이 덮어써지는 사고가 났다. */}
+                {movingSchedule && (
+                    <div className="flex items-center gap-2 rounded-xl border border-orange-200 bg-orange-50 px-4 py-2 text-sm">
+                        <span className="shrink-0 font-bold text-orange-600">이동할 일정</span>
+                        <span className="truncate font-semibold text-gray-800">
+                            {movingSchedule.studentName || movingSchedule.category || '일정'}
+                            {movingSchedule.date && movingSchedule.date !== 'FIXED'
+                                ? ` · ${movingSchedule.date} ${movingSchedule.time || ''}`
+                                : ''}
+                        </span>
+                        <span className="hidden truncate text-xs text-orange-500 md:inline">
+                            옮길 칸을 누른 뒤 &apos;이동 완료&apos; 를 누르세요
+                        </span>
+                        <button
+                            onClick={onCancelMove}
+                            className="ml-auto shrink-0 rounded-full bg-white px-3 py-1.5 text-xs font-semibold text-orange-600 shadow-sm ring-1 ring-orange-200 transition hover:bg-orange-100 active:scale-95"
+                        >
+                            이동 해제
+                        </button>
+                    </div>
+                )}
             </div>
 
             {/* 스케쥴 표 영역 (헤더 고정 + 바디 스크롤) */}
