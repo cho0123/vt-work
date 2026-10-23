@@ -100,6 +100,7 @@ import {
     splitByType,
 } from './domain/rotation.js';
 import { cycleAmountsOf } from './domain/cycleAmount.js';
+import { reconcileExtraDeposit } from './domain/deposit.js';
 import { printStudentRecordPdf } from './utils/studentRecordDoc.js';
 import { fixedScheduleOccursOn } from './domain/fixedRecurrence.js';
 // 날짜 표시·24시간 판정은 보티즈 탭도 같이 쓴다(utils/datetime.js 한 벌).
@@ -3069,8 +3070,40 @@ function App() {
             )
         )
             return;
+        // 자동 적립된 줄은 짝인 결제의 배지(extraAmount)도 0으로 지운다.
+        // (줄 하나를 지울 때와 같은 규칙. 안 그러면 배지는 남고 적립만 사라져 숫자가 어긋난다)
+        for (const item of s.depositList || []) {
+            if (!item?.sourcePaymentId) continue;
+            try {
+                await updateDoc(doc(db, 'students', s.id, 'payments', item.sourcePaymentId), { extraAmount: 0 });
+            } catch (e) {
+                console.error('연결된 결제 배지 정리 실패', e);
+            }
+        }
         await updateStudentTx(s.id, () => ({ patch: { depositList: [] } }));
+        invalidatePaymentsCache();
     };
+    /** 추가결제 때문에 임시보관이 어떻게 됐는지 한 줄로 알려준다. 바뀐 게 없으면 빈 문자열. */
+    const depositNotice = (info) => {
+        if (!info) return '';
+        const won = (n) => Number(n || 0).toLocaleString();
+        if (info.action === 'add') return `
+부분결제 임시보관에 ${won(info.delta)}원을 적립했습니다.`;
+        if (info.action === 'update')
+            return `
+부분결제 임시보관 적립을 ${info.delta > 0 ? '+' : ''}${won(info.delta)}원 조정했습니다.`;
+        if (info.action === 'remove') return `
+부분결제 임시보관에서 ${won(-info.delta)}원 적립을 지웠습니다.`;
+        if (info.action === 'readd')
+            return `
+이전 적립은 이미 정리돼 있어, 늘어난 ${won(info.delta)}원만 임시보관에 적립했습니다.`;
+        if (info.action === 'blocked')
+            return `
+⚠️ 이 결제로 적립된 임시보관 내역이 없어 ${won(info.shortfall)}원을 빼지 못했습니다.
+필요하면 '누적 입금'에서 직접 정리해주세요.`;
+        return '';
+    };
+
     const handlePaymentSave = async (s) => {
         if (!paymentForm.amount) return alert('금액을 입력해주세요.');
         if (!window.confirm('결제를 처리하시겠습니까?')) return;
@@ -3110,6 +3143,14 @@ function App() {
             delete data.method;
             delete data.id;
 
+            // 수정이면 저장 '전' 의 추가결제 금액을 먼저 읽어 둔다.
+            // 임시보관을 '차액만' 반영하려면 전 금액을 알아야 한다.
+            let prevExtra = 0;
+            if (paymentForm.id) {
+                const beforeSnap = await getDoc(doc(db, 'students', s.id, 'payments', paymentForm.id));
+                prevExtra = Number(beforeSnap.data()?.extraAmount) || 0;
+            }
+
             // alert("DB 저장 시도...");
             let newPaymentId = null;
             if (paymentForm.id) await updateDoc(doc(db, 'students', s.id, 'payments', paymentForm.id), data);
@@ -3119,41 +3160,39 @@ function App() {
             }
             // alert("DB 저장 완료");
 
-            if (!paymentForm.id) {
-                // 최신 문서를 트랜잭션 안에서 다시 읽는다.
-                // 예전에는 화면에 그려질 때의 s.unpaidList / s.count 를 기준으로 덮어써서,
-                // 저장 연타나 다른 창에서의 동시 작업 시 미수금·회차가 유실될 수 있었다.
-                // 추가결제가 있으면 같은 트랜잭션에서 누적 입금(depositList)으로 적립한다.
-                // (신규 결제일 때만. 수정 시에는 중복 적립을 막으려 건드리지 않는다)
-                await updateStudentTx(s.id, (sData) => {
+            // 최신 문서를 트랜잭션 안에서 다시 읽는다.
+            // 예전에는 화면에 그려질 때의 s.unpaidList / s.count 를 기준으로 덮어써서,
+            // 저장 연타나 다른 창에서의 동시 작업 시 미수금·회차가 유실될 수 있었다.
+            const paymentId = paymentForm.id || newPaymentId;
+            const depositDate = paymentForm.paymentDate || formatDateLocal(new Date());
+            const newDepositId = `${Date.now()}-extra`; // 트랜잭션 재시도에도 같아야 해서 바깥에서 만든다
+            const depositInfo = await updateStudentTx(s.id, (sData) => {
+                const patch = {};
+                if (!paymentForm.id) {
+                    // 미수금 정리·회차 증가는 신규 결제일 때만 (수정은 건드리지 않는다)
                     let list = sData.unpaidList || [];
                     if (selectedUnpaidId) list = list.filter((i) => i.id !== selectedUnpaidId);
-                    const newCount = parseInt(sData.count || '0', 10) + 1;
-                    const patch = {
-                        unpaidList: list,
-                        isPaid: list.length === 0,
-                        count: newCount,
-                    };
-                    if (extra > 0) {
-                        const deposit = {
-                            id: `${Date.now()}-extra`,
-                            amount: extra,
-                            date: paymentForm.paymentDate || formatDateLocal(new Date()),
-                            memo: '추가결제',
-                            // 이 결제에서 자동 적립됐음을 표시 → 결제/누적 어느 쪽을 지워도 짝을 같이 지운다
-                            sourcePaymentId: newPaymentId,
-                        };
-                        patch.depositList = [...(sData.depositList || []), deposit].sort((a, b) =>
-                            a.date < b.date ? -1 : 1
-                        );
-                    }
-                    return { patch };
+                    patch.unpaidList = list;
+                    patch.isPaid = list.length === 0;
+                    patch.count = parseInt(sData.count || '0', 10) + 1;
+                }
+                // 추가결제 ↔ 누적 입금(임시보관) 맞추기 — **등록·수정 같은 규칙 한 곳**.
+                // 더하는 게 아니라 '그 결제에 딸린 줄을 추가결제 금액과 같게' 맞춘다
+                // → 같은 결제를 여러 번 저장해도 중복으로 쌓이지 않는다. (domain/deposit.js)
+                const r = reconcileExtraDeposit(sData.depositList, {
+                    paymentId,
+                    extra,
+                    prevExtra,
+                    date: depositDate,
+                    newId: newDepositId,
                 });
-            }
+                if (r.changed) patch.depositList = r.list;
+                return { patch, info: r };
+            });
             await updateStudentLastDate(s.id);
             invalidatePaymentsCache();
             fetchSettlementData();
-            alert('결제 처리가 완료되었습니다.');
+            alert('결제 처리가 완료되었습니다.' + depositNotice(depositInfo));
             resetPaymentForm(calculateTotalAmount(s));
         } catch (e) {
             console.error(e);
