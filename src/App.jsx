@@ -1776,7 +1776,15 @@ function App() {
                     }
 
                     // [FIX] Total Quota가 0인 경우(이월 학생)는 Week Logic에서 짝맞추기 강요하지 않음 (Global Logic에서 처리)
-                    if (hasHalf && totalQuota > 0) {
+                    //
+                    // ⚠️ 하프(반 수업)의 짝은 **같은 주에 있으란 법이 없다**(도메인 규칙: 하프 2개 = 1회,
+                    //    시점 무관). 이 주간 계산은 그 주 안만 보기 때문에, 지난주에 앞의 반을 하고
+                    //    이번 주에 남은 반을 잡아 **이미 1회가 완성된 경우에도** 이번 주 사용량이
+                    //    0.5 로 끝나 "(30분)" 을 또 띄웠다(백대현 10/24+10/31 사례).
+                    //    → 짝 맞추기 판단은 **사이클 전체를 보는 아래 Global Logic 한 곳**에 맡긴다.
+                    //      (회차 계산도 주가 아니라 누적 가중치로 하프를 센다 — 같은 기준)
+                    //    firstDate 가 없어 Global Logic 이 못 도는 학생만 예전처럼 여기서 띄운다.
+                    if (hasHalf && totalQuota > 0 && !student.firstDate) {
                         const halfName = `${student.name} (30분)`;
                         if (!options.some((o) => o.name === halfName)) {
                             options.push({ id: student.id, name: halfName, originalName: student.name });
