@@ -172,29 +172,45 @@ export function StudentHistoryModal({
                                                     (s) => s.date >= w.startStr && s.date <= w.endStr
                                                 );
 
-                                                // [SMART LINK] 이미 보강이 완료된 수업인지 확인하여 원본 날짜의 상태를 보정
-                                                // 전체 히스토리에서 "보강" 관련 메모가 있고 완료된 수업을 찾아 원본 날짜 추출
-                                                const makeupSourceDates = new Set();
+                                                // [SMART LINK] 이미 보강이 완료된 수업(원본)을 시계 표시로 보정한다.
+                                                //
+                                                // ⚠️ 예전에는 보강 메모에서 **날짜만** 뽑아 그 날짜의 수업을 전부 시계로 칠했다.
+                                                //    그래서 같은 날 다른 수업(예: 당겨와서 완료한 보컬)까지 보강예정으로 보였다.
+                                                //    (백대현 9/19 — 마스터는 보강 나가고 보컬은 당겨와 완료한 날)
+                                                // 이제 두 가지로 찾는다:
+                                                //   1) 보강 문서가 들고 있는 원본 문서번호(relatedScheduleId) — 정확하다.
+                                                //   2) 번호가 없는 옛 데이터만 날짜로 찾되, **같은 종류(마스터/보컬)** 이고
+                                                //      **아직 완료·결석이 아닌** 수업만 보정한다(실제로 한 수업은 안 덮는다).
+                                                const makeupSourceIds = new Set();
+                                                const makeupSourceKeys = new Set();   // `날짜|종류`
+                                                const kindOfSched = (x) =>
+                                                    x.gridType === 'vocal' || (!x.gridType && x.vocalType) ? 'vocal' : 'master';
                                                 studentFullHistory.forEach((historyItem) => {
                                                     if (
                                                         historyItem.status === 'completed' &&
                                                         historyItem.memo &&
                                                         historyItem.memo.includes('보강')
                                                     ) {
+                                                        if (historyItem.relatedScheduleId) {
+                                                            makeupSourceIds.add(historyItem.relatedScheduleId);
+                                                            return;
+                                                        }
                                                         // 날짜 형식 유연하게 매칭 (2025-12-27, 2025. 12. 27, 띄어쓰기 포함 허용)
-                                                        // \d{4} : 연도
-                                                        // [-./] : 구분자
-                                                        // \s* : 공백 허용
                                                         const match = historyItem.memo.match(
                                                             /(\d{4})\s*[-./]\s*(\d{2})\s*[-./]\s*(\d{2})/
                                                         );
                                                         if (match) {
-                                                            // 포맷 정규화 (YYYY-MM-DD)
                                                             const normalizedDate = `${match[1]}-${match[2]}-${match[3]}`;
-                                                            makeupSourceDates.add(normalizedDate);
+                                                            makeupSourceKeys.add(`${normalizedDate}|${kindOfSched(historyItem)}`);
                                                         }
                                                     }
                                                 });
+                                                // 이 수업이 '보강 나간 원본' 인가.
+                                                const isMakeupSource = (x) =>
+                                                    makeupSourceIds.has(x.id) ||
+                                                    (makeupSourceKeys.has(`${x.date}|${kindOfSched(x)}`) &&
+                                                        x.status !== 'completed' &&
+                                                        x.status !== 'absent');
 
                                                 const completedM = weekScheds.filter(
                                                     (s) =>
@@ -283,8 +299,7 @@ export function StudentHistoryModal({
                                                                         // [FIX] Smart Link Logic
                                                                         // 1. 이미 다른 날짜에 보강 완료된 경우
                                                                         // 2. 미래 날짜 -> 그대로 두어 회색 유지
-                                                                        const isMakeupCompletedElsewhere =
-                                                                            makeupSourceDates.has(s.date);
+                                                                        const isMakeupCompletedElsewhere = isMakeupSource(s);
 
                                                                         // 보강 완료된 날짜이거나, 보강 메모가 있는 Pending이면 'reschedule' 상태로 시각화
                                                                         const showAsReschedule =
@@ -391,8 +406,7 @@ export function StudentHistoryModal({
                                                                         const dateShort = formatMonthDay(s.date);
 
                                                                         // [FIX] Smart Link Logic (Vocal 동일 적용)
-                                                                        const isMakeupCompletedElsewhere =
-                                                                            makeupSourceDates.has(s.date);
+                                                                        const isMakeupCompletedElsewhere = isMakeupSource(s);
 
                                                                         const showAsReschedule =
                                                                             isMakeupCompletedElsewhere ||
