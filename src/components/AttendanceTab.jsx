@@ -47,7 +47,6 @@ export function AttendanceTab({
     settlementIncome,
     calculateRotationStarts,
     getScheduleRotationInfo,
-    getWeightRemainderSuffix,
     handlePeriodAttendanceToggle,
     handleRegisterRotation,
     handleMonthlySettlementRequest,
@@ -345,7 +344,6 @@ export function AttendanceTab({
                                         <td className="sticky left-0 bg-white group-hover:bg-gray-50 z-10 border-r border-gray-100 text-left pl-6 py-3 font-bold text-gray-800 align-middle border-b-[2px] border-gray-300">
                                             <span className="text-gray-400 text-xs mr-2">{idx + 1}</span>
                                             {student.name}
-                                            {getWeightRemainderSuffix(student)}
                                             {/* [NEW] 아티스트 카운트 표시 */}
                                             {/* 1. 수강 상태 (Active/Inactive) */}
                                             <span

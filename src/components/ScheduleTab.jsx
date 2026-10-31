@@ -42,7 +42,14 @@ export function ScheduleTab({
     handleWeeklyMemoSave,
     movingSchedule,
     onCancelMove,
+    studentNameById = {},
 }) {
+    // 화면에 쓰는 학생 이름은 **스케쥴에 저장된 이름이 아니라 학생 문서 이름**이다.
+    // 저장된 이름에는 옛 표시용 라벨(`홍길동 (2)`·`홍길동 (30분)`)이 섞여 있고,
+    // 학생 이름을 고쳐도 지난 수업에는 안 따라오기 때문이다.
+    // 학생을 못 찾으면(지워진 학생 등) 저장된 이름을 그대로 쓴다.
+    const nameOf = (item) =>
+        (item?.studentId && studentNameById[item.studentId]) || item?.studentName || '';
     // 취소 내역을 매 칸마다 전체 훑지 않도록, 렌더당 한 번만 조회용 Set 으로 만든다.
     // 키: `날짜|시간|학생ID|그리드종류` — 아래 필터의 비교 조건과 동일하다.
     // [FIX] gridType 추가: 개인일정(쌤·짱구)은 studentId 가 없어, 같은 시간대의 마스터·보컬이
@@ -289,7 +296,7 @@ export function ScheduleTab({
                     <div className="flex items-center gap-2 rounded-xl border border-orange-200 bg-orange-50 px-4 py-2 text-sm">
                         <span className="shrink-0 font-bold text-orange-600">이동할 일정</span>
                         <span className="truncate font-semibold text-gray-800">
-                            {movingSchedule.studentName || movingSchedule.category || '일정'}
+                            {nameOf(movingSchedule) || movingSchedule.category || '일정'}
                             {movingSchedule.date && movingSchedule.date !== 'FIXED'
                                 ? ` · ${movingSchedule.date} ${movingSchedule.time || ''}`
                                 : ''}
@@ -625,7 +632,7 @@ export function ScheduleTab({
                                                                 item.memo
                                                             ) : (
                                                                 <>
-                                                                    {item.studentName || item.category}
+                                                                    {nameOf(item) || item.category}
                                                                     {item.isVocalProgress && (
                                                                         <span
                                                                             className={`${item.vocalType === '30' ? 'text-green-600' : 'text-pink-600'} ml-1 font-extrabold`}

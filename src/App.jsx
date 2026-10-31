@@ -181,27 +181,6 @@ function App() {
         return () => unsub();
     }, [user]);
 
-    const getWeightRemainderSuffix = (student) => {
-        if (!student) return '';
-        let mWeight = 0;
-        let vWeight = 0;
-
-        // 현재 캐시된 출석부 데이터에서 완료된 수업들의 가중치 합산
-        const relevantScheds = attSchedules.filter(
-            (s) =>
-                s.studentId === student.id && (s.status === 'completed' || s.status === 'late' || s.status === 'absent')
-        );
-
-        relevantScheds.forEach((s) => {
-            if (s.gridType === 'master' || !s.gridType) mWeight += s.masterType === '30' ? 0.5 : 1;
-            // [FIX] vocalType '30'은 1로 계산, 'half'만 0.5로 계산
-            else if (s.gridType === 'vocal') vWeight += s.vocalType === 'half' ? 0.5 : 1;
-        });
-
-        if (mWeight % 1 !== 0 || vWeight % 1 !== 0) return ' (30분)';
-        return '';
-    };
-
     const handleLogin = async (email, pw) => {
         try {
             await signInWithEmailAndPassword(auth, email, pw);
@@ -2398,7 +2377,7 @@ function App() {
 
         const list = [...targets]
             .sort((a, b) => a.time.localeCompare(b.time))
-            .map((s) => `· ${s.time} ${s.studentName || ''}${s.gridType === 'vocal' ? ' (보컬)' : ''}`)
+            .map((s) => `· ${s.time} ${studentNameOf(s)}${s.gridType === 'vocal' ? ' (보컬)' : ''}`)
             .join('\n');
         if (!window.confirm(`${dateStr} 미처리 수업 ${targets.length}건을 완료 처리합니다:\n\n${list}\n\n계속할까요?`))
             return;
@@ -2643,7 +2622,7 @@ function App() {
             if (mainUnassigned) {
                 data.memo = '';
                 data.isVocalProgress = false;
-                alert(`${data.studentName} 학생의 이번 주 본수업이 아직 없어, 추가수업이 아닌 본수업으로 등록합니다.`);
+                alert(`${studentNameOf(data)} 학생의 이번 주 본수업이 아직 없어, 추가수업이 아닌 본수업으로 등록합니다.`);
             }
         }
 
@@ -3585,6 +3564,18 @@ function App() {
         return !!(info && info.changedMidCycle);
     };
 
+    // 스케쥴 문서에 저장된 이름 대신 쓸 '학생 문서 이름' 찾기표.
+    // 저장된 이름에는 옛 표시용 라벨(`홍길동 (2)`·`홍길동 (30분)`)이 섞여 있다.
+    const studentNameById = useMemo(() => {
+        const m = {};
+        for (const s of students) m[s.id] = s.name;
+        return m;
+    }, [students]);
+
+    /** 그 수업에 보여줄 학생 이름. 학생을 못 찾으면 저장된 이름을 그대로 쓴다. */
+    const studentNameOf = (sched) =>
+        (sched?.studentId && studentNameById[sched.studentId]) || sched?.studentName || '';
+
     /**
      * 지금 진행 중인(아직 다 못 채운) 사이클이 몇 회째인지. 없으면 null.
      * 정보수정 팝업에서 '[로테이션 변경]을 지금 누르면 어떻게 되는지' 안내에만 쓴다.
@@ -3860,6 +3851,7 @@ function App() {
                             onOpenConsultList={() => setShowConsultPage(true)}
                             movingSchedule={movingSchedule}
                             onCancelMove={() => setMovingSchedule(null)}
+                            studentNameById={studentNameById}
                         />
                     )}
 
@@ -3883,7 +3875,6 @@ function App() {
                             settlementIncome={settlementIncome}
                             calculateRotationStarts={calculateRotationStarts}
                             getScheduleRotationInfo={getScheduleRotationInfo}
-                            getWeightRemainderSuffix={getWeightRemainderSuffix}
                             handlePeriodAttendanceToggle={handlePeriodAttendanceToggle}
                             handleRegisterRotation={handleRegisterRotation}
                             handleMonthlySettlementRequest={handleMonthlySettlementRequest}
@@ -4012,7 +4003,6 @@ function App() {
                     viewingStudentHasPayment={viewingStudentHasPayment}
                     closeStudentAttView={closeStudentAttView}
                     handleRegisterRotation={handleRegisterRotation}
-                    getWeightRemainderSuffix={getWeightRemainderSuffix}
                 />
 
                 {/* 모달들 (스케쥴, 수강생 등록) */}

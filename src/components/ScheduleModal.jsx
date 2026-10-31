@@ -239,15 +239,23 @@ export function ScheduleModal({
                                 <select
                                     className="select select-sm w-full border-blue-200 bg-white text-sm"
                                     onChange={(e) => {
-                                        const [sId, sName] = e.target.value.split('|');
-                                        // [FIX] Checking for '(30분' to assume half type (works with or without total quota suffix)
-                                        const isHalfSuffix = sName.includes('(30분');
+                                        // ⚠️ 목록에 보이는 이름은 **표시용 라벨**이다 — `홍길동 (2)`(주2회 번호),
+                                        //    `홍길동 (30분)`(하프 짝 맞추라는 표시). 예전에는 이 라벨을 그대로
+                                        //    studentName 에 저장해서, 스케쥴 칸·확인창에 `백대현 (30분)` 처럼
+                                        //    등록한 적 없는 이름이 그대로 보였다(운영 실측 9건).
+                                        //    → 저장은 항상 **원래 학생 이름**(originalName)으로 한다.
+                                        //      라벨은 아래 '하프 자동 전환' 판정에만 쓴다.
+                                        const [sId, sLabel] = e.target.value.split('|');
+                                        const picked = (availableStudents || []).find(
+                                            (o) => `${o.id}|${o.name}` === e.target.value
+                                        );
+                                        const isHalfSuffix = String(picked?.name ?? sLabel).includes('(30분');
 
                                         setScheduleForm((prev) => {
                                             const newState = {
                                                 ...prev,
                                                 studentId: sId,
-                                                studentName: sName,
+                                                studentName: picked?.originalName || sLabel,
                                                 category: '레슨',
                                             };
 
@@ -544,7 +552,10 @@ export function ScheduleModal({
                     {scheduleForm.studentName && (
                         <div className="flex flex-col gap-1 mt-3">
                             <label className="text-xs font-bold text-gray-400">
-                                수업 상태 체크 ({scheduleForm.studentName})
+                                수업 상태 체크 (
+                                {students.find((st) => st.id === scheduleForm.studentId)?.name ||
+                                    scheduleForm.studentName}
+                                )
                             </label>
                             <div className="grid grid-cols-3 gap-2">
                                 {(() => {

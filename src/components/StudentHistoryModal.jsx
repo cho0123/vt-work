@@ -21,7 +21,6 @@ export function StudentHistoryModal({
     viewingStudentHasPayment,
     closeStudentAttView,
     handleRegisterRotation,
-    getWeightRemainderSuffix,
 }) {
     if (!viewingStudentAtt) return null;
 
@@ -35,8 +34,7 @@ export function StudentHistoryModal({
                     </button>
                     <div>
                         <h2 className="text-2xl font-extrabold text-gray-900 flex items-center gap-2">
-                            {viewingStudentAtt.name}
-                            {getWeightRemainderSuffix(viewingStudentAtt)}{' '}
+                            {viewingStudentAtt.name}{' '}
                             <span className="text-lg font-normal text-gray-400">전체 히스토리 (20주 보기)</span>
                         </h2>
                         <p className="text-xs text-gray-400 font-bold mt-1 flex gap-2">
