@@ -1629,7 +1629,22 @@ function App() {
     // [수정] 등록 모달 학생 리스트 생성 함수 (고정 스케쥴 규칙에 의한 '유령 차단' 방지)
     // [수정] 등록 모달 학생 리스트 생성 함수 (30분 잔여량 표시 로직 추가)
     // [수정] 등록 모달 학생 리스트 생성 함수 (30분 잔여량 표시 로직 추가 - 주차 무관 노출)
-    const generateAvailableStudents = (selectedDateStr, editingItemName = null, gridType = 'master') => {
+    /**
+     * 그 주에 아직 안 잡힌 '본수업' 슬롯 목록(팝업의 학생 선택 드롭다운).
+     *
+     * @param editingItemId 지금 팝업에 띄운 수업의 **문서 id**. 그 한 건만 사용량에서 뺀다
+     *        (안 빼면 자기 자신 때문에 슬롯이 사라져 고칠 수가 없다).
+     *
+     * ⚠️ 예전에는 **이름**으로 뺐다. 저장된 이름이 `홍길동 (2)`·`홍길동 (30분)` 처럼 슬롯마다
+     *    달라서 우연히 한 건만 빠졌던 것인데, 이름이 같은 수업이 그 주에 또 있으면
+     *    **그것까지 빠져** "아직 안 잡힌 슬롯" 으로 잘못 떴다(운영 백업 실측 166건, 전부 오표시):
+     *      · 추가·보강 수업을 열면 → 이미 있는 그 주 본수업까지 빠져 학생이 또 떴다 (148건)
+     *      · 같은 주에 정규가 2건이면 → 한 건을 열 때 둘 다 빠졌다 (18건)
+     *    게다가 저장 쪽 '본수업 우선 규칙' 은 같은 함수를 `editing=null` 로 부르기 때문에
+     *    **화면과 저장 판정이 서로 엇갈려** 있었다. 문서 id 로 빼면 둘이 같아진다.
+     *    (이름을 깨끗하게 저장하기 시작하면 주2회 학생에서 이 어긋남이 더 커진다)
+     */
+    const generateAvailableStudents = (selectedDateStr, editingItemId = null, gridType = 'master') => {
         const weekStart = getStartOfWeek(selectedDateStr);
         const weekEnd = new Date(weekStart);
         weekEnd.setDate(weekStart.getDate() + 6);
@@ -1660,7 +1675,7 @@ function App() {
         schedules.forEach((s) => {
             const sType = s.gridType || 'master';
             if (sType !== gridType) return;
-            if (editingItemName && s.studentName === editingItemName) return;
+            if (editingItemId && s.id === editingItemId) return;
 
             const isSpecialClass = s.memo && (s.memo.includes('보강') || s.memo.includes('추가'));
             if (!isSpecialClass && s.date >= weekStartStr && s.date <= weekEndStr && s.studentId) {
@@ -2106,7 +2121,8 @@ function App() {
         return null;
     };
     const handleSlotClick = async (dateStr, hourStr, dayOfWeek, existingItem = null, gridType = 'master') => {
-        const editingName = existingItem ? existingItem.studentName : null;
+        // 지금 열려는 수업 문서 하나(유령 칸·빈 칸이면 null — 뺄 문서가 없다).
+        const editingItemId = existingItem && !existingItem.isGhost ? existingItem.id : null;
 
         // [FIX] 이동 대기 중에 '다른 진짜 스케쥴' 을 누르면 앞의 대기를 완전히 해제하고,
         // 새로 누른 그 스케쥴만 다룬다.
@@ -2197,7 +2213,7 @@ function App() {
             }
         }
 
-        const options = generateAvailableStudents(dateStr, editingName, gridType);
+        const options = generateAvailableStudents(dateStr, editingItemId, gridType);
         setAvailableStudents(options);
 
         setSelectedMakeupId(null);
