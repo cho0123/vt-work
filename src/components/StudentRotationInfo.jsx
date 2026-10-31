@@ -203,53 +203,52 @@ export function StudentRotationInfo({ student, slotDate, slotId, onNameClick }) 
 
 /**
  * 한 종류의 사이클을 칸으로 그린다.
- *   done    : 로테이션 색으로 채움
- *   current : 진한 테두리 + 빈 속 (지금 클릭한 이 수업, 아직 예정)
- *   future  : 회색 점선 빈칸
+ *
+ * 칸 하나 = 수업 1회. **하프는 반 칸**이다(하프 2개 = 1회).
+ *   채워진 부분 : 완료·결석 (로테이션 색)
+ *   테두리 부분 : 지금 누른 이 수업 (아직 예정)
+ *   빈 부분     : 아직 안 한 자리 (회색 점선)
  */
 function CycleRow({ label, cycle }) {
     // 회차별 색. Tailwind 동적 클래스는 못 잡히므로 hex 를 인라인 스타일로 쓴다.
     const colors = ROTATION_COLORS[cycle.cycleIndex % ROTATION_COLORS.length];
-    const doneCount = cycle.cells.filter((c) => c === 'done').length;
     return (
         <div className="flex items-center gap-2">
             <span className="w-10 shrink-0 text-xs font-bold text-gray-500">{label}</span>
             <span className="w-8 shrink-0 text-[11px] font-bold text-gray-400">{cycle.label}</span>
             <div className="flex gap-1">
-                {cycle.cells.map((state, i) => {
-                    const base = 'h-5 w-5 rounded-[6px]';
-                    if (state === 'done') {
-                        return (
-                            <div
-                                key={i}
-                                className={base}
-                                style={{ backgroundColor: colors.m_hex, border: `1px solid ${colors.m_hex}` }}
-                                title="완료"
-                            />
-                        );
-                    }
-                    if (state === 'current') {
-                        // 지금 클릭한 이 수업: 진한 테두리 + 빈 속
-                        return (
-                            <div
-                                key={i}
-                                className={`${base} bg-white`}
-                                style={{ border: `2.5px solid ${colors.m_hex}` }}
-                                title="이 수업"
-                            />
-                        );
-                    }
+                {cycle.cells.map((cell, i) => {
+                    const donePct = Math.max(0, Math.min(1, cell.done)) * 100;
+                    const curPct = Math.max(0, Math.min(1, cell.current)) * 100;
+                    const title = cell.current > 0 ? '이 수업' : cell.done > 0 ? '완료' : '예정';
                     return (
                         <div
                             key={i}
-                            className={`${base} border border-dashed border-gray-300 bg-gray-50`}
-                            title="예정"
-                        />
+                            title={title}
+                            className="relative h-5 w-5 overflow-hidden rounded-[6px] border border-dashed border-gray-300 bg-gray-50"
+                        >
+                            {donePct > 0 && (
+                                <span
+                                    className="absolute inset-y-0 left-0"
+                                    style={{ width: `${donePct}%`, backgroundColor: colors.m_hex }}
+                                />
+                            )}
+                            {curPct > 0 && (
+                                <span
+                                    className="absolute inset-y-0 bg-white"
+                                    style={{
+                                        left: `${donePct}%`,
+                                        width: `${curPct}%`,
+                                        border: `2.5px solid ${colors.m_hex}`,
+                                    }}
+                                />
+                            )}
+                        </div>
                     );
                 })}
             </div>
             <span className="text-[11px] text-gray-400">
-                {doneCount}/{cycle.req}
+                {cycle.done}/{cycle.req}
             </span>
         </div>
     );

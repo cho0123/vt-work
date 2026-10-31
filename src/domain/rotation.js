@@ -361,67 +361,73 @@ export function sortByDateTime(scheds) {
 }
 
 /**
- * 클릭한 수업이 속한 사이클을, 칸 단위로 상태를 매겨 돌려준다.
+ * 이력 없는(설정이 한 벌인) 학생의 사이클 배정표 — **표시 전용**.
+ * 규칙은 `getRotationInfo` 의 기존 경로와 같다: 가중치를 누적해 `req` 로 나눈다
+ * (하프 0.5 · 보컬30 1.0 · 마스터30 0.5 — 상단 표 참고).
  *
- * 스케쥴 팝업의 로테이션 시각화에 쓴다. 클릭한 수업을 기준으로,
- * 그 수업이 속한 사이클(req칸)의 각 칸이 어떤 상태인지 알려준다.
- *   - 'done'    : 완료(+결석)된 수업
- *   - 'current' : 지금 클릭한 이 수업 (아직 예정이면 강조만, 완료면 done)
- *   - 'future'  : 아직 안 온 예정 수업
+ * ⚠️ 회차 계산 자체는 `getRotationInfo` 가 한다. 이 함수는 **칸 그림**을 그리려고
+ *    '사이클 안에서 어디쯤인지(posInCycle)' 까지 필요해서 따로 둔 것이고,
+ *    두 결과가 어긋나지 않는지는 `npm run verify-cycle-cells` 로 전수 대조한다.
  *
- * 계산: 그 종류의 수업(완료 + 클릭한 본인)을 시간순으로 세워 클릭한 수업의
- * 전역 순번(globalIndex)을 구하고, req 로 나눠 사이클과 칸 위치를 얻는다.
+ * @returns Map(id -> { cycleIndex, posInCycle })
+ */
+export function assignCyclesConstant(typeScheds, req) {
+    const map = new Map();
+    if (!req || req <= 0) return map;
+    let weighted = 0;
+    for (const s of typeScheds) {
+        map.set(s.id, { cycleIndex: Math.floor(weighted / req), posInCycle: weighted % req });
+        weighted += s._weight;
+    }
+    return map;
+}
+
+/**
+ * 팝업의 사이클 진행 칸 — **표시 전용**.
  *
- * @param typeScheds     그 종류(마스터 or 보컬)의 수업 목록. 시간순 정렬,
- *                       완료·결석 + 클릭한 수업(pending 이어도)이 포함돼 있어야 함.
- * @param currentId      클릭한 수업의 id
- * @param req            사이클당 요구 횟수
- * @returns { req, cycleIndex, label, cells: string[] }  또는 null
- *          cells[i] ∈ 'done' | 'current' | 'future'
+ * 칸 하나 = 수업 1회. **하프는 반 칸**이다(하프 2개 = 1회 — 상단 표).
+ * ⚠️ 예전에는 수업을 '개수' 로 세어 하프도 한 칸을 차지했다. 그래서 하프가 섞인 학생은
+ *    회차 번호(R)와 n/4 가 둘 다 실제 회차보다 앞서 갔다(백대현 보컬: 팝업 R4, 실제 R3).
+ *    이제 `getRotationInfo` 와 **같은 가중치 기준**으로 센다.
+ *
+ * @returns { req, cycleIndex, label, done, current, cells }
+ *   cells[i] = { done, current } — 그 칸에서 완료·결석이 채운 비율 / 지금 누른 수업이 채운 비율(0~1)
+ *   done    = 그 사이클에서 완료·결석이 채운 횟수(소수 가능)
  */
 export function cycleCells(typeScheds, currentId, req, perLesson = null) {
     if (!req || req <= 0) return null;
 
-    // 시점별 이력 학생: 배정표(assignCyclesTimeline 결과)의 번호를 그대로 쓴다.
-    // 위치 나눗셈으로는 구간 경계·마보 동기화 번호를 알 수 없다.
-    if (perLesson && perLesson.has(currentId)) {
-        const { cycleIndex, posInCycle } = perLesson.get(currentId);
-        const slot = Math.floor(posInCycle);
-        const cycleScheds = typeScheds.filter((s) => perLesson.get(s.id)?.cycleIndex === cycleIndex);
-        const cells = [];
+    const assign = perLesson && perLesson.has(currentId) ? perLesson : assignCyclesConstant(typeScheds, req);
+    const me = assign.get(currentId);
+    if (!me) return null;
+    const { cycleIndex } = me;
+
+    const cells = Array.from({ length: req }, () => ({ done: 0, current: 0 }));
+    let done = 0;
+    for (const s of typeScheds) {
+        const info = assign.get(s.id);
+        if (!info || info.cycleIndex !== cycleIndex) continue;
+        const isDone = s.status === 'completed' || s.status === 'absent';
+        const isCurrent = s.id === currentId && !isDone;
+        if (!isDone && !isCurrent) continue; // 아직 안 한 다른 수업은 빈칸으로 둔다
+
+        // 이 수업이 차지하는 구간 [시작, 끝) 을 칸에 나눠 담는다.
+        // (하프 뒤에 60분이 오면 한 수업이 두 칸에 걸칠 수 있다)
+        const start = info.posInCycle;
+        const end = Math.min(req, start + (s._weight ?? 1));
         for (let i = 0; i < req; i++) {
-            const sched = cycleScheds.find((s) => Math.floor(perLesson.get(s.id).posInCycle) === i);
-            if (i === slot) {
-                const st = sched?.status;
-                cells.push(st === 'completed' || st === 'absent' ? 'done' : 'current');
-            } else if (sched && (sched.status === 'completed' || sched.status === 'absent')) {
-                cells.push('done');
-            } else {
-                cells.push('future');
-            }
+            const overlap = Math.min(end, i + 1) - Math.max(start, i);
+            if (overlap > 0) cells[i][isDone ? 'done' : 'current'] += overlap;
         }
-        return { req, cycleIndex, label: `R${cycleIndex + 1}`, cells };
+        if (isDone) done += Math.min(s._weight ?? 1, req - start);
     }
 
-    const globalIndex = typeScheds.findIndex((s) => s.id === currentId);
-    if (globalIndex === -1) return null;
-
-    const cycleIndex = Math.floor(globalIndex / req);
-    const posInCycle = globalIndex % req; // 이 사이클 안에서 클릭한 수업의 칸 위치
-
-    const cells = [];
-    for (let i = 0; i < req; i++) {
-        const sched = typeScheds[cycleIndex * req + i];
-        if (i === posInCycle) {
-            // 클릭한 수업 칸: 이미 완료됐으면 done, 아니면 current(강조)
-            const st = sched?.status;
-            cells.push(st === 'completed' || st === 'absent' ? 'done' : 'current');
-        } else if (sched && (sched.status === 'completed' || sched.status === 'absent')) {
-            cells.push('done');
-        } else {
-            cells.push('future');
-        }
-    }
-
-    return { req, cycleIndex, label: `R${cycleIndex + 1}`, cells };
+    return {
+        req,
+        cycleIndex,
+        label: `R${cycleIndex + 1}`,
+        done: Math.round(done * 10) / 10,
+        current: Math.round(cells.reduce((a, c) => a + c.current, 0) * 10) / 10,
+        cells,
+    };
 }

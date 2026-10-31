@@ -17,6 +17,7 @@
     "verify-transaction": "node scripts/verify-transaction.js",
     "verify-billing": "node scripts/verify-billing.js",
     "verify-student-edit": "node scripts/verify-student-edit.js",
+    "verify-cycle-cells": "node scripts/verify-cycle-cells.js",
     "verify-deposit": "node scripts/verify-deposit.js",
     "verify-cycle-amount": "node scripts/verify-cycle-amount.js",
     "verify-badge": "node scripts/verify-badge.js",
