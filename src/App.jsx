@@ -161,6 +161,7 @@ function App() {
                 collection(choDb, 'tasks'),
                 (snap) => {
                     const map = {};
+                    const shorts = [];
                     snap.forEach((d) => {
                         const t = d.data();
                         if (t.isCompleted) return; // 완료 처리된 할일은 스케쥴에 안 띄운다
@@ -170,8 +171,22 @@ function App() {
                             if (!map[day]) map[day] = [];
                             map[day].push(title);
                         }
+                        // ToDo 앱과 같은 기준: scheduleType 이 'long' 이 아니면 전부 단기로 본다
+                        // (실제로 필드가 없는 옛 할일이 1건 있고, ToDo 앱도 그걸 단기로 센다).
+                        if (title && t.scheduleType !== 'long') {
+                            shorts.push({
+                                id: d.id,
+                                title,
+                                date: day || '', // 날짜 없는 할일은 빈 문자열로 저장돼 있다
+                                time: t.targetTime || '',
+                                pinned: !!t.isPinned,
+                                important: !!t.isImportant,
+                                category: t.category || '',
+                            });
+                        }
                     });
                     setTodosByDate(map);
+                    setTodoShortTasks(shorts);
                 },
                 (e) => console.warn('짱구 ToDo 읽기 실패(규칙/네트워크). 스케쥴엔 영향 없음:', e?.code || e?.message || e)
             );
@@ -618,6 +633,9 @@ function App() {
     const [scheduleDate, setScheduleDate] = useState(new Date());
     // 짱구 ToDo(cho-works)에서 날짜 지정된 할일 → { 'YYYY-MM-DD': [제목, ...] } (읽기 전용)
     const [todosByDate, setTodosByDate] = useState({});
+    // 같은 구독에서 뽑은 '단기일정 · 미완료' 전체 목록(날짜 있는 것 + 없는 것).
+    // 지난 할일/날짜 없는 할일 묶음을 그리는 데 쓴다 — 추가 조회 0회.
+    const [todoShortTasks, setTodoShortTasks] = useState([]);
     const [schedules, setSchedules] = useState([]);
     const [fixedSchedules, setFixedSchedules] = useState([]);
     const [historySchedules, setHistorySchedules] = useState([]);
@@ -3860,6 +3878,7 @@ function App() {
                             handleSlotClick={handleSlotClick}
                             handleBulkCompleteDay={handleBulkCompleteDay}
                             todosByDate={todosByDate}
+                            todoShortTasks={todoShortTasks}
                             weeklySummary={weeklySummary}
                             weeklyMemo={weeklyMemo}
                             handleWeeklyMemoSave={handleWeeklyMemoSave}

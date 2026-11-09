@@ -35,6 +35,7 @@ export function ScheduleTab({
     handleSlotClick,
     handleBulkCompleteDay,
     todosByDate,
+    todoShortTasks = [],
     weeklySummary,
     weeklyMemo,
     weekConsults,
@@ -139,7 +140,29 @@ export function ScheduleTab({
     }, [weekDays, fixedSchedules, schedules, cancelledKeys, hours]);
     // 짱구 ToDo 팝업으로 볼 날짜 (null = 닫힘)
     const [todoPopupDate, setTodoPopupDate] = useState(null);
+    const [todoGroupOpen, setTodoGroupOpen] = useState({ overdue: true, undated: true });
     const todoMap = todosByDate || {};
+
+    // 지난 할일 / 날짜 없는 할일 — 보고 있는 주와 무관하게 **오늘 기준**으로 같다.
+    // 원본은 App 이 한 번 구독해 둔 ToDo 목록이라 추가 조회가 없다.
+    const { overdueTodos, undatedTodos } = useMemo(() => {
+        const today = formatDateLocal(new Date());
+        const list = todoShortTasks || [];
+        const overdue = list
+            .filter((t) => t.date && t.date < today)
+            .sort((a, b) => (a.date + (a.time || '') < b.date + (b.time || '') ? -1 : 1));
+        // ToDo 앱의 기본 정렬과 같은 순서: 고정 → 중요 → 카테고리(보이스튜닝>보티즈>머니>일반).
+        const catRank = (t) => ({ vt: 0, botiz: 1, money: 2, general: 3 })[t.category] ?? 99;
+        const undated = list
+            .filter((t) => !t.date)
+            .sort(
+                (a, b) =>
+                    Number(b.pinned) - Number(a.pinned) ||
+                    Number(b.important) - Number(a.important) ||
+                    catRank(a) - catRank(b)
+            );
+        return { overdueTodos: overdue, undatedTodos: undated };
+    }, [todoShortTasks]);
 
     return (
         <div className="flex flex-col h-full w-full p-4 md:p-8 lg:px-12 gap-4">
@@ -348,7 +371,7 @@ export function ScheduleTab({
                                         {['일', '월', '화', '수', '목', '금', '토'][d.getDay()]}
                                     </div>
                                     <div className={`text-lg font-extrabold ${dayColor}`}>{d.getDate()}</div>
-                                    {dayTodos.length > 0 && (
+                                    {(dayTodos.length > 0 || (isToday && overdueTodos.length > 0)) && (
                                         <button
                                             type="button"
                                             onClick={(e) => {
@@ -356,9 +379,17 @@ export function ScheduleTab({
                                                 setTodoPopupDate(dateStr);
                                             }}
                                             className="mt-1 inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-bold text-indigo-600 transition-colors hover:bg-indigo-200"
-                                            title="이 날 짱구 ToDo 할일 보기"
+                                            title={
+                                                isToday && overdueTodos.length > 0
+                                                    ? `이 날 할일 보기 (지난 할일 ${overdueTodos.length}건)`
+                                                    : '이 날 짱구 ToDo 할일 보기'
+                                            }
                                         >
                                             📋 {dayTodos.length}
+                                            {/* 오늘 칸에만: 지난 할일이 남아 있으면 빨간 점 */}
+                                            {isToday && overdueTodos.length > 0 && (
+                                                <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+                                            )}
                                         </button>
                                     )}
                                     {isPastDay && handleBulkCompleteDay && (
@@ -706,7 +737,7 @@ export function ScheduleTab({
                     onClick={() => setTodoPopupDate(null)}
                 >
                     <div
-                        className="w-full max-w-xs rounded-2xl bg-white p-5 shadow-2xl"
+                        className="max-h-[80vh] w-full max-w-xs overflow-y-auto rounded-2xl bg-white p-5 shadow-2xl"
                         onClick={(e) => e.stopPropagation()}
                     >
                         <div className="mb-3 flex items-center justify-between">
@@ -726,6 +757,46 @@ export function ScheduleTab({
                                 </li>
                             ))}
                         </ul>
+
+                        {/* 지난 할일 / 날짜 없는 할일 — 어느 날짜 팝업이든 오늘 기준으로 같다. 0건이면 묶음 자체를 숨긴다. */}
+                        {[
+                            { key: 'overdue', label: '지난 할일', items: overdueTodos },
+                            { key: 'undated', label: '날짜 없는 할일', items: undatedTodos },
+                        ]
+                            .filter((g) => g.items.length > 0)
+                            .map((g) => (
+                                <div key={g.key} className="mt-4 border-t border-gray-100 pt-3">
+                                    <button
+                                        type="button"
+                                        onClick={() => setTodoGroupOpen((o) => ({ ...o, [g.key]: !o[g.key] }))}
+                                        className="flex w-full items-center gap-1 text-left text-xs font-bold text-gray-500 transition-colors hover:text-gray-700"
+                                    >
+                                        <span className="text-[10px]">{todoGroupOpen[g.key] ? '▾' : '▸'}</span>
+                                        {g.label} ({g.items.length})
+                                    </button>
+                                    {todoGroupOpen[g.key] && (
+                                        <ul className="mt-2 space-y-2">
+                                            {g.items.map((t) => (
+                                                <li
+                                                    key={t.id}
+                                                    className="flex items-start gap-2 text-sm text-gray-700"
+                                                >
+                                                    <span className="mt-0.5 text-indigo-400">•</span>
+                                                    <span>
+                                                        {t.title}
+                                                        {t.date && (
+                                                            <span className="ml-1 text-[10px] font-semibold text-red-500">
+                                                                {t.date.slice(5).replace('-', '/')}
+                                                            </span>
+                                                        )}
+                                                    </span>
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    )}
+                                </div>
+                            ))}
+
                         <div className="mt-4 text-[11px] text-gray-400">짱구 ToDo에서 가져온 내용 (보기 전용)</div>
                     </div>
                 </div>
