@@ -1755,48 +1755,124 @@ function App() {
                 const currentRotationWeek = getRotationWeek(student.firstDate, weekStartStr);
                 const weekConfig = student.schedule && student.schedule[currentRotationWeek - 1];
 
-                if (weekConfig) {
-                    const usage = bookedUsage[student.id] || { count: 0, value: 0 };
-                    // Value 기반 차감 공통 로직 (Master & Vocal)
-                    // Master: Quota=master. Vocal: Quota=vocal+vocal30.
-                    let totalQuota = 0;
-                    if (gridType === 'master') {
-                        totalQuota = Number(weekConfig.master || 0);
-                    } else {
-                        // Vocal
-                        const vCount = Number(weekConfig.vocal || 0);
-                        const v30Count = Number(weekConfig.vocal30 || 0);
-                        totalQuota = Math.floor(vCount + v30Count);
+                if (!weekConfig) return;
+
+                const usage = bookedUsage[student.id] || { count: 0, value: 0 };
+
+                // 그 주 설정(쿼터). 마스터는 master, 보컬은 vocal + vocal30.
+                let weekQuota = 0;
+                if (gridType === 'master') {
+                    weekQuota = Number(weekConfig.master || 0);
+                } else {
+                    weekQuota = Math.floor(Number(weekConfig.vocal || 0) + Number(weekConfig.vocal30 || 0));
+                }
+
+                const round1 = (v) => Math.round(v * 10) / 10;
+                const frac = (v) => round1(((v % 1) + 1) % 1);
+
+                // ── 부족분 계산 ────────────────────────────────────────────────
+                // 기본은 예전과 같다: `그 주 쿼터 − 그 주에 잡힌 양`.
+                // 여기에 **사이클 안에서 지난주까지 남은 반쪽(0.5)** 만 이월해 더한다.
+                //
+                // ⚠️ 왜 이월이 필요한가: **하프의 짝은 같은 주에 있으란 법이 없다**
+                //    (도메인 규칙 — 하프 2개 = 1회, 시점 무관. 회차 계산도 주가 아니라 누적 가중치로 센다).
+                //    지난주에 앞의 반을 하고 이번 주에 남은 반을 잡으면, 그 주만 보면
+                //    `쿼터 1 − 0.5 = 0.5` 라 **정규 1회 자리가 아예 안 생겼다**(백대현 11/30 주:
+                //    11/28 하프 + 12/05 하프 = 1회인데 그 주 보컬 1회가 목록에서 사라졌다).
+                //    지난주까지의 부족분 0.5 를 더하면 `0.5 + 0.5 = 1` → 정규 자리가 하나 뜬다.
+                //
+                // ⚠️ **이월은 반쪽(0.5)만** 한다. 지난주에 통째로 안 잡은 1회분까지 끌고 오면
+                //    '지난주에 덜 잡은 몫' 이 이번 주 목록에 다시 떠서(운영 백업 실측 2,835건)
+                //    매주 목록이 달라진다. 그 판단은 이 목록의 일이 아니다.
+                //
+                // firstDate 가 없는 학생은 사이클을 구할 수 없어 **예전과 똑같이 그 주만** 본다.
+                let carry = 0;
+                if (student.firstDate) {
+                    const effectiveFirstDate = getStartOfWeek(student.firstDate);
+                    const diffDays = Math.floor((new Date(weekStart) - new Date(effectiveFirstDate)) / 86400000);
+                    const weeksFromFirst = Math.floor(Math.max(0, diffDays) / 7);
+                    const weekInCycle = weeksFromFirst % 4; // 0~3
+                    const cycleStartDate = new Date(effectiveFirstDate);
+                    cycleStartDate.setDate(cycleStartDate.getDate() + Math.floor(weeksFromFirst / 4) * 28);
+                    const cycleStartStr = formatDateLocal(cycleStartDate);
+
+                    // 사이클 1주차 ~ 지난주의 필요량
+                    let prevQuota = 0;
+                    for (let i = 0; i < weekInCycle; i++) {
+                        const w = (student.schedule || [])[i];
+                        if (!w) continue;
+                        prevQuota +=
+                            gridType === 'master'
+                                ? Number(w.master || 0)
+                                : Math.floor(Number(w.vocal || 0) + Number(w.vocal30 || 0));
                     }
 
-                    // [Fix] 부동소수점 오차 방지를 위해 반올림 처리
-                    const remainingValue = Math.round((totalQuota - usage.value) * 10) / 10;
+                    // 사이클 1주차 ~ 지난주에 잡힌 양 (하프 0.5 · 마스터30 0.5)
+                    let prevBooked = 0;
+                    const seen = new Set();
+                    [...historySchedules, ...schedules].forEach((s) => {
+                        if (!s.id || seen.has(s.id)) return;
+                        seen.add(s.id);
+                        if (s.studentId !== student.id) return;
+                        if ((s.gridType || 'master') !== gridType) return;
+                        if (s.date < cycleStartStr || s.date >= weekStartStr) return;
+                        if (editingItemId && s.id === editingItemId) return;
+                        if (s.memo && (s.memo.includes('보강') || s.memo.includes('추가'))) return;
+                        prevBooked +=
+                            gridType === 'master' ? (s.masterType === '30' ? 0.5 : 1) : s.vocalType === 'half' ? 0.5 : 1;
+                    });
 
-                    // 1) 온전한 1시간 슬롯: 남은 쿼터가 있을 때만 생성
-                    // 1) 온전한 1시간 슬롯: 남은 쿼터가 있을 때만 생성
-                    const fullSlots = Math.floor(remainingValue);
+                    carry = frac(round1(prevQuota - prevBooked)); // 0 또는 0.5
+                }
+                const shortage = round1(weekQuota - usage.value + carry);
 
-                    // 2) 0.5 짜투리: 쿼터와 상관없이, '사용량'이 0.5단위로 끝나면 짝을 맞추기 위해 무조건 노출
-                    // (사용자가 할당량을 초과해서 추가 수업을 잡는 경우 고려)
-                    const usageDecimal = Math.round((usage.value % 1) * 10) / 10;
-                    const hasHalf = usageDecimal === 0.5;
+                // 1) 정규 1회 자리 — 부족분이 1 이상일 때. **그 주 쿼터만큼만** 띄운다
+                //    (지난 주에 못 채운 몫까지 한 주에 몰아서 띄우지 않는다).
+                const fullSlots = Math.max(0, Math.min(Math.floor(shortage), weekQuota));
+                for (let i = 1; i <= fullSlots; i++) {
+                    const displayName =
+                        weekQuota > 1 || fullSlots > 1 ? `${student.name} (${usage.count + i})` : student.name;
+                    options.push({ id: student.id, name: displayName, originalName: student.name });
+                }
 
-                    for (let i = 1; i <= fullSlots; i++) {
-                        // [Revert] Total 표시 제거
-                        const displayName = totalQuota > 1 ? `${student.name} (${usage.count + i})` : student.name;
-                        options.push({ id: student.id, name: displayName, originalName: student.name });
-                    }
+                // 3) 사이클 전체 기준 하프 짝 자리 — **예전 코드 그대로**(판단 기준·결과 불변).
+                //    정규 자리는 위에서 정했고, 여기서는 `(30분)` 만 본다.
+                if (student.firstDate) {
+                    const effFirst = getStartOfWeek(student.firstDate);
+                    const dDays = Math.floor((new Date(weekStart) - new Date(effFirst)) / 86400000);
+                    const cIndex = Math.floor(Math.floor(Math.max(0, dDays) / 7) / 4);
+                    const cStart = new Date(effFirst);
+                    cStart.setDate(cStart.getDate() + cIndex * 4 * 7);
+                    const cEnd = new Date(cStart);
+                    cEnd.setDate(cEnd.getDate() + 27);
+                    const cStartStr = formatDateLocal(cStart);
+                    const cEndStr = formatDateLocal(cEnd);
 
-                    // [FIX] Total Quota가 0인 경우(이월 학생)는 Week Logic에서 짝맞추기 강요하지 않음 (Global Logic에서 처리)
-                    //
-                    // ⚠️ 하프(반 수업)의 짝은 **같은 주에 있으란 법이 없다**(도메인 규칙: 하프 2개 = 1회,
-                    //    시점 무관). 이 주간 계산은 그 주 안만 보기 때문에, 지난주에 앞의 반을 하고
-                    //    이번 주에 남은 반을 잡아 **이미 1회가 완성된 경우에도** 이번 주 사용량이
-                    //    0.5 로 끝나 "(30분)" 을 또 띄웠다(백대현 10/24+10/31 사례).
-                    //    → 짝 맞추기 판단은 **사이클 전체를 보는 아래 Global Logic 한 곳**에 맡긴다.
-                    //      (회차 계산도 주가 아니라 누적 가중치로 하프를 센다 — 같은 기준)
-                    //    firstDate 가 없어 Global Logic 이 못 도는 학생만 예전처럼 여기서 띄운다.
-                    if (hasHalf && totalQuota > 0 && !student.firstDate) {
+                    let cycleQuota = 0;
+                    (student.schedule || []).forEach((w) => {
+                        cycleQuota +=
+                            gridType === 'master'
+                                ? Number(w.master || 0)
+                                : Number(w.vocal || 0) + Number(w.vocal30 || 0);
+                    });
+
+                    let cycleUsage = 0;
+                    [...historySchedules, ...schedules]
+                        .filter(
+                            (s) =>
+                                s.studentId === student.id &&
+                                (s.gridType || 'master') === gridType &&
+                                s.date >= cStartStr &&
+                                s.date <= cEndStr
+                        )
+                        .forEach((s) => {
+                            if (s.memo && (s.memo.includes('보강') || s.memo.includes('추가'))) return;
+                            cycleUsage +=
+                                gridType === 'master' ? (s.masterType === '30' ? 0.5 : 1) : s.vocalType === 'half' ? 0.5 : 1;
+                        });
+
+                    const remaining = round1(cycleQuota - cycleUsage);
+                    if (frac(cycleUsage) === 0.5 || (remaining > 0 && frac(remaining) === 0.5)) {
                         const halfName = `${student.name} (30분)`;
                         if (!options.some((o) => o.name === halfName)) {
                             options.push({ id: student.id, name: halfName, originalName: student.name });
@@ -1804,74 +1880,13 @@ function App() {
                     }
                 }
 
-                // 2) [Refactor] 로테이션 사이클 전체 잔여량 계산 (Global Remainder)
-                // Master & Vocal 공통 적용 (단, Vocal 0.5 지원 위해)
-                if (student.firstDate) {
-                    // [FIX] 사이클 계산 기준을 '등록일이 속한 주의 월요일'로 통일 (달력 주차와 일치시키기 위함)
-                    const effectiveFirstDate = getStartOfWeek(student.firstDate);
-
-                    const diffDays = Math.floor((new Date(weekStart) - new Date(effectiveFirstDate)) / 86400000);
-                    const safeDiff = Math.max(0, diffDays);
-                    const cycleIndex = Math.floor(Math.floor(safeDiff / 7) / 4);
-
-                    const cycleStartDate = new Date(effectiveFirstDate);
-                    cycleStartDate.setDate(cycleStartDate.getDate() + cycleIndex * 4 * 7);
-
-                    const cycleEndDate = new Date(cycleStartDate);
-                    cycleEndDate.setDate(cycleEndDate.getDate() + 27);
-
-                    const cycleStartStr = formatDateLocal(cycleStartDate);
-                    const cycleEndStr = formatDateLocal(cycleEndDate);
-
-                    // 전체 쿼터 계산
-                    let cycleQuota = 0;
-                    (student.schedule || []).forEach((w) => {
-                        if (gridType === 'master') {
-                            cycleQuota += Number(w.master || 0);
-                        } else {
-                            cycleQuota += Number(w.vocal || 0) + Number(w.vocal30 || 0);
-                        }
-                    });
-
-                    // 전체 사용량 계산
-                    let cycleUsage = 0;
-                    const allRelevantSchedules = [...historySchedules, ...schedules].filter(
-                        (s) =>
-                            s.studentId === student.id &&
-                            (s.gridType || 'master') === gridType &&
-                            s.date >= cycleStartStr &&
-                            s.date <= cycleEndStr
-                    );
-
-                    allRelevantSchedules.forEach((s) => {
-                        const isSpecial = s.memo && (s.memo.includes('보강') || s.memo.includes('추가'));
-                        if (!isSpecial) {
-                            let u = 1;
-                            if (gridType === 'master') {
-                                if (s.masterType === '30') u = 0.5;
-                            } else {
-                                // Vocal
-                                // [FIX] vocalType '30'은 1로 계산, 'half'만 0.5로 계산
-                                if (s.vocalType === 'half') u = 0.5;
-                                // V60, V30 is 1.0.
-                            }
-                            cycleUsage += u;
-                        }
-                    });
-
-                    const remaining = Math.round((cycleQuota - cycleUsage) * 10) / 10;
-
-                    // [New Logic] Global에서도 사용량의 .5 여부를 확인하여 노출 (오버부킹 대응)
-                    const globalUsageDecimal = Math.round((cycleUsage % 1) * 10) / 10;
-                    const globalHasHalf = globalUsageDecimal === 0.5;
-
-                    // 0.5 짜투리가 남았으면 노출 (쿼터 잔여가 있거나, 아니면 사용량이 .5로 끝나서 짝이 안맞을 때)
-                    if (globalHasHalf || (remaining > 0 && remaining % 1 === 0.5)) {
-                        // [Revert] Total 표시 제거
-                        const halfName = `${student.name} (30분)`;
-                        if (!options.some((o) => o.name === halfName)) {
-                            options.push({ id: student.id, name: halfName, originalName: student.name });
-                        }
+                // 2) 하프 짝 자리 `(30분)` — **예전 규칙 그대로 둔다**(이번 작업 범위 밖).
+                //    firstDate 가 없는 학생만 그 주 사용량으로 판단하고(아래),
+                //    나머지는 사이클 전체를 보는 블록이 판단한다(그 다음 블록).
+                if (frac(usage.value) === 0.5 && weekQuota > 0 && !student.firstDate) {
+                    const halfName = `${student.name} (30분)`;
+                    if (!options.some((o) => o.name === halfName)) {
+                        options.push({ id: student.id, name: halfName, originalName: student.name });
                     }
                 }
             });
